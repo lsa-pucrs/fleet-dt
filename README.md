@@ -59,8 +59,12 @@ node and two hulls, the mesh derived from the DTP, and the controller that runs
 `tests/test_world.c` checks the world against what the controller assumes of it
 on any machine, with or without the SDK — the DEF names resolve, the meshes
 exist, one node is the coordinator, and the 125 ms frame divides into whole
-physics steps. That is agreement between two artefacts, not proof the
-simulation runs, and the claim inventory says so.
+physics steps.
+
+On a machine with the SDK it does run. Verified on 2026-08-17 against WeBots
+R2025a: 674,360 frames under the coordinator, feasible throughout, worst δ of
+117 µs against the 125 ms budget, and `--mode=realtime` rendering without a
+single GL error.
 
 ## Paper to code
 
@@ -80,8 +84,9 @@ should say.
 Four statuses, and the third is not a gap:
 
 - **quita** — an artefact exists and `make test` or `make bench` checks it.
-- **fronteira** — the interface is here; the real system is not. Measuring
-  WeBots CPU needs WeBots.
+- **fronteira** — the interface is here; the real system is not. One claim is
+  in this state: the CPU figures of Section V-A, which need a one-vessel world
+  to compare against.
 - **diferido** — Section VI declares it future work. Building it would
   contradict the published text, so its absence is the correct state.
 - **pendente** — not built.

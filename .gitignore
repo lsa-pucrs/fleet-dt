@@ -11,3 +11,4 @@ tools/bench/bench_*
 !tools/bench/bench_*.h
 results/selftest/
 tools/report/report
+fleet_dt_it_mqtt

@@ -38,6 +38,7 @@
 #include <fleet_dt/framesync.h>
 #include <fleet_dt/tick.h>
 #include <fleet_dt/transport.h>
+#include <fleet_dt/version.h>
 
 #include <math.h>
 #include <stdio.h>
@@ -52,6 +53,9 @@
 
 /** Window depth, deeper than one so the trend term of Section V-A exists. */
 #define WINDOW 4
+
+/** Frames between status lines on the simulator console. */
+#define STATUS_EVERY 40
 
 /**
  * WeBots node DEF names, one per vessel, matching worlds/jundia_fleet.wbt.
@@ -267,6 +271,16 @@ int main(int argc, char **argv)
     fdt_store_init(&store, g_slots, VESSELS);
     fdt_coord_init(&coord, &fleet, &store, webots_ctx, webots_plan, NULL);
 
+    /* One status line every STATUS_EVERY frames. A simulator console that
+     * says nothing is indistinguishable from one whose controller died, and
+     * the WeBots log reports a controller that returns before the simulation
+     * ends as having "crashed" -- so silence here reads as failure. */
+    size_t frames = 0;
+
+    printf("fdt_controller: %s, %d vessels, %d ms frame, window %d\n",
+           fdt_version(), VESSELS, step_ms, WINDOW);
+    fflush(stdout);
+
     while (wb_robot_step(step_ms) != -1) {
         fdt_fs_begin_frame(&g_fs);
         fdt_inj_tick(&inj);
@@ -317,6 +331,21 @@ int main(int argc, char **argv)
             tr.publish(tr.self, topic, frame, (size_t)n, 1);
         }
 
+        frames++;
+        if (frames % STATUS_EVERY == 0) {
+            printf("fdt_controller: frame %zu  yaw %.2f / %.2f deg  "
+                   "spread %.2f  worst delta %.1f us  feasible %d  "
+                   "partial %llu  double %llu\n",
+                   frames,
+                   (double)g_bs[0].yaw_deg, (double)g_bs[1].yaw_deg,
+                   (double)fc.spread_deg,
+                   (double)fdt_feas_worst_ns(&g_feas[0]) / 1e3,
+                   fdt_feas_ok(&g_feas[0]),
+                   (unsigned long long)fdt_fs_partial_frames(&g_fs),
+                   (unsigned long long)fdt_fs_double_updates(&g_fs));
+            fflush(stdout);
+        }
+
         if (!fdt_feas_ok(&g_feas[0])) {
             /* Section IV: a DTI that misses the deadline is "merely a
              * time-bounded simulation model". Worth saying out loud. */
@@ -324,6 +353,11 @@ int main(int argc, char **argv)
                     (double)fdt_feas_worst_ns(&g_feas[0]) / 1e6);
         }
     }
+
+    printf("fdt_controller: %zu frames, worst delta %.1f us, feasible %d\n",
+           frames, (double)fdt_feas_worst_ns(&g_feas[0]) / 1e3,
+           fdt_feas_ok(&g_feas[0]));
+    fflush(stdout);
 
     wb_robot_cleanup();
     return EXIT_SUCCESS;

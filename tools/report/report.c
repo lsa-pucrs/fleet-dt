@@ -19,10 +19,13 @@
  * discharged when each of those is either discharged or a boundary, and
  * reported as held back by whichever one is neither.
  *
- * Existing is not the same as compiling. Two adapters — MQTT and WeBots —
- * cannot be linked without their SDKs, so `make syntax` type-checks them
- * against stub headers and their claims stay boundaries rather than being
- * called discharged by a file that has never been through a linker.
+ * Existing is not the same as compiling, and compiling is not the same as
+ * running. `make syntax` type-checks the two SDK adapters against stub headers
+ * on any machine; `make mqtt-test` and `make webots` build and run them for
+ * real where the SDKs exist. C2, C3 and C8 moved from boundary to discharged
+ * on 2026-08-17, when both toolchains were installed here and the adapters
+ * were exercised end to end: a round trip through mosquitto, and the Jundiá
+ * world stepping under the coordinator.
  *
  * Run by `make report`, after `make bench`.
  */
@@ -59,9 +62,9 @@ static const claim_t CLAIMS[] = {
     { "C1",  "fleet-level DT model and architecture", "Abstract",
       "roll-up of C2 through C19", ST_ROLLUP },
     { "C2",  "architecture relies on MQTT", "Abstract, III",
-      "src/transport_loop.c", ST_ARTEFACT },
+      "tests/it_mqtt.c", ST_ARTEFACT },
     { "C3",  "integrates Ardupilot, WeBots, other simulations", "Abstract",
-      "world+controller complete, never linked", ST_BOUNDARY },
+      "adapters/webots/worlds/jundia_fleet.wbt", ST_ARTEFACT },
     { "C4",  "link-budget modelling validated", "Abstract, V-A",
       "src/linkbudget.c", ST_ARTEFACT },
     { "C5",  "bandwidth regulators guaranteeing QoS", "Abstract, III",
@@ -71,7 +74,8 @@ static const claim_t CLAIMS[] = {
     { "C7",  "parallel simulations in one DTE", "I (ii)",
       "src/dte.c", ST_ARTEFACT },
     { "C8",  "near-real-time 3D reference", "I (iii)",
-      "adapters/webots/worlds/, needs the renderer", ST_BOUNDARY },
+      "adapters/webots/controllers/fdt_controller/fdt_controller.c",
+      ST_ARTEFACT },
     { "C9",  "brokers in bridge mode", "III",
       "config/mosquitto/boat.conf", ST_ARTEFACT },
     { "C10", "LSDT small against 100 Mbps", "III",
@@ -99,7 +103,7 @@ static const claim_t CLAIMS[] = {
     { "C21", "no notable MQTT latency, no stuttering", "V-A",
       "results/jitter.txt", ST_ARTEFACT },
     { "C22", "WeBots CPU: 10 % then under 1 %", "V-A",
-      "needs the WeBots renderer", ST_BOUNDARY },
+      "measurable now, not yet measured", ST_BOUNDARY },
     { "C23", "delta feasible, actuation still late", "V-A",
       "results/latency.txt", ST_ARTEFACT },
     { "C24", "state range enabling MPC-like operation", "V-A",

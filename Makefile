@@ -42,7 +42,11 @@ BENCHBIN = $(BENCHSRC:.c=)
 
 RESULTS = results
 
-.PHONY: all lib test examples bench report syntax mqtt webots clean
+# Port the MQTT integration check runs its own broker on, chosen so it cannot
+# collide with a broker already serving a fleet on 1883.
+MQTT_IT_PORT = 18830
+
+.PHONY: all lib test examples bench report syntax mqtt mqtt-test webots clean
 
 # Adapters needing a third-party SDK. Each skips with a notice rather than
 # failing the build, so a reader without the SDK still gets a green tree.
@@ -100,6 +104,29 @@ mqtt: $(LIB)
 	  echo "built libfleetdt_mqtt.a"; \
 	fi
 
+# Integration check for the MQTT adapter: needs libmosquitto and a broker.
+# Kept out of `make test` so the unit suite stays dependency-free.
+mqtt-test: mqtt
+	@if [ -z "$(MOSQ_LIBS)" ]; then \
+	  echo "libmosquitto not found; skipping the MQTT integration check."; \
+	elif ! command -v mosquitto >/dev/null 2>&1; then \
+	  echo "no mosquitto broker on PATH; skipping the integration check."; \
+	else \
+	  $(CC) $(CFLAGS) $(MOSQ_CFLAGS) tests/it_mqtt.c \
+	    libfleetdt_mqtt.a $(LIB) $(MOSQ_LIBS) $(LDLIBS) -o fleet_dt_it_mqtt && \
+	  { echo "listener $(MQTT_IT_PORT) 127.0.0.1"; \
+	    echo "allow_anonymous true"; \
+	    echo "pid_file /tmp/fleet-dt-it.pid"; } > /tmp/fleet-dt-it.conf && \
+	  mosquitto -c /tmp/fleet-dt-it.conf -d >/dev/null 2>&1 && \
+	  for i in 1 2 3 4 5 6 7 8 9 10; do \
+	    ss -ltn 2>/dev/null | grep -q ':$(MQTT_IT_PORT)' && break; \
+	    sleep 0.2; \
+	  done && \
+	  ./fleet_dt_it_mqtt $(MQTT_IT_PORT); rc=$$?; \
+	  kill `cat /tmp/fleet-dt-it.pid` 2>/dev/null; \
+	  exit $$rc; \
+	fi
+
 webots:
 	@if [ -z "$$WEBOTS_HOME" ]; then \
 	  echo "WEBOTS_HOME is not set; skipping the WeBots controller."; \
@@ -123,6 +150,6 @@ report: tools/report/report
 clean:
 	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
 	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
-	      adapters/mqtt/fdt_mqtt.o \
+	      adapters/mqtt/fdt_mqtt.o fleet_dt_it_mqtt \
 	      adapters/webots/controllers/fdt_controller/fdt_controller
 	rm -rf $(RESULTS)

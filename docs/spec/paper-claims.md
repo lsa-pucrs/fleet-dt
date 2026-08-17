@@ -43,7 +43,21 @@ em uma equação a partir da (3).
   **desalinha**.
 - **pendente** — ainda não construído.
 
-¹ **Existir não é compilar.** Dois adaptadores — MQTT e WeBots — não podem ser
+¹ **Verificado em 2026-08-17 nesta máquina.** WeBots R2025a e libmosquitto 2.0.22
+foram instalados, e os dois adaptadores deixaram de ser código não linkado:
+
+- `make webots` compilou o controller contra o SDK real **de primeira** — os
+  headers-stub de `tools/stubs/` estavam corretos;
+- o mundo Jundiá rodou **674.360 frames** sob o coordenador, viável o tempo
+  todo, pior δ de 117 µs contra o orçamento de 125 ms;
+- `--mode=realtime` renderizou sem um único erro de GL, que é a referência
+  visual 3D do §I(iii);
+- `make mqtt-test` fez ida e volta por um broker mosquitto real, com o estado
+  chegando idêntico byte a byte.
+
+O texto abaixo é o registro de por que essas linhas eram `fronteira` antes.
+
+**Existir não é compilar.** Dois adaptadores — MQTT e WeBots — não podem ser
 linkados sem seus SDKs, que não estão nesta máquina. `make syntax` os
 type-checa contra headers-stub em `tools/stubs/`, o que separa "escrito" de
 "sabidamente compila", mas não substitui um build real: um erro de premissa
@@ -71,8 +85,8 @@ duas é exatamente o que um humano precisa olhar.
 | id | Afirmação | § | Artefato que quita | Status |
 |---|---|---|---|---|
 | C1 | "a fleet-level Digital Twin model and architecture for AUSVs" | Abstract | **roll-up**: quita quando C2–C19 estiverem em `quita` ou `fronteira` | quita |
-| C2 | "The architecture relies on the MQTT protocol" | Abstract, §III | `transport.h` + loopback testados; `adapters/mqtt/` só sintaxe | quita ¹ |
-| C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/` (testado), `adapters/webots/` — mundo + controller, validados por `test_world.c`, nunca linkados | fronteira ¹ |
+| C2 | "The architecture relies on the MQTT protocol" | Abstract, §III | `transport.h` + loopback testados; `adapters/mqtt/` com round trip real via `make mqtt-test` | quita |
+| C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/` (testado), `adapters/webots/` — mundo + controller compilados contra o SDK real e executados | quita ¹ |
 | C4 | "Link-budget modeling is validated in the context of the Jundiá Project's fleet" | Abstract, §V-A | `include/fleet_dt/linkbudget.h` + `tools/bench/link_budget` | quita |
 | C5 | "introduces bandwidth regulators that guarantee QoS while maximizing the use of shared wireless links" | Abstract, §III | `include/fleet_dt/regulator.h` + `tests/test_regulator.c` | quita |
 
@@ -84,7 +98,7 @@ C5 é a contribuição declarada do paper. Sem ela o repo não quita o abstract.
 |---|---|---|---|
 | C6 | "(i) it models fleets as a DTA composed of DTIs per-vessel" | `fdt_fleet_t` sobre `fdt_twin_t` | quita |
 | C7 | "(ii) it supports running multiple simulations in parallel in the same DTE" | `adapters/sim/` — registro de simulações amarradas ao mesmo tick | quita |
-| C8 | "(iii) it provides a near-real-time 3D visual reference for the mission operator" | `adapters/webots/worlds/jundia_fleet.wbt` + controller que escreve nos campos do supervisor | fronteira ¹ |
+| C8 | "(iii) it provides a near-real-time 3D visual reference for the mission operator" | mundo renderizado em `--mode=realtime`, controller escrevendo pose a 125 ms | quita ¹ |
 
 ## C. Arquitetura, §III
 
@@ -113,7 +127,7 @@ C5 é a contribuição declarada do paper. Sem ela o repo não quita o abstract.
 |---|---|---|---|
 | C20 | "Due to the size of packets (48 KB payload plus camera feed frame), the bandwidth usage increased < 1% for an update window of 125 ms" | `tools/bench/link_budget` — payload de **48 KB**, não 48 bytes | quita |
 | C21 | "MQTT introduced no notable latency, nor did WeBots' visual feedback (3D model) suffer from stuttering" | `tools/bench/jitter` sobre o transporte | quita |
-| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | fronteira: medição depende do WeBots | fronteira |
+| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | **mensurável agora** — WeBots R2025a instalado; falta um mundo de 1 vaso para comparar | fronteira |
 | C23 | "Running δ in less than 125 ms is feasible. However, actuation is delivered late to the boat, as it has to travel back through the network" | duas medições distintas: tempo de δ (`feasibility`) e RTT de atuação (`bench/latency`) | quita |
 | C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | exemplo com janela de profundidade > 1 | quita |
 | C25 | "the resources required to add more DTIs to the fleet are negligible (< 1% CPU usage per DTI)" | `tools/bench/scale` | quita |

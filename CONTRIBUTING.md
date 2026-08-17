@@ -26,6 +26,19 @@ Three published figures are static assertions rather than measurements:
 
 Weakening one of these to make a change compile is not a fix.
 
+## The two optional toolchains
+
+`make lib` and `make test` need nothing. Two targets need an SDK, and both skip
+with a notice rather than failing when it is absent:
+
+    make mqtt-test    # libmosquitto + a mosquitto broker on PATH
+    make webots       # WEBOTS_HOME pointing at a WeBots R2025a install
+
+`make syntax` type-checks both adapters against the stub headers in
+`tools/stubs/` on any machine. That catches a typo and cannot catch a wrong
+assumption about an API, so run the two targets above before claiming an
+adapter works.
+
 ## `make bench` dirties the tree
 
 `results/` is committed, so the charts in `docs/RESULTS.md` resolve on a fresh
