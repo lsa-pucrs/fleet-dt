@@ -23,40 +23,32 @@
 </style>
 <rect class="bg" x="0" y="0" width="860" height="420"/>
 <text class="title" x="72.0" y="28">Link occupancy against fleet size</text>
-<line class="grid" x1="72.0" y1="358.0" x2="670.0" y2="358.0"/>
-<text class="tick" x="64.0" y="362.0" text-anchor="end">-15.03</text>
-<line class="grid" x1="72.0" y1="296.8" x2="670.0" y2="296.8"/>
-<text class="tick" x="64.0" y="300.8" text-anchor="end">31.45</text>
-<line class="grid" x1="72.0" y1="235.6" x2="670.0" y2="235.6"/>
-<text class="tick" x="64.0" y="239.6" text-anchor="end">77.93</text>
-<line class="grid" x1="72.0" y1="174.4" x2="670.0" y2="174.4"/>
-<text class="tick" x="64.0" y="178.4" text-anchor="end">124.4</text>
-<line class="grid" x1="72.0" y1="113.2" x2="670.0" y2="113.2"/>
-<text class="tick" x="64.0" y="117.2" text-anchor="end">170.9</text>
-<line class="grid" x1="72.0" y1="52.0" x2="670.0" y2="52.0"/>
-<text class="tick" x="64.0" y="56.0" text-anchor="end">217.4</text>
-<line class="grid" x1="72.0" y1="52.0" x2="72.0" y2="358.0"/>
-<text class="tick" x="72.0" y="376.0" text-anchor="middle">4</text>
-<line class="grid" x1="171.7" y1="52.0" x2="171.7" y2="358.0"/>
-<text class="tick" x="171.7" y="376.0" text-anchor="middle">14</text>
-<line class="grid" x1="271.3" y1="52.0" x2="271.3" y2="358.0"/>
-<text class="tick" x="271.3" y="376.0" text-anchor="middle">24</text>
-<line class="grid" x1="371.0" y1="52.0" x2="371.0" y2="358.0"/>
-<text class="tick" x="371.0" y="376.0" text-anchor="middle">34</text>
-<line class="grid" x1="470.7" y1="52.0" x2="470.7" y2="358.0"/>
-<text class="tick" x="470.7" y="376.0" text-anchor="middle">44</text>
-<line class="grid" x1="570.3" y1="52.0" x2="570.3" y2="358.0"/>
-<text class="tick" x="570.3" y="376.0" text-anchor="middle">54</text>
-<line class="grid" x1="670.0" y1="52.0" x2="670.0" y2="358.0"/>
-<text class="tick" x="670.0" y="376.0" text-anchor="middle">64</text>
+<line class="grid" x1="72.0" y1="307.0" x2="670.0" y2="307.0"/>
+<text class="tick" x="64.0" y="311.0" text-anchor="end">0</text>
+<line class="grid" x1="72.0" y1="205.0" x2="670.0" y2="205.0"/>
+<text class="tick" x="64.0" y="209.0" text-anchor="end">100</text>
+<line class="grid" x1="72.0" y1="103.0" x2="670.0" y2="103.0"/>
+<text class="tick" x="64.0" y="107.0" text-anchor="end">200</text>
+<line class="grid" x1="131.8" y1="52.0" x2="131.8" y2="358.0"/>
+<text class="tick" x="131.8" y="376.0" text-anchor="middle">10</text>
+<line class="grid" x1="231.5" y1="52.0" x2="231.5" y2="358.0"/>
+<text class="tick" x="231.5" y="376.0" text-anchor="middle">20</text>
+<line class="grid" x1="331.1" y1="52.0" x2="331.1" y2="358.0"/>
+<text class="tick" x="331.1" y="376.0" text-anchor="middle">30</text>
+<line class="grid" x1="430.8" y1="52.0" x2="430.8" y2="358.0"/>
+<text class="tick" x="430.8" y="376.0" text-anchor="middle">40</text>
+<line class="grid" x1="530.5" y1="52.0" x2="530.5" y2="358.0"/>
+<text class="tick" x="530.5" y="376.0" text-anchor="middle">50</text>
+<line class="grid" x1="630.1" y1="52.0" x2="630.1" y2="358.0"/>
+<text class="tick" x="630.1" y="376.0" text-anchor="middle">60</text>
 <rect class="frame" x="72.0" y="52.0" width="598.0" height="306.0"/>
 <text class="axis" x="371.0" y="402.0" text-anchor="middle">vessels in the fleet</text>
 <text class="axis" x="22.0" y="205.0" text-anchor="middle" transform="rotate(-90 22.0 205.0)">occupancy (%)</text>
-<line class="rule" x1="72.0" y1="206.5" x2="670.0" y2="206.5"/>
-<text class="rulelab" x="678.0" y="210.5">link saturated</text>
-<line class="rule" x1="72.0" y1="336.9" x2="670.0" y2="336.9"/>
-<text class="rulelab" x="678.0" y="340.9">1 % (Sec. V-A, reading A)</text>
-<polyline fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round" points="72.00,321.64 111.87,305.07 151.73,288.51 191.60,271.94 231.47,255.37 271.33,238.80 311.20,222.23 351.07,205.66 390.93,189.09 430.80,172.52 470.67,155.95 510.53,139.38 550.40,122.81 590.27,106.24 630.13,89.67 670.00,73.10 "/>
+<line class="rule" x1="72.0" y1="205.0" x2="670.0" y2="205.0"/>
+<text class="rulelab" x="664.0" y="199.0" text-anchor="end">link saturated</text>
+<line class="rule" x1="72.0" y1="306.0" x2="670.0" y2="306.0"/>
+<text class="rulelab" x="664.0" y="300.0" text-anchor="end">1 % (Sec. V-A, reading A)</text>
+<polyline fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round" points="72.00,294.17 111.87,281.33 151.73,268.50 191.60,255.66 231.47,242.83 271.33,229.99 311.20,217.16 351.07,204.32 390.93,191.49 430.80,178.65 470.67,165.82 510.53,152.99 550.40,140.15 590.27,127.32 630.13,114.48 670.00,101.65 "/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
 <text class="legend" x="698.0" y="64.0">48 KB at 8 Hz per vessel</text>
 </svg>

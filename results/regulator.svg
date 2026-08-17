@@ -26,34 +26,30 @@
 <line class="grid" x1="72.0" y1="358.0" x2="670.0" y2="358.0"/>
 <text class="tick" x="64.0" y="362.0" text-anchor="end">1</text>
 <line class="grid" x1="72.0" y1="296.8" x2="670.0" y2="296.8"/>
-<text class="tick" x="64.0" y="300.8" text-anchor="end">4.043</text>
+<text class="tick" x="64.0" y="300.8" text-anchor="end">4.04</text>
 <line class="grid" x1="72.0" y1="235.6" x2="670.0" y2="235.6"/>
-<text class="tick" x="64.0" y="239.6" text-anchor="end">16.34</text>
+<text class="tick" x="64.0" y="239.6" text-anchor="end">16.3</text>
 <line class="grid" x1="72.0" y1="174.4" x2="670.0" y2="174.4"/>
-<text class="tick" x="64.0" y="178.4" text-anchor="end">66.07</text>
+<text class="tick" x="64.0" y="178.4" text-anchor="end">66.1</text>
 <line class="grid" x1="72.0" y1="113.2" x2="670.0" y2="113.2"/>
-<text class="tick" x="64.0" y="117.2" text-anchor="end">267.1</text>
+<text class="tick" x="64.0" y="117.2" text-anchor="end">267</text>
 <line class="grid" x1="72.0" y1="52.0" x2="670.0" y2="52.0"/>
-<text class="tick" x="64.0" y="56.0" text-anchor="end">1080</text>
-<line class="grid" x1="72.0" y1="52.0" x2="72.0" y2="358.0"/>
-<text class="tick" x="72.0" y="376.0" text-anchor="middle">1</text>
-<line class="grid" x1="171.7" y1="52.0" x2="171.7" y2="358.0"/>
-<text class="tick" x="171.7" y="376.0" text-anchor="middle">167.5</text>
-<line class="grid" x1="271.3" y1="52.0" x2="271.3" y2="358.0"/>
-<text class="tick" x="271.3" y="376.0" text-anchor="middle">334</text>
-<line class="grid" x1="371.0" y1="52.0" x2="371.0" y2="358.0"/>
-<text class="tick" x="371.0" y="376.0" text-anchor="middle">500.5</text>
-<line class="grid" x1="470.7" y1="52.0" x2="470.7" y2="358.0"/>
-<text class="tick" x="470.7" y="376.0" text-anchor="middle">667</text>
-<line class="grid" x1="570.3" y1="52.0" x2="570.3" y2="358.0"/>
-<text class="tick" x="570.3" y="376.0" text-anchor="middle">833.5</text>
+<text class="tick" x="64.0" y="56.0" text-anchor="end">1.08e+03</text>
+<line class="grid" x1="191.1" y1="52.0" x2="191.1" y2="358.0"/>
+<text class="tick" x="191.1" y="376.0" text-anchor="middle">200</text>
+<line class="grid" x1="310.8" y1="52.0" x2="310.8" y2="358.0"/>
+<text class="tick" x="310.8" y="376.0" text-anchor="middle">400</text>
+<line class="grid" x1="430.6" y1="52.0" x2="430.6" y2="358.0"/>
+<text class="tick" x="430.6" y="376.0" text-anchor="middle">600</text>
+<line class="grid" x1="550.3" y1="52.0" x2="550.3" y2="358.0"/>
+<text class="tick" x="550.3" y="376.0" text-anchor="middle">800</text>
 <line class="grid" x1="670.0" y1="52.0" x2="670.0" y2="358.0"/>
 <text class="tick" x="670.0" y="376.0" text-anchor="middle">1000</text>
 <rect class="frame" x="72.0" y="52.0" width="598.0" height="306.0"/>
 <text class="axis" x="371.0" y="402.0" text-anchor="middle">sensor rate (Hz, log axis by value)</text>
 <text class="axis" x="22.0" y="205.0" text-anchor="middle" transform="rotate(-90 22.0 205.0)">rate (Hz)</text>
 <line class="rule" x1="72.0" y1="266.9" x2="670.0" y2="266.9"/>
-<text class="rulelab" x="678.0" y="270.9">DT rate, 8 Hz (Sec. III)</text>
+<text class="rulelab" x="664.0" y="260.9" text-anchor="end">DT rate, 8 Hz (Sec. III)</text>
 <polyline fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round" points="72.00,358.00 72.60,327.63 73.80,297.27 76.19,266.90 77.39,257.12 83.37,226.76 101.33,186.61 131.26,156.25 191.12,125.88 310.84,95.51 670.00,55.37 "/>
 <polyline fill="none" stroke="#dc2626" stroke-width="2" stroke-linejoin="round" points="72.00,358.00 72.60,327.63 73.80,297.27 76.19,266.90 77.39,266.90 83.37,266.90 101.33,266.90 131.26,266.93 191.12,266.90 310.84,266.90 670.00,266.90 "/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
