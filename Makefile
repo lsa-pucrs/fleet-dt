@@ -42,7 +42,12 @@ BENCHBIN = $(BENCHSRC:.c=)
 
 RESULTS = results
 
-.PHONY: all lib test examples bench clean
+.PHONY: all lib test examples bench mqtt webots clean
+
+# Adapters needing a third-party SDK. Each skips with a notice rather than
+# failing the build, so a reader without the SDK still gets a green tree.
+MOSQ_CFLAGS = $(shell pkg-config --cflags libmosquitto 2>/dev/null)
+MOSQ_LIBS   = $(shell pkg-config --libs libmosquitto 2>/dev/null)
 
 all: lib test examples bench
 
@@ -72,6 +77,29 @@ bench: $(BENCHBIN)
 	@mkdir -p $(RESULTS)
 	@for b in $(BENCHBIN); do echo "== $$b"; ./$$b || exit 1; echo; done
 	@echo "artefacts in $(RESULTS)/"
+
+mqtt: $(LIB)
+	@if [ -z "$(MOSQ_LIBS)" ]; then \
+	  echo "libmosquitto not found; skipping the MQTT transport."; \
+	  echo "  install it with: dnf install mosquitto-devel"; \
+	else \
+	  $(CC) $(CFLAGS) $(MOSQ_CFLAGS) -c adapters/mqtt/fdt_mqtt.c \
+	    -o adapters/mqtt/fdt_mqtt.o && \
+	  ar rcs libfleetdt_mqtt.a adapters/mqtt/fdt_mqtt.o && \
+	  echo "built libfleetdt_mqtt.a"; \
+	fi
+
+webots:
+	@if [ -z "$$WEBOTS_HOME" ]; then \
+	  echo "WEBOTS_HOME is not set; skipping the WeBots controller."; \
+	  echo "  see adapters/webots/README.md"; \
+	else \
+	  $(CC) $(CFLAGS) -I$$WEBOTS_HOME/include/controller/c \
+	    adapters/webots/fdt_webots_controller.c \
+	    $(TOOLOBJ) $(LIB) -L$$WEBOTS_HOME/lib/controller \
+	    -lController $(LDLIBS) -o adapters/webots/fdt_controller && \
+	  echo "built adapters/webots/fdt_controller"; \
+	fi
 
 clean:
 	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
