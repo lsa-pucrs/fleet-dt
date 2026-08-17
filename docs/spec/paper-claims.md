@@ -251,7 +251,22 @@ rastreável até uma linha do paper.
    para uma frota mantendo formação, um terço de casco de incerteza posicional
    é material.
 
-Itens 1, 2, 3 e 5 valem como correção para o manuscrito; o 6 vale como
+7. **A capacidade disponível do §III não tem citação.** O texto escreve "about
+   100 Mbps of available bandwidth" e não indica de onde o número vem. Ele
+   coincide com a taxa da porta Fast Ethernet do Bullet M2 HP, que é o rádio do
+   barco (§II). Se o número descreve a porta cabeada e não o enlace sem fio, a
+   conclusão de subutilização do §V-A está dimensionada contra o enlace errado.
+   Independente do item 5: aquele mostra que a aritmética de 48 KB por janela
+   não fecha com "< 1%"; este questiona o denominador.
+
+8. **A taxa do vídeo depois de codificado não está declarada.** O §III dá a taxa
+   bruta ("1080p30 generates approximately 500 MB/s of image data") e o §V-A
+   conclui que "the network link between the MCS and the boat is underutilized"
+   considerando "the full high-definition video feed". Entre as duas frases falta
+   a taxa que o servidor RTSP transmite de fato. Sem ela a afirmação de
+   subutilização não é conferível em nenhum sentido.
+
+Itens 1, 2, 3, 5, 7 e 8 valem como correção para o manuscrito; o 6 vale como
 limitação a declarar.
 
 ## I. Constraints de entrega (definidas pelo autor, 2026-08-17)
@@ -272,3 +287,20 @@ Valem para os três planos e sobrescrevem qualquer decisão anterior em contrár
 4. **As saídas são montadas num README.** `tools/report/` varre `results/` e
    gera a seção de resultados do `README.md`, com os SVGs embutidos e as
    tabelas de comparação contra os números publicados do §V.
+
+5. **O repositório contém apenas o que o artigo afirma.** Decisão de 2026-08-17,
+   depois de construir e remover um modelo de rádio. O artigo não tem modelo de
+   propagação, não tem desvanecimento, não tem polarização, não tem tabela de
+   modulação e não tem relação sinal-ruído; o orçamento que ele chama de
+   link budget é contabilidade de taxa de dados contra uma capacidade constante.
+   Um modelo de rádio construído para variar essa capacidade foi implementado,
+   testado e depois retirado, porque aparato que o texto não menciona, num
+   repositório público citado no rodapé do artigo, se lê como contribuição não
+   declarada. O trabalho ficou preservado no branch local
+   `experiment/degraded-link-model` e pertence a um artigo futuro, junto com a
+   campanha de campo do item D7. Um regulador de malha fechada foi retirado pelo
+   mesmo motivo, com o agravante de ficar próximo do item D4.
+
+   Consequência aceita: a capacidade do enlace segue constante aqui, como no
+   texto, e o repositório não responde o que acontece quando o enlace piora.
+   Responder isso exige o modelo, e o modelo exige um artigo que o apresente.
