@@ -11,7 +11,8 @@
 # the reader cannot act on.
 
 CC      = gcc
-CFLAGS  = -std=c18 -Wall -Wextra -Werror -pedantic-errors -O2 -Iinclude -Itools
+CFLAGS  = -std=c18 -Wall -Wextra -Werror -pedantic-errors -O2 \
+          -Iinclude -Itools -Iadapters
 LDLIBS  = -lm
 
 LIB     = libfleetdt.a
@@ -23,6 +24,12 @@ LIBOBJ  = $(LIBSRC:.c=.o)
 # whatever needs it.
 TOOLSRC = tools/injector/injector.c
 TOOLOBJ = $(TOOLSRC:.c=.o)
+
+# Adapters with no external dependency: the Ardupilot ingest mapping and the
+# HSDT camera boundary. Those that do need an SDK -- MQTT, WeBots -- live
+# behind their own targets further down.
+ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/rtsp/fdt_rtsp_fake.c
+ADAPTOBJ = $(ADAPTSRC:.c=.o)
 
 TESTSRC = $(wildcard tests/test_*.c)
 TESTBIN = $(TESTSRC:tests/test_%.c=fleet_dt_test_%)
@@ -47,8 +54,8 @@ $(LIB): $(LIBOBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-fleet_dt_test_%: tests/test_%.c $(LIB) $(TOOLOBJ)
-	$(CC) $(CFLAGS) $< $(TOOLOBJ) $(LIB) $(LDLIBS) -o $@
+fleet_dt_test_%: tests/test_%.c $(LIB) $(TOOLOBJ) $(ADAPTOBJ)
+	$(CC) $(CFLAGS) $< $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(LDLIBS) -o $@
 
 test: $(TESTBIN)
 	@for t in $(TESTBIN); do echo "== $$t"; ./$$t || exit 1; done
@@ -67,5 +74,6 @@ bench: $(BENCHBIN)
 	@echo "artefacts in $(RESULTS)/"
 
 clean:
-	rm -f $(LIBOBJ) $(TOOLOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) $(BENCHBIN)
+	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
+	      $(BENCHBIN) libfleetdt_mqtt.a adapters/mqtt/fdt_mqtt.o
 	rm -rf $(RESULTS)
