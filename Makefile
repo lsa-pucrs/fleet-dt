@@ -86,7 +86,7 @@ syntax:
 	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
 	  adapters/mqtt/fdt_mqtt.c && echo "syntax ok: adapters/mqtt"
 	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
-	  adapters/webots/fdt_webots_controller.c && \
+	  adapters/webots/controllers/fdt_controller/fdt_controller.c && \
 	  echo "syntax ok: adapters/webots"
 
 mqtt: $(LIB)
@@ -106,10 +106,12 @@ webots:
 	  echo "  see adapters/webots/README.md"; \
 	else \
 	  $(CC) $(CFLAGS) -I$$WEBOTS_HOME/include/controller/c \
-	    adapters/webots/fdt_webots_controller.c \
+	    adapters/webots/controllers/fdt_controller/fdt_controller.c \
 	    $(TOOLOBJ) $(LIB) -L$$WEBOTS_HOME/lib/controller \
-	    -lController $(LDLIBS) -o adapters/webots/fdt_controller && \
-	  echo "built adapters/webots/fdt_controller"; \
+	    -lController $(LDLIBS) \
+	    -o adapters/webots/controllers/fdt_controller/fdt_controller && \
+	  echo "built adapters/webots/controllers/fdt_controller/fdt_controller"; \
+	  echo "open the world with:  webots adapters/webots/worlds/jundia_fleet.wbt"; \
 	fi
 
 tools/report/report: tools/report/report.c $(LIB)
@@ -121,5 +123,6 @@ report: tools/report/report
 clean:
 	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
 	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
-	      adapters/mqtt/fdt_mqtt.o adapters/webots/fdt_controller
+	      adapters/mqtt/fdt_mqtt.o \
+	      adapters/webots/controllers/fdt_controller/fdt_controller
 	rm -rf $(RESULTS)

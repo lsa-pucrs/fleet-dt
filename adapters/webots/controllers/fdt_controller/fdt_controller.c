@@ -53,7 +53,15 @@
 /** Window depth, deeper than one so the trend term of Section V-A exists. */
 #define WINDOW 4
 
-/** WeBots node DEF names, one per vessel. */
+/**
+ * WeBots node DEF names, one per vessel, matching worlds/jundia_fleet.wbt.
+ *
+ * Resolved by DEF rather than by display name because equation (4) indexes
+ * vessels, and a lookup by the string shown in the scene tree would break the
+ * moment someone renames a node in the editor. tests/test_world.c checks that
+ * each of these exists in the world exactly once, which is the half of this
+ * file that can be verified without the SDK.
+ */
 static const char *const VESSEL_DEF[VESSELS] = { "PINTADO", "TILAPIA" };
 
 static fdt_state_t     g_queues[VESSELS][QUEUE_CAP];

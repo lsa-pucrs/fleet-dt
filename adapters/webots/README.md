@@ -1,60 +1,94 @@
-# WeBots controller
+# WeBots simulation
 
 Section IV: *"A custom module within WeBots implements δ in C language and
-carries out the dynamics of the model."* `fdt_webots_controller.c` is that
-module.
+carries out the dynamics of the model."* Section III: *"A 3D model derived from
+the DTP resides in a WeBots world as a DTI inside the VE."*
+
+Both halves are here.
 
     export WEBOTS_HOME=/usr/local/webots
     make webots
+    webots adapters/webots/worlds/jundia_fleet.wbt
 
 Without `WEBOTS_HOME` the target skips with a notice; the core library never
 links the WeBots controller library.
 
-## The world it expects
+## Layout
 
-A minimal world with one `Robot` node per vessel, each with `supervisor TRUE`
-and a `DEF` name matching `VESSEL_DEF` in the controller:
+This directory is a WeBots project, in the layout the simulator expects.
 
-```
-DEF PINTADO Robot {
-  supervisor TRUE
-  controller "fdt_controller"
-  translation 0 0 0
-  rotation 0 1 0 0
-  children [ ... hull geometry ... ]
-}
-DEF TILAPIA Robot { ... }
-```
+| Path | What |
+|---|---|
+| `worlds/jundia_fleet.wbt` | the world: water, two hulls, obstacles |
+| `controllers/fdt_controller/fdt_controller.c` | the module running δ |
+| `3d_models/drone_boat/full_model/` | hull mesh, material and texture |
+| `3d_models/drone_boat/bounding_box/` | collision mesh |
 
-The controller writes each twin's state into `translation` and `rotation`
-through the supervisor API. That is Section I feature (iii) — the near-real-time
-3D reference for the mission operator — and it is written from the state the
-coordinator produced in the same frame, not from a state fetched afterwards.
+## What the world contains
 
-## One tick, not two
+- a **`Fluid`** node with `ImmersionProperties` and drag coefficients per hull.
+  This is the fluid simulator Section III lists as sharing the DTE with WeBots;
+  `include/fleet_dt/dte.h` is what ties simulations like it to the same tick
+  the twin runs on.
+- two `Robot` nodes, `DEF PINTADO` and `DEF TILAPIA`, after the boats of
+  Figure 1, each rendering `boat_model.obj` through a `CadShape`.
+- a `Camera` on each hull. The image never travels over MQTT: Section III
+  routes the feed over RTSP, so the wire codec carries a presence flag and
+  `adapters/rtsp/` carries the frame.
+- four `OilBarrel` obstacles, which is what the obstacle-detection application
+  of the Application Space has to see.
 
-`wb_robot_step()` is called with `FDT_TICK_NS / 1e6`, so the simulator's step
-and the model's frame are the same 125 ms read from the same constant. If they
-were configured separately they would drift, and the 3D view would render an
-instant other than the one just computed — which is the difference between a
-near-real-time reference and an approximate one.
+## Three deliberate departures from the source world
 
-## What this cannot measure
+The world derives from `projeto_barco/worlds/Barco_2_0.wbt` in
+`lsa-pucrs/boat-digital-twin`. Three things changed, each forced by the paper.
 
-Section V-A reports that *"running WeBots adds 10% CPU usage for the first boat
-and less than 1% for subsequent boats"*. That is a property of the renderer, so
-`make bench` does not reproduce it and does not pretend to. It is recorded as
-claim **C22, boundary** in `docs/spec/paper-claims.md`.
+**`basicTimeStep` is 25 ms.** The source left it at the 32 ms default, and
+125/32 is not an integer, so `wb_robot_step(125)` would have rounded the DT
+frame to something other than the deadline Section IV defines the model by —
+quietly, with no error. At 25 ms the frame is exactly five physics steps.
+`tests/test_world.c` asserts the division, so this cannot regress.
 
-The same applies to the second half of C21, stuttering in the 3D feedback.
-What `tools/bench/bench_jitter.c` does establish is the precondition: the frame
-clock holds while a full fleet publishes, decodes and steps underneath it, so
-nothing upstream of the renderer is losing the deadline.
+**The hulls carry DEF names.** The source identified them by display name;
+the controller resolves them by DEF, because a display name changes the moment
+someone edits the scene tree.
 
-## Camera feed
+**One controller drives both vessels.** The source ran one controller per hull,
+each supervising itself with its index passed through `controllerArgs`. Here
+the first hull's controller is the coordinator `S` of Figure 4: it resolves
+every DEF, steps every twin, computes `cᵗ` across the fleet and writes every
+pose. A controller per hull *cannot* compute `cᵗ`, because no instance would
+see more than its own state. The second hull therefore has
+`controller "<none>"` — it is a DTI the coordinator drives, not an agent.
 
-The controller receives telemetry over MQTT but **not** the camera. Section III:
-*"receiving input from the MQTT infrastructure (except for the camera feed,
-directly driven by the RTSP client in MCS)"*. The boundary is
-`adapters/rtsp/fdt_rtsp.h`, and the wire codec carries a presence flag where an
-image would be.
+## What is checked, and what is not
+
+`tests/test_world.c` runs in the ordinary suite on any machine and checks the
+world against what the controller assumes of it: the DEF names resolve, exactly
+one node is a supervisor, the mesh URLs point at files that exist, the frame
+divides into whole physics steps, and Section III's furniture — fluid, drag,
+one camera per vessel — is present.
+
+That proves the controller and the world still agree about what they are. It
+does **not** prove the simulation runs. Neither the controller nor the MQTT
+adapter has been through the real toolchain on the machine that wrote them;
+`make syntax` type-checks both against the stub headers in `tools/stubs/`,
+which catches a typo and cannot catch a wrong assumption about the API.
+
+Claims **C3** and **C8** therefore stay `fronteira` in
+`docs/spec/paper-claims.md`. A file that has never been through a linker is not
+evidence of integration, and the artefacts being complete and mutually
+consistent is a weaker statement than the paper's.
+
+Section V-A's *"running WeBots adds 10% CPU usage for the first boat and less
+than 1% for subsequent boats"* is a boundary for a different reason: it is a
+property of the renderer, so `make bench` does not reproduce it and does not
+pretend to. That is claim **C22**.
+
+## Credit
+
+The world, the hull mesh, its material and texture, the collision mesh and the
+obstacle layout come from `lsa-pucrs/boat-digital-twin` (MIT), by Anderson
+Domingues and the Jundiá project team. The immersion and drag coefficients are
+theirs and were not retuned: they are calibrated against a hull this repository
+did not build.

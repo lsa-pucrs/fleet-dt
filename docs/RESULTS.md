@@ -23,12 +23,12 @@ Built with fleet-dt 0.1.0 (ICECS 2026 manuscript -10).
 |---|---|---|---|---|
 | C1 | fleet-level DT model and architecture | Abstract | quita | `roll-up of C2 through C19` |
 | C2 | architecture relies on MQTT | Abstract, III | quita | `src/transport_loop.c` |
-| C3 | integrates Ardupilot, WeBots, other simulations | Abstract | fronteira | `WeBots controller never linked here` |
+| C3 | integrates Ardupilot, WeBots, other simulations | Abstract | fronteira | `world+controller complete, never linked` |
 | C4 | link-budget modelling validated | Abstract, V-A | quita | `src/linkbudget.c` |
 | C5 | bandwidth regulators guaranteeing QoS | Abstract, III | quita | `src/regulator.c` |
 | C6 | fleet as a DTA of per-vessel DTIs | I (i) | quita | `src/fleet.c` |
 | C7 | parallel simulations in one DTE | I (ii) | quita | `src/dte.c` |
-| C8 | near-real-time 3D reference | I (iii) | fronteira | `needs the WeBots renderer` |
+| C8 | near-real-time 3D reference | I (iii) | fronteira | `adapters/webots/worlds/, needs the renderer` |
 | C9 | brokers in bridge mode | III | quita | `config/mosquitto/boat.conf` |
 | C10 | LSDT small against 100 Mbps | III | quita | `tools/bench/bench_bandwidth.c` |
 | C11 | camera feed separated from MQTT | III | quita | `adapters/rtsp/fdt_rtsp.h` |
@@ -165,19 +165,19 @@ frames per size: 200   window depth: 4   queue capacity: 8
 
 --- per fleet size ---
    vessels   delta worst    delta mean     cpu/DTI     inj/frame   feasible
-         1        0.8 us        0.1 us    17.382 %        0.4 us        yes
-         2        0.3 us        0.1 us     9.194 %        0.6 us        yes
-         4        0.5 us        0.2 us     4.098 %        1.1 us        yes
-         8        6.1 us        0.5 us     2.006 %        2.5 us        yes
-        16        1.3 us        0.9 us     0.764 %        6.1 us        yes
-        25        1.7 us        1.4 us     0.438 %       11.2 us        yes
-        32       11.6 us        1.8 us     0.314 %       16.1 us        yes
-        48        3.2 us        2.7 us     0.172 %       29.8 us        yes
-        64       21.3 us        2.7 us     0.121 %       31.9 us        yes
+         1        1.3 us        0.2 us    19.443 %        0.6 us        yes
+         2        0.5 us        0.3 us     9.157 %        1.0 us        yes
+         4       14.3 us        0.5 us     4.572 %        2.1 us        yes
+         8        6.4 us        0.9 us     1.832 %        5.1 us        yes
+        16        2.7 us        1.9 us     0.716 %       14.6 us        yes
+        25        6.2 us        3.1 us     0.431 %       25.2 us        yes
+        32       20.7 us        3.9 us     0.318 %       34.5 us        yes
+        48        6.9 us        4.3 us     0.180 %       45.5 us        yes
+        64       12.3 us        5.8 us     0.121 %       68.0 us        yes
 
 --- DTI side — what Section V-B calls negligible ---
-  cpu per DTI                0.1208 %               paper: < 1 %                              [OK]
-  worst delta, 64 vessels    21.3 us                paper: < 125 ms deadline                  [OK]
+  cpu per DTI                0.1215 %               paper: < 1 %                              [OK]
+  worst delta, 64 vessels    12.3 us                paper: < 125 ms deadline                  [OK]
   DTI ceiling here           >= 64 vessels          paper: not the paper's 25                 [OK]
 
 --- injector side — the ceiling Section V-B actually hit ---
@@ -201,7 +201,7 @@ frames per size: 200   window depth: 4   queue capacity: 8
     partial frames : 106 of 200
     double updates : 72
     stale packets  : 0
-    delta worst    : 1.6 us   feasible: yes
+    delta worst    : 0.9 us   feasible: yes
   pathology reproduced       106 partial, 72 double paper: some boats, not every frame        [OK]
   Stale packets stay at 0 here, and that is the deferral being
   order-preserving rather than the counter being broken: a held
@@ -232,12 +232,12 @@ fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
 transport: in-process loopback   vessels: 4   frames: 400
 
 --- measurement 1 — delta compute time (Section IV) ---
-  p50     0.18 us   p95     0.20 us   p99     0.32 us   worst     1.08 us
-  delta under the deadline   1.08 us worst          paper: delta in less than 125 ms is feasible [OK]
+  p50     0.48 us   p95     0.49 us   p99     0.64 us   worst     2.21 us
+  delta under the deadline   2.21 us worst          paper: delta in less than 125 ms is feasible [OK]
 
 --- measurement 2 — actuation round trip (Section V-A) ---
   I^t published -> A^t delivered
-  p50     2.37 us   p95     2.53 us   p99     2.69 us   worst    18.10 us
+  p50     6.31 us   p95     6.59 us   p99     6.91 us   worst    48.05 us
   round trip over a network  not measured here      paper: actuation is delivered late        [BOUNDARY]
   This run uses the in-process loopback, so the round trip carries
   no network. Section V-A's observation is about a real link, and
@@ -247,8 +247,8 @@ transport: in-process loopback   vessels: 4   frames: 400
   actuation arrives.
 
 --- why they are not one number ---
-  delta worst    :     1.08 us  (compute)
-  round trip p50 :     2.37 us  (compute + transport)
+  delta worst    :     2.21 us  (compute)
+  round trip p50 :     6.31 us  (compute + transport)
   The second contains the first. Adding them would count
   the compute twice.
 
@@ -270,10 +270,10 @@ vessels: 8   frames: 80   period: 125 ms   (about 10 s of wall clock)
 
 --- frame period held under a stepping fleet ---
   mean period      :  125.000 ms
-  |deviation| p50  :    0.002 ms
-  |deviation| p95  :    0.031 ms
-  |deviation| p99  :    0.043 ms
-  |deviation| worst:    0.055 ms
+  |deviation| p50  :    0.011 ms
+  |deviation| p95  :    0.123 ms
+  |deviation| p99  :    0.141 ms
+  |deviation| worst:    0.143 ms
   pacer overruns   :        0
   mean frame period          125.000 ms             paper: 125 ms, 8 Hz (Sec. IV)             [OK]
   deadline misses            0                      paper: delta is a hard real-time task     [OK]

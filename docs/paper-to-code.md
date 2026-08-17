@@ -46,7 +46,9 @@ re-checked.
 | LSDT | small packets on MQTT | `fdt_stream_t` profiles | [`bench_bandwidth.c`](../tools/bench/bench_bandwidth.c) |
 | HSDT | camera feed, off MQTT | `fdt_rtsp_t` | [`fdt_rtsp.h`](../adapters/rtsp/fdt_rtsp.h) |
 | Ardupilot / NAVIO2 | sensor source | `fdt_mav_ingest_t` | [`fdt_mavlink.h`](../adapters/mavlink/fdt_mavlink.h) |
-| WeBots module running δ | the DTI inside the VE | controller `main` | [`fdt_webots_controller.c`](../adapters/webots/fdt_webots_controller.c) |
+| WeBots module running δ | the DTI inside the VE | controller `main` | [`fdt_controller.c`](../adapters/webots/controllers/fdt_controller/fdt_controller.c) |
+| 3D model in a WeBots world | the VE of Section III | `DEF PINTADO`, `DEF TILAPIA` | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
+| fluid simulator | sharing the DTE | `Fluid` node | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
 | DTE with parallel simulations | one tick, many simulations | `fdt_dte_t` | [`dte.h`](../include/fleet_dt/dte.h) |
 | MCS | out of scope, per Section IV | goal source in `fdt_plan_fn` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 
@@ -99,7 +101,15 @@ Items 1, 2, 3 and 5 are worth fixing in the manuscript.
 
 ## Origin
 
-`fdt_state_t` derives from `dt-daemon/include/boat.h` by Anderson Domingues in
-`lsa-pucrs/boat-digital-twin`, and `examples/daemon.c` from `dt-daemon/daemon.c`
-in the same repository. That repository is private, so this is a credit, not a
-link a reader can follow.
+Parts of this repository come from `lsa-pucrs/boat-digital-twin` (MIT), by
+Anderson Domingues and the Jundiá project team:
+
+- `fdt_state_t` derives from `dt-daemon/include/boat.h`;
+- `examples/daemon.c` from `dt-daemon/daemon.c`;
+- the WeBots world, the hull and collision meshes, the material and texture,
+  and the immersion and drag coefficients from `projeto_barco/`.
+
+That repository is private. The assets above are redistributed here under its
+licence, with the changes to the world noted in
+[`adapters/webots/README.md`](../adapters/webots/README.md); the repository itself
+remains a credit rather than a link a reader can follow.

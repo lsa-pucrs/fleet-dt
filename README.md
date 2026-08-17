@@ -44,9 +44,23 @@ Requires `gcc`, `make`, and glibc: the pacer uses POSIX.1-2008
 | `tools/injector/` | the synthetic telemetry injectors of Section V-B |
 | `tools/bench/` | the measurement campaign |
 | `tools/report/` | claim coverage and results assembly |
-| `adapters/` | Ardupilot ingest, the camera boundary, MQTT, the WeBots controller |
+| `adapters/` | Ardupilot ingest, the camera boundary, MQTT, and the WeBots project — world, hull meshes and the controller running δ |
 | `config/mosquitto/` | the bridge-mode broker configuration of Section III |
 | `docs/` | the paper-to-code map, the claim inventory, the generated results |
+
+## The simulation
+
+`adapters/webots/` is a WeBots project: the world of Section III with its fluid
+node and two hulls, the mesh derived from the DTP, and the controller that runs
+δ at the simulation tick.
+
+    make webots && webots adapters/webots/worlds/jundia_fleet.wbt
+
+`tests/test_world.c` checks the world against what the controller assumes of it
+on any machine, with or without the SDK — the DEF names resolve, the meshes
+exist, one node is the coordinator, and the 125 ms frame divides into whole
+physics steps. That is agreement between two artefacts, not proof the
+simulation runs, and the claim inventory says so.
 
 ## Paper to code
 
@@ -116,10 +130,18 @@ claim inventory, along with four others worth fixing in the manuscript.
 
 ## Origin
 
-`fdt_state_t` derives from `dt-daemon/include/boat.h`, and `examples/daemon.c`
-from `dt-daemon/daemon.c`, both by Anderson Domingues in
-`lsa-pucrs/boat-digital-twin`. That repository is private, so this is a credit,
-not a link a reader can follow.
+Parts of this repository come from `lsa-pucrs/boat-digital-twin` (MIT), by
+Anderson Domingues and the Jundiá project team:
+
+- `fdt_state_t` derives from `dt-daemon/include/boat.h`;
+- `examples/daemon.c` from `dt-daemon/daemon.c`;
+- the WeBots world, the hull and collision meshes, the material and texture,
+  and the immersion and drag coefficients from `projeto_barco/`.
+
+That repository is private. The assets above are redistributed here under its
+licence, with the changes to the world noted in
+[`adapters/webots/README.md`](adapters/webots/README.md); the repository itself
+remains a credit rather than a link a reader can follow.
 
 ## Funding
 
