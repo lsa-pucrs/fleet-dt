@@ -1,8 +1,6 @@
 /**
  * @file test_tick.c
  * @brief The 125 ms frame period of Sections III and IV.
- *
- * Claim covered: C13. See docs/spec/paper-claims.md.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -32,10 +30,6 @@ static void test_period_constant(void)
 
 /**
  * Eight frames at the paper's rate.
- *
- * The bound is loose because the host is not a real-time kernel; what is
- * being checked is that the absolute deadline keeps the mean pinned to the
- * period, not that any single frame is exact.
  */
 static void test_measured_period(void)
 {
@@ -72,8 +66,6 @@ static void test_overrun_accounting(void)
     fdt_tick_wait(&fast);
     assert(fdt_tick_overruns(&fast) == 1);
 
-    /* Re-armed rather than replaying the backlog: the next wait sleeps a
-     * normal period instead of returning immediately nineteen more times. */
     fdt_tick_wait(&fast);
     assert(fdt_tick_overruns(&fast) == 1);
 

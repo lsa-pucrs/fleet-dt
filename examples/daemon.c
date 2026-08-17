@@ -1,22 +1,6 @@
 /**
  * @file daemon.c
  * @brief A two-boat fleet stepping at 125 ms under a coordinator.
- *
- * Derived from dt-daemon/daemon.c by Anderson Domingues in
- * lsa-pucrs/boat-digital-twin, commit 90c5ab5. That repository is private, so
- * this is a credit, not a link a reader can follow.
- *
- * The dynamics here are a placeholder: yaw integrates the input's yaw rate,
- * the window contributes a trend term, and the decision steers proportionally
- * toward the goal. The point of the file is the loop and the wiring, not the
- * physics.
- *
- * The window is FDT_WINDOW deep rather than 1 on purpose. Section V-A
- * justifies the window by saying it enables proactive operation, "as in model
- * predictive control (MPC)"; with a depth of one that promise never appears in
- * the demonstration. That is also why each twin is seeded FDT_WINDOW times
- * before the first step: equation (3) requires the queue to already hold n
- * states.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -49,10 +33,6 @@ typedef struct {
 
 /**
  * delta^e over the n most recent states.
- *
- * The window buys the trend term: with n == 1 the twin can only integrate the
- * present, while with n > 1 it can also see which way the vessel has been
- * turning, which is what a predictive controller consumes.
  */
 static void demo_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
                          const fdt_goal_t *g_prev, fdt_state_t *out,
@@ -71,9 +51,6 @@ static void demo_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
 
     out->yaw_rate_rps = rate;
 
-    /* A rate in rad/s into a field in degrees: cross the units, do not add
-     * them raw. Table I mixes the two conventions and model.h preserves the
-     * mix, so every integration has to do this explicitly. */
     out->yaw_deg += rate * dt_s * RAD2DEG;
 
     /* The term depth buys: mean yaw change per frame across the window. */
@@ -145,8 +122,6 @@ int main(void)
             fprintf(stderr, "twin %zu failed to init\n", k);
             return EXIT_FAILURE;
         }
-        /* B^1_i, seeded to the window depth: equation (3) has no B^{t-1} to
-         * point at until the queue holds n states. */
         for (int s = 0; s < FDT_WINDOW; s++) {
             if (fdt_twin_seed(&g_twins[k], &b0) != 0) {
                 fprintf(stderr, "twin %zu failed to seed\n", k);

@@ -44,8 +44,6 @@ double fdt_link_increase(const fdt_link_t *link,
 
     const double base = fdt_link_total_bps(link, baseline, nb);
     if (base <= 0.0) {
-        /* No prior traffic: "usage increased by X%" has no denominator. The
-         * caller wants fdt_link_utilization() for that case. */
         return -1.0;
     }
     return fdt_link_total_bps(link, added, na) / base;

@@ -8,9 +8,6 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-
-/* Plot geometry, in pixels. The margins have to hold a rotated y label on the
- * left and the reference-line captions on the right. */
 #define MARGIN_LEFT   72
 #define MARGIN_RIGHT  190
 #define MARGIN_TOP    52
@@ -20,10 +17,6 @@
 
 /**
  * Series colours.
- *
- * Chosen to stay distinguishable on both a white and a dark background, which
- * matters because these SVGs are embedded in a README that renders either
- * way, and to remain separable in greyscale for a printed copy.
  */
 static const char *const SERIES_COLOR[FDT_PLOT_MAX_SERIES] = {
     "#2563eb", /* blue   */
@@ -123,8 +116,6 @@ static bounds_t compute_bounds(const fdt_plot_t *p)
         }
     }
 
-    /* A reference line outside the data range would be clipped away, and an
-     * invisible reference line is worse than none. */
     for (size_t r = 0; r < p->nrules; r++) {
         const double yv = p->rules[r].y;
         if (yv < b.y_min) { b.y_min = yv; }
@@ -132,8 +123,6 @@ static bounds_t compute_bounds(const fdt_plot_t *p)
         if (yv > 0.0 && yv < b.y_pos_min) { b.y_pos_min = yv; }
     }
 
-    /* Bars are read against zero; a bar chart whose axis starts at the
-     * smallest bar exaggerates every difference. */
     for (size_t s = 0; s < p->nseries; s++) {
         if (p->series[s].kind == FDT_PLOT_BAR && b.y_min > 0.0) {
             b.y_min = 0.0;
@@ -299,8 +288,6 @@ static void put_series(FILE *f, const fdt_plot_t *p, const bounds_t *b,
         return;
     }
 
-    /* Bars. Width is one slot of the abscissa range, shrunk so that adjacent
-     * bars do not touch, and split when several bar series share the axis. */
     size_t bar_series = 0;
     size_t bar_index  = 0;
     for (size_t k = 0; k < p->nseries; k++) {
@@ -417,9 +404,6 @@ int fdt_plot_write_csv(const fdt_plot_t *p, const char *path)
     }
     fputc('\n', f);
 
-    /* The first series drives the row count; shorter series leave the cell
-     * empty, which is the honest rendering of a run that produced fewer
-     * points rather than a zero that would plot as data. */
     for (size_t i = 0; i < p->series[0].n; i++) {
         fprintf(f, "%.10g", p->series[0].x[i]);
         for (size_t s = 0; s < p->nseries; s++) {

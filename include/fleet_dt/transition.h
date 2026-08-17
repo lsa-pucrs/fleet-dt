@@ -9,23 +9,6 @@
 /**
  * @file transition.h
  * @brief delta, delta^e and pi — equations (2) and (3) — and the DTI they form.
- *
- * Equation (3) reads
- *
- *     B^t_i = delta^e([B^{t-1}_i; B^{t-n}_i], I^{t-1}_k, g^{t-1}_k)
- *
- * so the window is the n most recent states. That is what the bracket writes
- * and what the prose confirms: "The number of states to observe (n) is purely
- * a design decision". The same equation also carries a trailing constraint
- * "i <= j <= t-1" using indices that appear nowhere in it; the choice to
- * follow the bracket is recorded as ambiguity 1 in docs/spec/paper-claims.md.
- *
- * Equation (2) is the n == 1 case, which is why there is no separate delta in
- * this library and no fdt_delta symbol to look for.
- *
- * The library owns the structure — the queue, the window, the frame — and the
- * application owns the dynamics, which is why the transition and the decision
- * are function pointers rather than library routines.
  */
 
 /**
@@ -85,8 +68,6 @@ const fdt_state_t *fdt_window_at(const fdt_queue_t *q, size_t n, size_t k);
 
 /**
  * @brief One Digital Twin Instance: a queue plus the dynamics that drive it.
- *
- * Treat the fields as private; use the accessors.
  */
 typedef struct {
     fdt_queue_t    q;       /**< The vessel's state history. */
@@ -111,15 +92,6 @@ int fdt_twin_init(fdt_twin_t *tw, fdt_state_t *q_storage, size_t cap,
 /**
  * @brief Binds a non-autonomous twin, where actuation is absorbed by state.
  *
- * Section IV: "In a non-autonomous vehicle, actuation is absorbed by the
- * state, i.e. A^t_i is a subset of B^t_i." There is no decision to take, so
- * there is no pi to supply: this installs a projection that reads the
- * actuation out of the state instead. A teleoperated vessel is this case —
- * the operator decides, and the twin only reflects what the hull is doing.
- *
- * The projection maps surge velocity to throttle and yaw rate to cage angle,
- * which are the two state variables the two actuators command.
- *
  * @return 0 on success, -1 on the same conditions as fdt_twin_init().
  */
 int fdt_twin_init_passive(fdt_twin_t *tw, fdt_state_t *q_storage, size_t cap,
@@ -127,13 +99,6 @@ int fdt_twin_init_passive(fdt_twin_t *tw, fdt_state_t *q_storage, size_t cap,
 
 /**
  * @brief Establishes B^1_i, the known starting state of Section IV.
- *
- * Equation (3) needs a B^{t-1} to point at, so the recurrence cannot start
- * from an empty queue. The initial state is therefore a boundary condition
- * rather than something delta^e produces, and a twin must be seeded before
- * its first step. Seeding a twin whose window depth will be n requires n
- * seeds, because the window rules are total and admit no empty-queue
- * exception.
  *
  * @return 0 on success, -1 when the twin is unbound or @p b is NULL.
  *
@@ -144,9 +109,6 @@ int fdt_twin_seed(fdt_twin_t *tw, const fdt_state_t *b);
 
 /**
  * @brief One simulation frame with fleet context.
- *
- * Runs delta^e over the n most recent states to produce B^t_i, enqueues it,
- * then runs pi on that same state to produce A^t_i.
  *
  * @param in         I^{t-1}_k, may be NULL.
  * @param g_prev     g^{t-1}_k, consumed by equation (3).
@@ -167,9 +129,6 @@ int fdt_twin_step_ctx(fdt_twin_t *tw, const fdt_input_t *in,
 
 /**
  * @brief One simulation frame without fleet context.
- *
- * The standalone case of fdt_twin_step_ctx(): no fleet, therefore no c^t.
- * @see fdt_twin_step_ctx
  */
 int fdt_twin_step(fdt_twin_t *tw, const fdt_input_t *in,
                   const fdt_goal_t *g_prev, const fdt_goal_t *g_now,

@@ -92,9 +92,6 @@ void fdt_mav_on_battery(fdt_mav_ingest_t *ing, uint16_t voltage_mv,
 
     ing->input.vbat_v = (float)voltage_mv / 1000.0f;
 
-    /* MAVLink signals "current not measured" with -1. Table I has no way to
-     * say that, so an unknown current is reported as zero draw rather than as
-     * a negative one that would read as charging. */
     ing->input.ibat_a = (current_battery < 0)
                       ? 0.0f
                       : (float)current_battery / 100.0f;
@@ -108,8 +105,6 @@ void fdt_mav_attach_views(fdt_mav_ingest_t *ing, const void *left,
     if (ing == NULL) {
         return;
     }
-    /* No HAVE bit: the views arrive over RTSP, and their absence must not
-     * hold up a frame that MAVLink has already completed. */
     ing->input.x_left  = left;
     ing->input.x_right = right;
 }
@@ -147,8 +142,6 @@ void fdt_mav_actuation_to_rc(const fdt_actuation_t *a, uint16_t *chan_throttle,
     }
 
     if (chan_throttle != NULL) {
-        /* 0..100 % spans the full 1000..2000 us range, so zero throttle is
-         * the low end rather than the neutral midpoint. */
         float unit = a->throttle_pct / 100.0f;
         if (unit < 0.0f) { unit = 0.0f; }
         if (unit > 1.0f) { unit = 1.0f; }
@@ -156,8 +149,6 @@ void fdt_mav_actuation_to_rc(const fdt_actuation_t *a, uint16_t *chan_throttle,
     }
 
     if (chan_cage != NULL) {
-        /* The cage is centred: neutral is straight ahead, and the mechanical
-         * limit clamps rather than wraps. */
         *chan_cage = to_pulse(a->cage_rad / FDT_CAGE_LIMIT_RAD);
     }
 }

@@ -1,17 +1,6 @@
 /**
  * @file it_mqtt.c
  * @brief Integration check: the MQTT transport against a real broker.
- *
- * The unit suite exercises the transport seam over the in-process loopback,
- * which proves the seam and proves nothing about mosquitto. This one connects
- * to a broker, publishes an envelope, polls it back and decodes it, which is
- * the difference between an adapter that compiles and an adapter that works.
- *
- * Not part of `make test`: it needs libmosquitto and a running broker. Run it
- * with `make mqtt-test`, which starts a broker on a port of its own so it
- * cannot collide with one already serving a fleet.
- *
- * Claim covered: C2, the half the loopback cannot reach.
  */
 #include "mqtt/fdt_mqtt.h"
 
@@ -71,8 +60,6 @@ int main(int argc, char **argv)
     sink_t sink = {0};
     assert(tr.subscribe(tr.self, topic, on_state, &sink) == 0);
 
-    /* The subscription is acknowledged asynchronously, so poll until the
-     * broker has it before publishing anything to it. */
     for (int i = 0; i < 20; i++) {
         (void)tr.poll(tr.self, 50);
     }

@@ -1,15 +1,6 @@
 /**
  * @file test_geo.c
  * @brief The geodetic-to-local mapping, and the bug it was extracted from.
- *
- * Not a paper claim. This is a regression guard: the WeBots controller used to
- * do this arithmetic inline and did it wrong, scaling an absolute longitude
- * into a world coordinate. Every vessel then rendered thousands of kilometres
- * outside a world a thousand metres across, and nothing failed — the frames
- * kept stepping, the counters stayed green, and the only symptom was an empty
- * lagoon in a 3D view no test could look at.
- *
- * Moving the arithmetic into the library is what makes these checks possible.
  */
 #include "injector/injector.h"
 
@@ -39,8 +30,6 @@ static void test_reference_is_the_origin(void)
     assert(fabs(east) < 1e-9);
     assert(fabs(north) < 1e-9);
 
-    /* This is the whole of the old bug. Multiplying the absolute coordinate
-     * instead of the difference put the vessel here: */
     const double wrong_x = REF_LON * FDT_M_PER_DEG_LAT;
     const double wrong_z = REF_LAT * FDT_M_PER_DEG_LAT;
     assert(fabs(wrong_x) > 5.0e6);   /* 5696 km west  */
@@ -58,8 +47,6 @@ static void test_scales(void)
     fdt_geo_offset(REF_LAT, REF_LON, REF_LAT + 0.1, REF_LON, NULL, &north);
     assert(fabs(north - 11132.0) < 1.0);
 
-    /* A tenth of a degree east is shorter, by the cosine of the latitude. At
-     * 30 degrees south that is 0.866, so about 9.64 km. */
     double east = 0.0;
     fdt_geo_offset(REF_LAT, REF_LON, REF_LAT, REF_LON + 0.1, &east, NULL);
     assert(east > 9500.0 && east < 9700.0);
@@ -89,11 +76,6 @@ static void test_directions(void)
 
 /**
  * The motion the injector actually produces stays inside the world.
- *
- * tools/injector/injector.c sweeps the position by a thousandth of a degree
- * around the reference. That has to land well inside the water box of
- * adapters/webots/worlds/, which is 1000 m square, or the hulls leave the
- * scene again.
  */
 static void test_injector_track_fits_the_world(void)
 {
@@ -120,9 +102,6 @@ static void test_injector_track_fits_the_world(void)
     printf("injector track radius: %.1f m, water half-width %.0f m\n",
            worst, water_half_m);
 
-    /* The controller anchors on the first fix it sees, at an arbitrary phase
-     * of this circle, so a vessel can sit two radii from its anchor. That is
-     * what has to fit the world, and it has to fit the viewport too. */
     assert(2.0 * worst < water_half_m);
     assert(2.0 * worst < 6.0);
 
@@ -132,12 +111,6 @@ static void test_injector_track_fits_the_world(void)
 
 /**
  * Two vessels have to stand further apart than one vessel is long.
- *
- * Section II gives the Jundiá hull as 1.2 m. The spacing was once derived from
- * the sweep, and when the sweep shrank to keep the fleet in frame the spacing
- * came down with it to under a metre: the hulls overlapped and the fleet
- * rendered as a single boat. They are independent quantities and this is the
- * check that keeps them so.
  */
 static void test_vessels_do_not_overlap(void)
 {

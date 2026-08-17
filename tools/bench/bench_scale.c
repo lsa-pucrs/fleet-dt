@@ -1,17 +1,6 @@
 /**
  * @file bench_scale.c
  * @brief Fleet scaling: the DTI ceiling and the injector ceiling, apart.
- *
- * Claims measured: C25 ("the resources required to add more DTIs to the fleet
- * are negligible (< 1% CPU usage per DTI)") and C26 (the ~25-boat limit).
- *
- * Trap 2 of docs/spec/paper-claims.md lives here. Section V-B is explicit that
- * the ceiling it hit belonged to the injectors: "hard-programming injectors to
- * inject packets periodically could not keep the simulation pace for larger
- * fleets (> 25 boats, same computer model)". A report that folded the two into
- * one number would say the DTI saturates at 25 boats, which is not what the
- * paper claims. They are therefore measured and printed as two separate
- * ceilings, and the chart draws both.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -81,8 +70,6 @@ static void bench_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
     out->yaw_rate_rps = rate;
     out->yaw_deg     += rate * dt_s * rad2d;
 
-    /* The term the deeper window buys: the trend across the whole window,
-     * which is what Section V-A calls proactive operation. */
     if (newest != NULL && oldest != NULL && n > 1) {
         out->pitch_deg = (newest->yaw_deg - oldest->yaw_deg) /
                          (float)(n - 1);
@@ -149,8 +136,6 @@ static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
         return;
     }
     if (fdt_fs_accept(&g_fs, &env) == FDT_FS_STALE) {
-        /* Counted by the monitor. Not dropped: discarding late packets is
-         * item D6, which Section VI declares future work. */
     }
     (void)fdt_dec_input(payload, env.payload_len, &g_decoded[env.vessel]);
 }
@@ -177,8 +162,6 @@ typedef struct {
 } run_t;
 
 /**
- * Runs FRAMES frames with the given fleet size.
- *
  * @param drop_every   Loopback loss, producing partial frames; 0 for none.
  * @param defer_every  Loopback deferral, producing double updates; 0 for none.
  * @param paced        Non-zero to drive the loop with the 125 ms pacer and
@@ -207,8 +190,6 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
     for (unsigned k = 0; k < vessels; k++) {
         assert(fdt_twin_init(&g_twins[k], g_queues[k], QUEUE_CAP,
                              bench_delta_e, bench_pi, NULL) == 0);
-        /* The window needs WINDOW states before the first step: equation (3)
-         * has no B^{t-1} to point at otherwise. */
         for (int s = 0; s < WINDOW; s++) {
             assert(fdt_twin_seed(&g_twins[k], &zero) == 0);
         }
@@ -250,8 +231,6 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
             g_ins[k] = g_decoded[k];
         }
 
-        /* DTI side: one coordinated fleet frame, timed on its own. This is
-         * the delta compute time of Section IV, and nothing else. */
         fdt_feas_begin(&feas);
         const int rc = fdt_coord_step(&coord, g_ins, WINDOW,
                                       g_gprev, g_gnow, g_bs, g_as);
@@ -259,9 +238,6 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
         assert(rc == 0);
 
         if (paced) {
-            /* The real pace question of Section V-B: can the injector still
-             * produce a frame's telemetry inside the period? A missed
-             * deadline here is observed, not derived from a budget sum. */
             const uint64_t before = fdt_tick_overruns(&tk);
             fdt_tick_wait(&tk);
             if (fdt_tick_overruns(&tk) != before) {
@@ -281,8 +257,6 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
     out.stale        = (unsigned long)fdt_fs_stale_packets(&g_fs);
     out.inj_missed   = (unsigned long)fdt_inj_missed_deadlines(&inj);
 
-    /* CPU per DTI: the share of wall-clock one vessel's delta consumed. The
-     * paper's "< 1% CPU usage per DTI" is the quantity being compared. */
     const double delta_total_ns = fdt_feas_mean_ns(&feas) * (double)frames;
     out.cpu_per_dti_pct = 100.0 * (delta_total_ns / wall_ns) /
                           (double)vessels;
@@ -327,24 +301,15 @@ int main(void)
         if (run.feasible) {
             dti_ceiling = v;
         }
-        /* A budget check, not an observation: does one frame's publish plus
-         * one frame's step still fit the period? The observed version, with a
-         * real clock, is the paced confirmation further down. */
         if (run.inj_mean_ms + run.dti_worst_ms < 125.0) {
             inj_ceiling = v;
         }
 
-        /* Microseconds, because delta on this machine is three orders of
-         * magnitude under the 125 ms budget and milliseconds would print as
-         * a column of zeros. */
         bench_say(&r, "  %8u %10.1f us %10.1f us %9.3f %% %10.1f us %10s\n",
                   v, run.dti_worst_ms * 1e3, run.dti_mean_ms * 1e3,
                   run.cpu_per_dti_pct, run.inj_mean_ms * 1e3,
                   run.feasible ? "yes" : "NO");
 
-        /* Structural invariants for the clean sweep. These do abort: over a
-         * lossless link a partial or doubled frame is a bug, not a slow
-         * machine. The lossy row below is where they are expected. */
         assert(run.partial == 0);
         assert(run.doubles == 0);
     }
@@ -368,11 +333,6 @@ int main(void)
     bench_compare(&r, "publish+step fits period", buf,
                   "budget check, not a pace observation", BENCH_OK);
 
-    /* The observed version. Section V-B's injectors failed because they could
-     * not "keep the simulation pace", which is a missed-deadline count under
-     * a real clock, not a sum of two budgets. One paced run confirms the
-     * derivation at the top of the sweep; running the whole sweep paced would
-     * cost FRAMES * 125 ms per size. */
     const int paced_frames = 40;
     const run_t paced = run_fleet_ex(SWEEP[SWEEP_N - 1], 0, 0, 1,
                                      paced_frames);
@@ -397,13 +357,6 @@ int main(void)
         "  two faults Section V-B describes: a packet that never arrives, and\n"
         "  a packet the network stack holds into the following frame.\n\n");
 
-    /* The fault rates are sparse and coprime with the vessel count, so the
-     * faults land on scattered frames rather than on every one. A dense rate
-     * saturates the counters -- 16 vessels losing one in seven publishes
-     * makes every single frame partial -- and a counter pinned at its maximum
-     * cannot tell a working detector from one that returns true
-     * unconditionally. Section V-B describes *some* boats partially updated,
-     * not all of them always. */
     const unsigned lossy_vessels = 16;
     const unsigned drop_every    = 61;
     const unsigned defer_every   = 43;
@@ -425,8 +378,6 @@ int main(void)
                   (lossy.partial > 0 && lossy.partial < (unsigned long)FRAMES
                    && lossy.doubles > 0) ? BENCH_OK : BENCH_DIVERGE);
 
-    /* A bounded count is the evidence. Saturation would mean the run says
-     * nothing about whether the detector discriminates. */
     assert(lossy.partial > 0 && lossy.partial < (unsigned long)FRAMES);
     assert(lossy.doubles > 0);
 

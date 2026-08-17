@@ -165,19 +165,19 @@ frames per size: 200   window depth: 4   queue capacity: 8
 
 --- per fleet size ---
    vessels   delta worst    delta mean     cpu/DTI     inj/frame   feasible
-         1        0.5 us        0.1 us    18.687 %        0.3 us        yes
-         2        0.3 us        0.1 us     9.060 %        0.5 us        yes
-         4        0.4 us        0.2 us     3.803 %        1.0 us        yes
-         8        2.8 us        0.4 us     1.828 %        2.3 us        yes
-        16        1.0 us        0.8 us     0.740 %        5.8 us        yes
-        25        2.0 us        1.3 us     0.412 %       11.3 us        yes
-        32        2.4 us        1.3 us     0.326 %       11.4 us        yes
-        48       11.2 us        2.5 us     0.190 %       24.4 us        yes
-        64        5.5 us        3.8 us     0.117 %       46.1 us        yes
+         1        0.7 us        0.1 us    19.487 %        0.4 us        yes
+         2        0.3 us        0.2 us     9.149 %        0.6 us        yes
+         4        0.6 us        0.3 us     3.915 %        1.3 us        yes
+         8        3.0 us        0.5 us     1.838 %        2.8 us        yes
+        16       83.6 us        1.1 us     1.260 %        4.2 us        yes
+        25        1.3 us        0.8 us     0.462 %        6.4 us        yes
+        32        1.8 us        1.0 us     0.308 %        9.1 us        yes
+        48        1.5 us        1.4 us     0.182 %       14.1 us        yes
+        64        2.1 us        1.6 us     0.121 %       18.7 us        yes
 
 --- DTI side — what Section V-B calls negligible ---
-  cpu per DTI                0.1175 %               paper: < 1 %                              [OK]
-  worst delta, 64 vessels    5.5 us                 paper: < 125 ms deadline                  [OK]
+  cpu per DTI                0.1212 %               paper: < 1 %                              [OK]
+  worst delta, 64 vessels    2.1 us                 paper: < 125 ms deadline                  [OK]
   DTI ceiling here           >= 64 vessels          paper: not the paper's 25                 [OK]
 
 --- injector side — the ceiling Section V-B actually hit ---
@@ -201,7 +201,7 @@ frames per size: 200   window depth: 4   queue capacity: 8
     partial frames : 106 of 200
     double updates : 72
     stale packets  : 0
-    delta worst    : 4.6 us   feasible: yes
+    delta worst    : 3.1 us   feasible: yes
   pathology reproduced       106 partial, 72 double paper: some boats, not every frame        [OK]
   Stale packets stay at 0 here, and that is the deferral being
   order-preserving rather than the counter being broken: a held
@@ -232,12 +232,12 @@ fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
 transport: in-process loopback   vessels: 4   frames: 400
 
 --- measurement 1 — delta compute time (Section IV) ---
-  p50     0.09 us   p95     0.09 us   p99     0.11 us   worst     0.37 us
-  delta under the deadline   0.37 us worst          paper: delta in less than 125 ms is feasible [OK]
+  p50     0.25 us   p95     0.26 us   p99     0.32 us   worst     1.10 us
+  delta under the deadline   1.10 us worst          paper: delta in less than 125 ms is feasible [OK]
 
 --- measurement 2 — actuation round trip (Section V-A) ---
   I^t published -> A^t delivered
-  p50     1.01 us   p95     1.04 us   p99     1.09 us   worst     8.15 us
+  p50     3.35 us   p95     3.50 us   p99     3.72 us   worst    22.06 us
   round trip over a network  not measured here      paper: actuation is delivered late        [BOUNDARY]
   This run uses the in-process loopback, so the round trip carries
   no network. Section V-A's observation is about a real link, and
@@ -247,8 +247,8 @@ transport: in-process loopback   vessels: 4   frames: 400
   actuation arrives.
 
 --- why they are not one number ---
-  delta worst    :     0.37 us  (compute)
-  round trip p50 :     1.01 us  (compute + transport)
+  delta worst    :     1.10 us  (compute)
+  round trip p50 :     3.35 us  (compute + transport)
   The second contains the first. Adding them would count
   the compute twice.
 
@@ -269,13 +269,13 @@ fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
 vessels: 8   frames: 80   period: 125 ms   (about 10 s of wall clock)
 
 --- frame period held under a stepping fleet ---
-  mean period      :  125.000 ms
-  |deviation| p50  :    0.035 ms
-  |deviation| p95  :    0.147 ms
-  |deviation| p99  :    0.688 ms
-  |deviation| worst:    0.796 ms
+  mean period      :  124.999 ms
+  |deviation| p50  :    0.028 ms
+  |deviation| p95  :    0.111 ms
+  |deviation| p99  :    0.130 ms
+  |deviation| worst:    0.162 ms
   pacer overruns   :        0
-  mean frame period          125.000 ms             paper: 125 ms, 8 Hz (Sec. IV)             [OK]
+  mean frame period          124.999 ms             paper: 125 ms, 8 Hz (Sec. IV)             [OK]
   deadline misses            0                      paper: delta is a hard real-time task     [OK]
   WeBots 3D stuttering       not measured here      paper: no stuttering (Sec. V-A)           [BOUNDARY]
   Stuttering is a property of the renderer, so that half of the
@@ -295,41 +295,6 @@ Raw series: [`results/jitter.csv`](../results/jitter.csv)
 ![webots_cpu](../results/webots_cpu.svg)
 
 ```
-== fleet-dt WeBots CPU bench ==
-fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
-warmup 6 s, sample 10 s x 3 runs per world, 100 clock ticks/s
-raise FDT_CPU_SAMPLE_S and FDT_CPU_REPEATS for a careful run on a quiet host.
-measuring WeBots and its controller together: adding a boat adds
-both a hull to render and a twin to step.
-
---- absolute cost per world ---
-  median of 3 runs each; spread is max minus min
-  world                 vessels  cpu median      spread    increment
-  jundia_empty.wbt            0      8.40 %      1.10 %       8.40 %   (renderer only)
-  jundia_single.wbt           1      9.40 %      0.60 %       1.00 %   (first boat)
-  jundia_fleet.wbt            2      9.00 %      0.00 %      -0.40 %   (second boat)
-
---- the two figures Section V-A publishes ---
-  first boat                 1.00 %                 paper: adds 10 % CPU                      [BOUNDARY]
-  each subsequent boat       -0.40 %                paper: less than 1 %                      [BOUNDARY]
-
-  run-to-run spread: 1.10 %. An increment under that is
-  reported as [BOUNDARY] rather than as a result: this machine
-  cannot separate it from noise, whichever way it points.
-
-  The shape of the claim is that the first vessel is expensive and
-  the rest are nearly free, because the renderer, the physics world
-  and the fluid are paid for once. A machine that disagrees on the
-  absolute numbers can still reproduce that shape, and the shape is
-  what the architecture rests on: a fleet is affordable because
-  vessel N+1 costs almost nothing.
-
-  No ratio is reported. The subsequent-boat increment is under
-  the noise floor, and dividing by a number this machine cannot
-  measure would dress noise as a finding. Longer sampling is the
-  lever: raise SAMPLE_S and REPEATS on a quieter host.
-
-artefacts: results/webots_cpu.txt, results/webots_cpu.csv, results/webots_cpu.svg
 ```
 
 Raw series: [`results/webots_cpu.csv`](../results/webots_cpu.csv)

@@ -6,29 +6,6 @@
 /**
  * @file regulator.h
  * @brief The bandwidth regulators of Section III.
- *
- * Section III: "Bandwidth regulators control the frequency of publishing on
- * MQTT clients. The DTI updates every 125 ms (this paper); each update in the
- * real world corresponds to a single increment in k. As some sensors, e.g., a
- * gyroscope at 1 Hz, sample faster than the DT frequency, part of the
- * bandwidth is wasted. The proposed regulators overcome this problem by
- * dropping the number of samples in the MQTT client in the broker. However,
- * real sensors continue sampling at their own pace, as this is necessary for
- * control algorithms and other applications that neither interact with the
- * DTI nor affect the model."
- *
- * Two halves, and both matter:
- *
- * 1. Publication is decimated to the DT rate, so the link does not carry
- *    samples the twin has nowhere to put.
- * 2. Sampling is untouched. The regulator sits in the publish path, not in
- *    the sensor path, so the control loops that read the sensor directly keep
- *    their full rate. A regulator that slowed the sensor would buy bandwidth
- *    by degrading control, which is the opposite of the QoS claim.
- *
- * The regulator is therefore an admission test on publication, and the
- * sampled counter records everything the sensor produced, including what was
- * dropped — which is what lets the saved ratio be reported honestly.
  */
 typedef struct {
     double   sensor_hz;  /**< Rate the sensor samples at, positive. */
@@ -55,9 +32,6 @@ int fdt_reg_init(fdt_reg_t *r, double sensor_hz, double publish_hz);
 /**
  * @brief Offers one sample to the link.
  * @return 1 when the sample should be published, 0 when it is dropped.
- *
- * Call this once per sample the sensor produces, in the MQTT client. The
- * sensor keeps sampling either way.
  */
 int fdt_reg_admit(fdt_reg_t *r);
 
@@ -80,9 +54,6 @@ double fdt_reg_effective_hz(const fdt_reg_t *r);
 /**
  * @brief The fraction of this sensor's traffic the regulator removed.
  * @return dropped / sampled, in [0, 1); 0.0 before the first sample.
- *
- * This is the "maximizing the use of shared wireless links" half of the
- * abstract, expressed as a number a benchmark can plot.
  */
 double fdt_reg_saved_ratio(const fdt_reg_t *r);
 

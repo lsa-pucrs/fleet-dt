@@ -1,8 +1,6 @@
 /**
  * @file test_dte.c
  * @brief Parallel simulations sharing one tick.
- *
- * Claim covered: C7, Section I feature (ii). See docs/spec/paper-claims.md.
  */
 #include <fleet_dt/dte.h>
 
@@ -65,8 +63,6 @@ static void test_shared_tick(void)
     recorder_t detector = {0};
 
     assert(fdt_dte_init(&dte, slots, 3) == 0);
-    /* Section III's own list of what shares the DTE: WeBots, a fluid
-     * simulator, and ML applications composing the Application Space. */
     assert(fdt_dte_register(&dte, "webots", record, &webots) == 0);
     assert(fdt_dte_register(&dte, "fluid", record, &fluid) == 0);
     assert(fdt_dte_register(&dte, "obstacle-detector", record,

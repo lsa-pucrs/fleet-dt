@@ -8,26 +8,10 @@
 /**
  * @file coordinator.h
  * @brief The B^t store and the coordinator S of Figure 4.
- *
- * Section IV: "The coordinator (S) processes goals (g) received from the MCS
- * and subsequently distributes g^t_i per vessel DTI... The coordinator S
- * computes c^t from the vessel states it receives, in the same step in which
- * it distributes g^t_i."
- *
- * Figure 4 draws both: a cylinder holding B^t, fed by the newly generated
- * states, and a box S that reads it and emits goals. This header is those two
- * boxes.
  */
 
 /**
  * @brief The B^t database of Figure 4: one slot per vessel, latest state only.
- *
- * Figure 4 shows newly generated states "sent to the MCS and stored in a
- * database". The coordinator only ever needs the most recent state of each
- * vessel to compute c^t, so a slot per vessel is the whole structure; the
- * per-vessel history lives in each twin's queue, bounded at 48d.
- *
- * Storage belongs to the caller, as everywhere in this library.
  */
 typedef struct {
     fdt_state_t *slots; /**< Caller-owned array of @c n states. */
@@ -58,10 +42,6 @@ size_t fdt_store_size(const fdt_store_t *st);
 /**
  * @brief Computes c^t from the states the coordinator has received.
  *
- * The application decides what c^t is; the paper's example is inter-vessel
- * contextual information such as distance. Writes through @p fleet_ctx, which
- * is the same pointer every delta^e and every pi will then see.
- *
  * @param bt         The B^t store, already updated with this frame's states.
  * @param fleet_ctx  The fleet's c^t, to be written.
  * @param user       Coordinator-level context, passed through untouched.
@@ -70,9 +50,6 @@ typedef void (*fdt_ctx_fn)(const fdt_store_t *bt, void *fleet_ctx, void *user);
 
 /**
  * @brief Distributes g^t_i, seeing the c^t just computed.
- *
- * Section IV places the two in the same step, so this callback runs after
- * ::fdt_ctx_fn and can read its result.
  *
  * @param bt         The B^t store.
  * @param fleet_ctx  The c^t computed earlier in this same step, read-only.
@@ -102,11 +79,6 @@ int fdt_coord_init(fdt_coord_t *co, fdt_fleet_t *fleet, fdt_store_t *bt,
 
 /**
  * @brief One coordinated frame, in the order Figure 4 draws it.
- *
- * 1. the fleet steps under g^{t-1} and g^t, equations (5) and (6);
- * 2. the resulting B^t enter the store;
- * 3. S computes c^t from the store;
- * 4. S distributes the next g^t, already seeing that c^t.
  *
  * @param ins         Array of vessel inputs, or NULL when none is fresh.
  * @param n           Window depth for this frame.

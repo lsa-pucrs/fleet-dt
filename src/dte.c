@@ -38,9 +38,6 @@ size_t fdt_dte_tick(fdt_dte_t *dte)
 
     const size_t t = dte->tick;
 
-    /* One index, every simulation. This is the whole of feature (ii): the
-     * fluid solver and the obstacle detector observe the instant the twin
-     * observes, rather than each drifting on a clock of its own. */
     for (size_t i = 0; i < dte->n; i++) {
         dte->slots[i].fn(t, dte->slots[i].user);
     }

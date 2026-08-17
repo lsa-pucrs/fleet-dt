@@ -1,9 +1,6 @@
 /**
  * @file test_wire.c
  * @brief Codec, envelope, and the frame pathology detector.
- *
- * Claim covered: C27 — the partial and double updates Section V-B reports and
- * leaves as an open question. See docs/spec/paper-claims.md.
  */
 #include <fleet_dt/codec.h>
 #include <fleet_dt/envelope.h>
@@ -20,8 +17,6 @@ static void test_wire_widths(void)
     assert(FDT_WIRE_INPUT_BYTES == 78);
     assert(FDT_WIRE_ACT_BYTES == 8);
 
-    /* Same number, different reasons: 48 bytes is the memory layout Section
-     * IV publishes and also, independently, what this protocol emits. */
     assert((size_t)FDT_WIRE_STATE_BYTES == sizeof(fdt_state_t));
 
     /* 19 scalars plus two presence flags. */
@@ -31,9 +26,6 @@ static void test_wire_widths(void)
 /** The byte order is a property of the protocol, not of the host. */
 static void test_explicit_little_endian(void)
 {
-    /* 1.0f is 0x3F800000 in IEEE-754, which little-endian writes as
-     * 00 00 80 3F. A codec that memcpy'd the struct would pass a round-trip
-     * test and emit the reversed bytes on a big-endian peer. */
     const fdt_state_t one = { .lat_deg = 1.0f };
     uint8_t buf[FDT_WIRE_STATE_BYTES];
 
@@ -82,8 +74,6 @@ static void test_codec_round_trips(void)
            FDT_WIRE_INPUT_BYTES);
     assert(in_out.ax_mps2 == 1.0f && in_out.ibat_a == 9.5f);
 
-    /* The views do not travel: Section III sends the camera feed over RTSP,
-     * so only a presence flag crosses the MQTT path. */
     assert(in_out.x_left == FDT_VIEW_PRESENT);
     assert(in_out.x_right == NULL);
 
@@ -116,8 +106,6 @@ static void test_envelope(void)
     assert(nw == FDT_ENV_HEADER_BYTES + FDT_WIRE_STATE_BYTES);
     assert(fdt_env_encode(&env, payload, sizeof payload, frame, 8) == -1);
 
-    /* A header whose declared length disagrees with the payload handed in is
-     * a programming error, not a frame to emit. */
     assert(fdt_env_encode(&env, payload, 4, frame, sizeof frame) == -1);
 
     fdt_env_t got = {0};
@@ -182,8 +170,6 @@ static void test_framesync(void)
     assert(fdt_fs_double_updates(&fs) == 0);
     assert(fdt_fs_accepted(&fs) == 3);
 
-    /* A frame with both pathologies: vessel 0 arrives twice, vessel 2 not at
-     * all. Section V-B saw exactly this. */
     fdt_fs_begin_frame(&fs);
     const fdt_env_t v0a = state_env(0, 2);
     const fdt_env_t v0b = state_env(0, 3);
@@ -197,16 +183,12 @@ static void test_framesync(void)
     assert(fdt_fs_partial_frames(&fs) == 1);
     assert(fdt_fs_missing_vessels(&fs) == 1);
 
-    /* The duplicate still advanced the high-water mark, because the packet
-     * really was newer. Seq 3 is now the floor for vessel 0. */
     fdt_fs_begin_frame(&fs);
     const fdt_env_t old = state_env(0, 1);
     assert(fdt_fs_accept(&fs, &old) == FDT_FS_STALE);
     fdt_fs_end_frame(&fs);
     assert(fdt_fs_stale_packets(&fs) == 1);
 
-    /* Counted, never withheld: dropping late packets is item D6, which
-     * Section VI declares future work. The verdict is the caller's to act on. */
     assert(fdt_fs_accepted(&fs) == 5);
 
     /* A vessel outside the fleet touches no counter. */

@@ -1,10 +1,6 @@
 /**
  * @file test_transition.c
  * @brief Equations (2) and (3): the window, the seed, the goal split.
- *
- * Claims covered: C16 (non-autonomous vessel), C24 (window depth greater than
- * one), and ambiguity 1 of docs/spec/paper-claims.md (the window is the n most
- * recent states).
  */
 #include <fleet_dt/transition.h>
 
@@ -69,8 +65,6 @@ static void test_window_ordering(void)
         fdt_queue_push(&q, &b);
     }
 
-    /* Full window: k == 0 is the newest, k == 3 the oldest. The queue's own
-     * accessor runs the other way, and the two must not be interchangeable. */
     assert(fdt_window_at(&q, 4, 0)->yaw_deg == 3.0f);
     assert(fdt_window_at(&q, 4, 3)->yaw_deg == 0.0f);
     assert(fdt_queue_at(&q, 0)->yaw_deg == 0.0f);
@@ -140,8 +134,6 @@ static void test_step_windows(void)
     assert(fabsf(b.yaw_deg - 1.0f) < 1e-6f);
     assert(fdt_twin_depth(&tw) == 2);
 
-    /* Equation (3) with depth greater than one — C24, what enables the
-     * proactive operation Section V-A calls MPC-like. B^{t-n} is the seed. */
     assert(fdt_twin_step(&tw, &in, &g, &g, 2, &b, &a) == 0);
     assert(g_seen_n == 2);
     assert(fabsf(b.pitch_deg - 0.0f) < 1e-6f);
@@ -172,15 +164,11 @@ static void test_goal_split(void)
     assert(fdt_twin_init(&tw, storage, 8, probe_delta_e, probe_pi, NULL) == 0);
     assert(fdt_twin_seed(&tw, &b0) == 0);
 
-    /* On a re-targeting frame the transition runs under the old goal while
-     * the decision already decides under the new one. */
     fdt_goal_t g_prev = { .yaw_deg = 0.0f };
     fdt_goal_t g_now  = { .yaw_deg = 90.0f };
     assert(fdt_twin_step(&tw, &in, &g_prev, &g_now, 1, &b, &a) == 0);
     assert(fabsf(a.cage_rad - (90.0f - b.yaw_deg)) < 1e-6f);
 
-    /* c^t reaches pi as fleet_ctx; the standalone step passes NULL and pi
-     * falls back to its own default. */
     float ceiling = 60.0f;
     assert(fdt_twin_step_ctx(&tw, &in, &g_now, &g_now, 1, &b, &a,
                              &ceiling) == 0);

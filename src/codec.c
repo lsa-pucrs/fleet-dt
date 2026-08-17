@@ -99,8 +99,6 @@ long fdt_enc_input(const fdt_input_t *in, uint8_t *buf, size_t cap)
     put_f32(&p, in->vbat_v);
     put_f32(&p, in->ibat_a);
 
-    /* The two views are flags, not images: Section III sends the camera feed
-     * over RTSP, so nothing here carries a frame. */
     *p++ = (in->x_left != NULL) ? 1u : 0u;
     *p++ = (in->x_right != NULL) ? 1u : 0u;
 

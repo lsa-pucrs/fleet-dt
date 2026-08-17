@@ -8,38 +8,6 @@
 /**
  * @file fdt_mavlink.h
  * @brief Assembling I^t from Ardupilot, and pushing A^t back.
- *
- * Section II: the Jundia boat carries a NAVIO2 board running Ardupilot/Rover
- * on a Raspberry Pi 4, and "sensor readings are available from Raspberry Pi
- * OS via Ardupilot\\Rover firmware". Section III adds that the low-speed
- * sensors "are attached to the NAVIO2 board and controlled by the Ardupilot
- * firmware".
- *
- * This adapter is the seam between that firmware and the model. It takes the
- * *decoded field values* of the relevant MAVLink messages rather than raw
- * frames, which keeps it free of any dependency on a MAVLink library: the
- * caller uses whichever one it already links, and hands the numbers over.
- * The mapping and the unit conversions are the substance, and they are what
- * this header pins.
- *
- * Table I's 21 entries come from five message families, and the two camera
- * views come from none of them — Section III moves the camera onto RTSP.
- *
- * | Table I            | Unit  | Message              | Conversion            |
- * |--------------------|-------|----------------------|-----------------------|
- * | a_x, a_y, a_z      | m/s^2 | SCALED_IMU2          | mG      -> * 9.80665/1000 |
- * | omega_x..z         | rad/s | SCALED_IMU2          | mrad/s  -> / 1000     |
- * | m_x, m_y, m_z      | uT    | SCALED_IMU2          | mgauss  -> * 0.1      |
- * | phi_gps, lambda_gps| deg   | GPS_RAW_INT          | 1e7 deg -> * 1e-7     |
- * | h_gps              | m     | GPS_RAW_INT          | mm      -> / 1000     |
- * | v_N, v_E, v_D      | m/s   | LOCAL_POSITION_NED   | direct                |
- * | P                  | Pa    | SCALED_PRESSURE      | hPa     -> * 100      |
- * | T                  | deg C | SCALED_PRESSURE      | c-deg C -> / 100      |
- * | V_b                | V     | BATTERY_STATUS       | mV      -> / 1000     |
- * | I_b                | A     | BATTERY_STATUS       | cA      -> / 100      |
- * | X_left, X_right    | --    | none: RTSP, Sec. III | not carried here      |
- * | tau                | %     | RC_CHANNELS_OVERRIDE | 0-100 % -> 1000-2000 us |
- * | alpha              | rad   | RC_CHANNELS_OVERRIDE | +/-0.6 rad -> 1000-2000 us |
  */
 
 /** Which message families have been seen since the last frame reset. */
@@ -64,9 +32,6 @@ typedef enum {
 
 /**
  * Mechanical limit of the propulsion cage, in radians.
- *
- * Section II describes steering by rotating the propulsion cage rather than
- * with a rudder, so this is the travel the full RC range maps onto.
  */
 #define FDT_CAGE_LIMIT_RAD 0.6f
 
@@ -123,9 +88,6 @@ void fdt_mav_on_battery(fdt_mav_ingest_t *ing, uint16_t voltage_mv,
 
 /**
  * @brief Attaches the stereo views from the RTSP path.
- *
- * Kept separate because these do not arrive over MAVLink: Section III routes
- * the camera feed outside the telemetry infrastructure.
  */
 void fdt_mav_attach_views(fdt_mav_ingest_t *ing, const void *left,
                           const void *right);
@@ -133,9 +95,6 @@ void fdt_mav_attach_views(fdt_mav_ingest_t *ing, const void *left,
 /**
  * @brief Whether every family Table I needs has arrived.
  * @return 1 when complete, 0 otherwise.
- *
- * A frame assembled from a partial set would hand delta^e stale zeros for the
- * missing entries, indistinguishable from real readings.
  */
 int fdt_mav_complete(const fdt_mav_ingest_t *ing);
 
@@ -149,10 +108,6 @@ const fdt_input_t *fdt_mav_input(const fdt_mav_ingest_t *ing);
  * @brief Converts A^t into RC channel overrides for Ardupilot.
  * @param chan_throttle  Receives the throttle pulse width, microseconds.
  * @param chan_cage      Receives the cage pulse width, microseconds.
- *
- * Throttle spans 0..100 % onto 1000..2000 us; the cage spans
- * +/-::FDT_CAGE_LIMIT_RAD onto the same range, clamped at the mechanical
- * limit rather than wrapping.
  */
 void fdt_mav_actuation_to_rc(const fdt_actuation_t *a, uint16_t *chan_throttle,
                              uint16_t *chan_cage);

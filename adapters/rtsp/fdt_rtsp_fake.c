@@ -71,10 +71,6 @@ int fdt_rtsp_attach(fdt_input_t *in, const fdt_view_t *left,
         return -1;
     }
 
-    /* A view with no data clears the field rather than leaving the sentinel
-     * behind: "a frame was attached upstream" and "a frame is available here"
-     * are different facts, and confusing them is how a reader ends up
-     * dereferencing address 1. */
     in->x_left  = (left != NULL && left->data != NULL)
                 ? (const void *)left->data : NULL;
     in->x_right = (right != NULL && right->data != NULL)

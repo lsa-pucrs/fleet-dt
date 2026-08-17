@@ -1,9 +1,6 @@
 /**
  * @file test_fleet.c
  * @brief Equations (4), (5) and (6): the fleet frame and c^t delivery.
- *
- * Claims covered: C6 (fleet as a DTA of per-vessel DTIs), C17 (homogeneous
- * versus heterogeneous fleets). See docs/spec/paper-claims.md.
  */
 #include <fleet_dt/fleet.h>
 
@@ -165,8 +162,6 @@ static void test_heterogeneous_and_context(void)
 
     assert(fdt_fleet_step(&f, ins, goals, goals, 1, bs, as) == 0);
 
-    /* Indexed delta^e: vessel 0 integrates, vessel 1 holds. Same fleet, same
-     * frame, different dynamics — no extra machinery required. */
     assert(fabsf(bs[0].yaw_deg - 1.0f) < 1e-6f);
     assert(fabsf(bs[1].yaw_deg - 0.0f) < 1e-6f);
 

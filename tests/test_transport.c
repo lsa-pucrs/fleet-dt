@@ -1,9 +1,6 @@
 /**
  * @file test_transport.c
  * @brief The network seam and its in-process implementation.
- *
- * Claim covered in part: C2 (the architecture relies on MQTT) — this is the
- * interface the MQTT adapter implements. See docs/spec/paper-claims.md.
  */
 #include <fleet_dt/transport.h>
 
@@ -66,8 +63,6 @@ static void test_publish_then_poll(void)
     uint8_t payload[1] = { 0xAB };
     assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == 0);
 
-    /* Nothing has been delivered yet. This is what lets a benchmark hold a
-     * packet across a frame boundary on purpose. */
     assert(s0.hits == 0);
 
     assert(tr.poll(tr.self, 0) == 1);
@@ -93,8 +88,6 @@ static void test_delivery_semantics(void)
     assert(tr.subscribe(tr.self, "fleet/0/state", on_msg, &a) == 0);
     assert(tr.subscribe(tr.self, "fleet/0/state", on_msg, &b) == 0);
 
-    /* Two subscribers, one message: the poll count is messages delivered,
-     * not callbacks fired, so it stays comparable across topologies. */
     assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == 0);
     assert(tr.poll(tr.self, 0) == 1);
     assert(a.hits == 1 && b.hits == 1);
@@ -103,9 +96,6 @@ static void test_delivery_semantics(void)
     assert(tr.publish(tr.self, "fleet/9/act", payload, 1, 1) == 0);
     assert(tr.poll(tr.self, 0) == 1);
 
-    /* The queue reports being full instead of dropping quietly: a silent
-     * drop here would be indistinguishable from the packet loss the
-     * benchmarks exist to measure. */
     for (size_t i = 0; i < FDT_LOOP_QUEUE; i++) {
         assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == 0);
     }
@@ -157,8 +147,6 @@ static void test_loss_injection(void)
 
     assert(tr.subscribe(tr.self, "fleet/0/state", on_msg, &s) == 0);
 
-    /* Drop every second publish. The sender is told it succeeded, because on
-     * a real link it did: the loss happened downstream. */
     fdt_loop_set_loss(&loop, 2, 0);
     for (int i = 0; i < 10; i++) {
         assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == 0);
@@ -167,9 +155,6 @@ static void test_loss_injection(void)
     assert(s.hits == 5);
     assert(fdt_loop_dropped(&loop) == 5);
 
-    /* Defer every second publish by one poll: it lands in the frame after
-     * the one it belonged to, beside that frame's own message, which is the
-     * arrival Section V-B describes. */
     fdt_loop_t d;
     fdt_transport_t td = fdt_loop_transport(&d);
     sink_t sd = {0};

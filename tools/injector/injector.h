@@ -9,51 +9,15 @@
 /**
  * @file injector.h
  * @brief Synthetic telemetry injectors, as used in the Section V-B campaign.
- *
- * Section V-B: "Fleet DT was validated in simulation using injectors (MQTT
- * clients) that periodically published synthetic telemetry data into the
- * network, mimicking the real boats. The goal was to investigate whether
- * multiple boats could synchronize with the simulation and keep pace with its
- * real-time execution."
- *
- * The same section reports the limit the injectors themselves hit:
- * "hard-programming injectors to inject packets periodically could not keep
- * the simulation pace for larger fleets (> 25 boats, same computer model)".
- * That ceiling belongs to the injector, not to the DTI, and the scaling
- * benchmark reports the two separately for exactly this reason.
- *
- * Telemetry is deterministic given the seed, so a campaign is repeatable
- * across runs and across machines — otherwise a scaling result could not be
- * compared against a previous one.
  */
 
 /**
  * Amplitude of the synthetic position sweep, in degrees.
- *
- * Section II gives the Jundiá hull as 1.2 m long. The sweep has to be on that
- * scale or the fleet is invisible in its own simulation: at 0.001 degrees --
- * 111 m -- the vessels wandered out of the viewport in half a minute, and at
- * 0.0002 they were two dark pixels on dark water. 0.00002 degrees is about
- * 2.2 m, under two hull lengths, which is what a boat holding station over a
- * sampling point actually does -- and it keeps the fleet inside the viewport,
- * because the world's follow does not track a hull the supervisor teleports.
- *
- * The wander is twice this, not once: the WeBots controller anchors its local
- * origin on the first fix it sees, and that lands at an arbitrary phase of the
- * circle. tests/test_geo.c pins the doubled figure against both the water box
- * and the viewport.
  */
 #define FDT_INJ_SWEEP_DEG 0.00002
 
 /**
  * Spacing between vessels, in degrees. About 4 m.
- *
- * Independent of the sweep, and it has to be: they answer different questions.
- * The sweep is how far one boat wanders; the spacing is how far two boats
- * stand apart, and that is bounded below by the hull. Section II gives 1.2 m,
- * so a spacing tied to the sweep collapsed to under a metre when the sweep
- * shrank, and the fleet rendered as a single boat with another inside it.
- * tests/test_geo.c holds this above the hull length.
  */
 #define FDT_INJ_SPACING_DEG 0.000036
 
@@ -84,11 +48,6 @@ int fdt_inj_init(fdt_inj_t *inj, fdt_transport_t *tr, unsigned vessels,
 /**
  * @brief Generates the telemetry of one vessel at the current tick.
  *
- * Fills all 21 entries of Table I with values in the ranges Section II
- * describes for the Jundia boat: an 18.5 V battery, atmospheric pressure near
- * sea level, and a position in the southern Brazilian lagoons the eDNA
- * campaign samples.
- *
  * @param vessel  Vessel index; out-of-range indices leave @p out zeroed.
  * @param out     Receives the sample.
  */
@@ -104,9 +63,6 @@ int fdt_inj_tick(fdt_inj_t *inj);
 
 /**
  * @brief Records that a tick ran past its period.
- *
- * The caller owns the clock, so it is the caller that notices. This is the
- * counter that distinguishes an injector-bound run from a DTI-bound one.
  */
 void fdt_inj_note_missed_deadline(fdt_inj_t *inj);
 

@@ -1,26 +1,6 @@
 /**
  * @file two_paths.c
  * @brief The filtered state and the raw actuation path of Section V-A.
- *
- * Section V-A, on the single-vessel validation: "Telemetry was collected from
- * a real boat and compared to the pose and attitude estimation, using a
- * Kalman filter to generate B_i^t. Data from sensors (I_i^t) were used
- * unfiltered to achieve the lowest possible latency from sensing to the
- * actuation path."
- *
- * Two paths, one frame, and they are not the same path:
- *
- * - delta^e runs a scalar Kalman filter over yaw, producing the B^t the
- *   operator sees. Filtering costs latency and buys smoothness, which is the
- *   right trade for a display.
- * - pi decides from the raw I^t, stashed in the twin's context, not from the
- *   filtered state. Skipping the filter costs smoothness and buys latency,
- *   which is the right trade for actuation.
- *
- * The run prints both trajectories side by side. The gap between them is
- * lag, not error: the filtered trace is the same motion arriving later.
- *
- * Claim covered: C28 of docs/spec/paper-claims.md.
  */
 #include <fleet_dt/tick.h>
 #include <fleet_dt/transition.h>
@@ -45,10 +25,6 @@ typedef struct {
 
 /**
  * delta^e with a one-dimensional Kalman filter on yaw.
- *
- * Predict from the previous state and the measured rate, then correct toward
- * the measured heading. The gain is what introduces the lag the operator sees
- * and the actuation path must not inherit.
  */
 static void kalman_delta_e(const fdt_queue_t *q, size_t n,
                            const fdt_input_t *in, const fdt_goal_t *g_prev,
@@ -64,8 +40,6 @@ static void kalman_delta_e(const fdt_queue_t *q, size_t n,
     const float dt_s = (float)FDT_TICK_NS / 1e9f;
     const float rate = (in != NULL) ? in->wz_rps : 0.0f;
 
-    /* Predict: carry the estimate forward on the measured rate. Crossing
-     * rad/s into a degrees field, as Table I's mixed units require. */
     vc->estimate_deg += rate * dt_s * RAD2DEG;
     vc->variance     += vc->process_var;
 
@@ -80,8 +54,6 @@ static void kalman_delta_e(const fdt_queue_t *q, size_t n,
     out->yaw_deg      = vc->estimate_deg;
     out->yaw_rate_rps = rate;
 
-    /* The raw input is stashed here, not consumed: pi reads it next, and the
-     * filtered state above never reaches the actuation decision. */
     if (in != NULL) {
         vc->raw = *in;
         vc->raw_yaw_deg += rate * dt_s * RAD2DEG;
@@ -90,10 +62,6 @@ static void kalman_delta_e(const fdt_queue_t *q, size_t n,
 
 /**
  * pi deciding from the raw input rather than from the filtered state.
- *
- * This is the half of Section V-A that is easy to get wrong: the obvious
- * implementation reads @p b, which is the filtered state, and quietly adds
- * the filter's lag to the control loop.
  */
 static void raw_path_pi(const fdt_state_t *b, const fdt_goal_t *g_now,
                         fdt_actuation_t *out, void *ctx, void *fleet_ctx)
@@ -142,8 +110,6 @@ int main(void)
     double worst_lag = 0.0;
 
     for (int frame = 0; frame < FRAMES; frame++) {
-        /* Synthetic telemetry with measurement noise in the magnetometer, so
-         * the filter has something to smooth. */
         const double t = (double)frame;
         const float turn_rate = 0.20f;
         const float heading   = (float)(turn_rate * t *

@@ -1,33 +1,6 @@
 /**
  * @file report.c
  * @brief Assembles results/ and the claim inventory into one markdown report.
- *
- * Two jobs, one pass:
- *
- * 1. **Claim status.** Every claim in docs/spec/paper-claims.md names the
- *    artefact that discharges it. This walks that list, checks whether the
- *    artefact exists, and prints what the table *should* say. It never edits
- *    the table: a mismatch between the two is exactly the thing a human
- *    should look at, and a tool that silently reconciled them would hide it.
- *
- * 2. **Results assembly.** Every benchmark writes `<name>.txt`, `<name>.csv`
- *    and one or more `<name>*.svg` into results/. This collects them into
- *    docs/RESULTS.md, with the charts embedded and the reports quoted.
- *
- * C1 is a roll-up rather than an artefact of its own: "a fleet-level Digital
- * Twin model and architecture" is the sum of C2 through C19, so it is
- * discharged when each of those is either discharged or a boundary, and
- * reported as held back by whichever one is neither.
- *
- * Existing is not the same as compiling, and compiling is not the same as
- * running. `make syntax` type-checks the two SDK adapters against stub headers
- * on any machine; `make mqtt-test` and `make webots` build and run them for
- * real where the SDKs exist. C2, C3 and C8 moved from boundary to discharged
- * on 2026-08-17, when both toolchains were installed here and the adapters
- * were exercised end to end: a round trip through mosquitto, and the Jundiá
- * world stepping under the coordinator.
- *
- * Run by `make report`, after `make bench`.
  */
 #include <fleet_dt/plot.h>
 #include <fleet_dt/version.h>
@@ -55,8 +28,6 @@ typedef struct {
 
 /**
  * The inventory, mirroring docs/spec/paper-claims.md.
- *
- * Kept in the same order as the spec so a reader can diff the two by eye.
  */
 static const claim_t CLAIMS[] = {
     { "C1",  "fleet-level DT model and architecture", "Abstract",

@@ -7,25 +7,6 @@
 /**
  * @file envelope.h
  * @brief The wire envelope, carrying what Table I does not.
- *
- * Table I lists 21 entries for I^t and none of them is a timestamp or a
- * sequence number, so fdt_input_t carries neither. But Section V-B reports a
- * pathology that cannot even be observed without one:
- *
- * "As late packets were still in the input buffer (network stack), the state
- * of some boats was updated twice within the same simulation frame. This
- * example raises the question of whether a timestamp or identification number
- * should be added to packets to prevent DTIs from erroneously updating from
- * outdated packets."
- *
- * The resolution is a layering one. The model stays exactly as Table I
- * publishes it; the envelope around it carries a per-vessel sequence number.
- * That makes the pathology countable — see framesync.h — without changing a
- * single field of the model.
- *
- * Counting is as far as this goes. Dropping late packets at the receiver is
- * item D6 of docs/spec/paper-claims.md, which Section VI declares future
- * work; implementing it here would contradict the published text.
  */
 
 /** Magic word "FDT1", identifying the envelope format. */
@@ -74,9 +55,6 @@ long fdt_env_encode(const fdt_env_t *env, const uint8_t *payload, size_t plen,
  *                     if the caller only wants the header.
  * @return Total bytes consumed, or -1 when the magic is wrong, the kind is
  *         unknown, or the frame is truncated.
- *
- * A malformed frame is rejected outright rather than partially accepted: a
- * half-read state would enter the twin's queue as if it were a measurement.
  */
 long fdt_env_decode(const uint8_t *buf, size_t len, fdt_env_t *env,
                     const uint8_t **payload_out);

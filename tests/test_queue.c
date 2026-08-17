@@ -1,8 +1,6 @@
 /**
  * @file test_queue.c
  * @brief Pins the 48d queue bound and the 23 KB per minute of Section IV.
- *
- * Claim covered: C14, second half. See docs/spec/paper-claims.md.
  */
 #include <fleet_dt/queue.h>
 
@@ -20,8 +18,6 @@ static void test_init_guards(void)
     assert(fdt_queue_init(&q, storage, 0) == -1);
     assert(fdt_queue_init(NULL, storage, 4) == -1);
 
-    /* An empty queue answers every read with NULL rather than with a stale
-     * pointer into uninitialised storage. */
     assert(fdt_queue_len(&q) == 0);
     assert(fdt_queue_cap(&q) == 4);
     assert(fdt_queue_newest(&q) == NULL);
@@ -49,8 +45,6 @@ static void test_ring_behaviour(void)
     assert(fdt_queue_at(&q, 3)->yaw_deg == 3.0f);
     assert(fdt_queue_newest(&q)->yaw_deg == 3.0f);
 
-    /* At capacity a push drops the oldest and the window slides. The length
-     * never grows past the capacity, which is what bounds the memory. */
     fdt_state_t b4 = { .yaw_deg = 4.0f };
     fdt_queue_push(&q, &b4);
     assert(fdt_queue_len(&q) == 4);
@@ -75,9 +69,6 @@ static void test_ring_behaviour(void)
 
 /**
  * The two published figures of Section IV.
- *
- * "For a 125 ms period, the queue would grow by 23 KB per minute elapsed,
- * per vessel" is 48 bytes at 8 Hz for 60 seconds.
  */
 static void test_published_bounds(void)
 {

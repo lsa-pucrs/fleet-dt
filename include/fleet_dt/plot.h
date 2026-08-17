@@ -6,31 +6,6 @@
 /**
  * @file plot.h
  * @brief A dependency-free SVG plotter for the measurement artefacts.
- *
- * Every benchmark in tools/bench writes three files into results/: the raw
- * data as CSV, the chart as SVG, and the human report as text. This header is
- * the chart half.
- *
- * SVG is emitted directly rather than shelling out to gnuplot or matplotlib,
- * for the same reason the rest of the library has no dependencies: the
- * measurements have to be reproducible on a bare toolchain, and a plot that
- * cannot be regenerated is not evidence.
- *
- * The emitted SVG is self-contained and theme-aware — it carries a
- * prefers-color-scheme rule so it stays legible embedded in a README on
- * either background.
- *
- * Point arrays belong to the caller and must outlive the plot; nothing here
- * allocates.
- *
- * Typical use:
- * @code
- * fdt_plot_t p;
- * fdt_plot_init(&p, "Frame jitter", "frame", "deviation (ms)");
- * fdt_plot_series(&p, "measured", xs, ys, n, FDT_PLOT_LINE);
- * fdt_plot_hline(&p, 125.0, "paper: 125 ms deadline");
- * fdt_plot_write_svg(&p, "results/jitter.svg");
- * @endcode
  */
 
 /** Maximum series in one chart. */
@@ -57,10 +32,6 @@ typedef struct {
 
 /**
  * A horizontal reference line.
- *
- * This is what makes a benchmark chart readable as evidence rather than as
- * decoration: the published figure is drawn as a rule across the plot, and
- * the reader sees at a glance whether the measurement sits under it.
  */
 typedef struct {
     double      y;     /**< Ordinate of the rule. */
@@ -116,9 +87,6 @@ int fdt_plot_hline(fdt_plot_t *p, double y, const char *label);
 
 /**
  * @brief Switches the ordinate to a base-10 logarithmic scale.
- *
- * Non-positive ordinates are clamped to the smallest positive value in the
- * data, because a logarithmic axis has nowhere to put them.
  */
 void fdt_plot_set_log_y(fdt_plot_t *p, int on);
 
@@ -133,10 +101,6 @@ int fdt_plot_write_svg(const fdt_plot_t *p, const char *path);
 /**
  * @brief Writes the chart's series as CSV, one column per series.
  *
- * Series are emitted as "x,<name1>,<name2>,..." rows using the first series'
- * abscissae. Series shorter than the first leave empty cells, which is the
- * honest rendering of a run that produced fewer points.
- *
  * @return 0 on success, -1 when the chart is empty or the file cannot be
  *         written.
  */
@@ -145,8 +109,6 @@ int fdt_plot_write_csv(const fdt_plot_t *p, const char *path);
 /**
  * @brief Creates a directory if it does not already exist.
  * @return 0 when the directory exists on return, -1 otherwise.
- *
- * Exposed because every benchmark needs results/ before it writes anything.
  */
 int fdt_mkdir_p(const char *path);
 

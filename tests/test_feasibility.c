@@ -1,10 +1,6 @@
 /**
  * @file test_feasibility.c
  * @brief The feasibility predicate of Section IV, and what it does not measure.
- *
- * Claims covered: C15, and the first half of C23. See
- * docs/spec/paper-claims.md, trap 3: this measures the time to compute delta,
- * never the actuation round trip.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -70,10 +66,6 @@ static void test_within_budget(void)
 
 /**
  * "For any arbitrary k" is a worst case.
- *
- * One violation makes the DTI infeasible and no later fast frame redeems it.
- * A monitor that averaged would report a comfortable mean while the paper's
- * predicate was already false.
  */
 static void test_worst_case_not_average(void)
 {
@@ -96,8 +88,6 @@ static void test_worst_case_not_average(void)
     assert(fdt_feas_violations(&tight) == 1);
     assert(fdt_feas_frames(&tight) == 21);
 
-    /* The mean is now dominated by the fast frames, which is exactly why the
-     * predicate does not consult it. */
     assert(fdt_feas_mean_ns(&tight) < (double)fdt_feas_worst_ns(&tight));
 }
 

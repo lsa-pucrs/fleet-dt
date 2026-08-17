@@ -1,16 +1,6 @@
 /**
  * @file mosquitto.h
  * @brief Syntax-check stub for libmosquitto.
- *
- * Not a reimplementation and not a mock: it declares exactly the symbols
- * adapters/mqtt/fdt_mqtt.c calls, with the signatures libmosquitto publishes,
- * so `make syntax` can parse and type-check that file on a machine where the
- * SDK is not installed.
- *
- * Without this, several hundred lines of adapter would reach the first person
- * with mosquitto-devel installed having never been through a compiler. This
- * catches the typo; it cannot catch a wrong assumption about the API, which
- * still needs a real build.
  */
 #ifndef FDT_STUB_MOSQUITTO_H
 #define FDT_STUB_MOSQUITTO_H

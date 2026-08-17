@@ -5,17 +5,6 @@
  * @file model.h
  * @brief The four model types of Section IV, equation (1) and Table I.
  *
- * From "A Digital Twin Model and Architecture for Monitoring and Controlling
- * Fleets of Autonomous Unmanned Surface Vehicles", ICECS 2026, manuscript
- * revision -10.
- *
- * Units are copied from Table I rather than normalised. The paper mixes
- * conventions — attitude angles in degrees, attitude rates in rad/s — and the
- * mix is preserved here because normalising it would make the code disagree
- * with the published table. Every field carries its unit in its name so the
- * mix cannot be applied by accident: any transition that integrates a rate
- * into an angle has to cross the units rather than add them raw.
- *
  * @note fdt_state_t derives from dt-daemon/include/boat.h by Anderson
  *       Domingues in lsa-pucrs/boat-digital-twin. That repository is private,
  *       so this is a credit, not a link a reader can follow.
@@ -23,24 +12,11 @@
 
 /**
  * The twelve floating-point values of equation (1).
- *
- * Section IV publishes the width they occupy — "a state (B_i^t) occupies 12
- * floating point values in memory, translating to 48 bytes" — and
- * tests/test_model.c pins sizeof(fdt_state_t) to it with a static assertion.
  */
 #define FDT_STATE_FLOATS 12
 
 /**
  * @brief I^t_k of equation (1): the environment input of vessel k at time t.
- *
- * Exactly the 21 entries Table I lists and nothing else. In particular there
- * is no timestamp field, because Table I declares none; sequencing lives in
- * the wire envelope, not in the model.
- *
- * The two stereo camera views are carried as opaque pointers because they are
- * images, not scalars. This library never reads through them: Section III
- * moves the camera feed off MQTT and onto RTSP, so the views are re-attached
- * on the high-speed path rather than travelling with the telemetry.
  */
 typedef struct {
     float ax_mps2;      /**< a_x — linear acceleration, X axis, m/s^2. */
@@ -74,11 +50,6 @@ typedef struct {
 
 /**
  * @brief B^t_k of equation (1): the digital twin state.
- *
- * Twelve variables in the order the paper's matrix lists them, all single
- * precision. The precision is not a taste call: Section IV fixes the state at
- * 48 bytes, and twelve four-byte floats are exactly that. Widening any field
- * would make the published figure false.
  */
 typedef struct {
     float lat_deg;        /**< phi — vessel latitude, degrees. */
@@ -100,9 +71,6 @@ typedef struct {
 
 /**
  * @brief A^t_k of equation (2) and Table I: the actuation pi produces.
- *
- * The Jundia boat steers by rotating its propulsion cage; it has no rudder,
- * which is why there is no rudder field to leave at zero.
  */
 typedef struct {
     float throttle_pct; /**< tau — throttle, percent. */
@@ -111,11 +79,6 @@ typedef struct {
 
 /**
  * @brief g^t_k of Section IV: the mission goal.
- *
- * The paper states it "may have the same structure as B^t_k, similar to a
- * setpoint in control systems", so it is an alias rather than a distinct
- * type. A goal that only constrains yaw simply leaves the other eleven
- * fields untouched.
  */
 typedef fdt_state_t fdt_goal_t;
 

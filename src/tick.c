@@ -47,8 +47,6 @@ void fdt_tick_wait(fdt_tick_t *tk)
     clock_gettime(CLOCK_MONOTONIC, &now);
 
     if (passed(&tk->next, &now)) {
-        /* The frame's work outran its budget. Count it and re-arm from now,
-         * rather than sleeping a negative interval or replaying a backlog. */
         tk->overruns++;
         tk->next = now;
         advance(&tk->next, tk->period);

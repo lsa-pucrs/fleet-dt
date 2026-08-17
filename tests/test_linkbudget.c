@@ -1,14 +1,6 @@
 /**
  * @file test_linkbudget.c
  * @brief The link-budget model, and the two readings of Section V-A.
- *
- * Claims covered: C4, C10, and the arithmetic behind C20. See
- * docs/spec/paper-claims.md, trap 1 and ambiguity 5.
- *
- * Nothing here asserts the paper's "< 1%". The arithmetic is asserted; the
- * published figure is printed beside it and left for the reader, because
- * asserting it would mean picking one reading of an ambiguous sentence on the
- * authors' behalf.
  */
 #include <fleet_dt/linkbudget.h>
 
@@ -28,8 +20,6 @@ static void test_lsdt_is_small(void)
 
     assert(fabs(fdt_link_stream_bps(&imu) - 24.0 * 8.0 * 8.0) < 1e-9);
 
-    /* "Low network overhead vs. 100 Mbps of available bandwidth": 1536 bps
-     * against 100 Mbps, three orders of magnitude below one percent. */
     const double util = fdt_link_utilization(&WIFI, &imu, 1);
     assert(fabs(util - 1536.0 / 100e6) < 1e-15);
     assert(util > 0.0 && util < 1e-4);
@@ -45,9 +35,6 @@ static void test_lsdt_is_small(void)
 
 /**
  * Trap 1: the 48 KB of Section V-A is not the 48 bytes of Section IV.
- *
- * A test that used 48 bytes here would pass and report a figure three orders
- * of magnitude too small.
  */
 static void test_48kb_is_not_48_bytes(void)
 {
@@ -78,9 +65,6 @@ static void test_two_readings(void)
     printf("reading A, absolute occupancy      : %.3f%%  "
            "(paper says the increase was < 1%%)\n", 100.0 * util);
 
-    /* Reading B, growth over traffic already flowing. The camera feed is the
-     * obvious baseline: Section III puts 1080p30 at roughly 250 MB/s before
-     * it is moved off MQTT. */
     const fdt_stream_t baseline = { .name = "existing",
                                     .payload_bytes = 1u << 20,
                                     .hz = 8.0, .vessels = 1 };
@@ -89,8 +73,6 @@ static void test_two_readings(void)
                       fdt_link_stream_bps(&baseline)) < 1e-12);
     printf("reading B, increase over baseline  : %.3f%%\n", 100.0 * inc);
 
-    /* An increase over nothing is not a number, and must not silently read
-     * as zero growth. */
     assert(fdt_link_increase(&WIFI, NULL, 0, &lsdt, 1) < 0.0);
     assert(fdt_link_increase(NULL, &baseline, 1, &lsdt, 1) < 0.0);
 }

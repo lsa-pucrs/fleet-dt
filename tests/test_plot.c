@@ -1,11 +1,6 @@
 /**
  * @file test_plot.c
  * @brief The SVG plotter that turns every benchmark into an artefact.
- *
- * Not a paper claim: this is the machinery the claims are reported through.
- * What is checked here is that a chart is well-formed, self-contained, and
- * carries its reference line — because a chart that silently drops the
- * published figure would make a benchmark look conclusive when it is not.
  */
 #include <fleet_dt/plot.h>
 
@@ -54,8 +49,6 @@ static void test_init_and_guards(void)
     }
     assert(fdt_plot_hline(&p, 1.0, "overflow") == -1);
 
-    /* An empty chart is not written: a zero-series SVG would be an empty
-     * frame that reads as "measured nothing" rather than "wrote nothing". */
     fdt_plot_t empty;
     assert(fdt_plot_init(&empty, "T", "x", "y") == 0);
     assert(fdt_plot_write_svg(&empty, "results/selftest/should-not-exist.svg") == -1);
@@ -81,9 +74,6 @@ static void test_svg_output(void)
     assert(fdt_plot_series(&p, "overruns", xs, bars, 32, FDT_PLOT_BAR) == 0);
     assert(fdt_plot_hline(&p, 125.0, "paper: 125 ms deadline") == 0);
 
-    /* Unit-test output goes to a subdirectory of its own. results/ holds
-     * measurements, and synthetic data sitting beside real data is how a
-     * reader ends up citing a number that came from a test fixture. */
     assert(fdt_mkdir_p("results") == 0);
     assert(fdt_mkdir_p("results") == 0);  /* idempotent */
     assert(fdt_mkdir_p("results/selftest") == 0);
@@ -136,8 +126,6 @@ static void test_csv_output(void)
 
     assert(strncmp(buf, "x,long,short\n", 13) == 0);
     assert(strstr(buf, "0,10,1.5\n") != NULL);
-    /* The short series leaves the cell empty rather than writing a zero that
-     * would plot as a measurement. */
     assert(strstr(buf, "2,30,\n") != NULL);
     assert(strstr(buf, "3,40,\n") != NULL);
 }

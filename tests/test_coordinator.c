@@ -1,9 +1,6 @@
 /**
  * @file test_coordinator.c
  * @brief The B^t store and the coordinator S of Figure 4.
- *
- * Claim covered: C18 — c^t is computed from the received states in the same
- * step in which g^t_i is distributed. See docs/spec/paper-claims.md.
  */
 #include <fleet_dt/coordinator.h>
 
@@ -87,8 +84,6 @@ static void test_store(void)
     assert(fdt_store_size(&bt) == 2);
     assert(fdt_store_size(NULL) == 0);
 
-    /* Initialised slots read as zero rather than as garbage, so a c^t
-     * computed before the first frame is defined. */
     assert(fdt_store_get(&bt, 0)->yaw_deg == 0.0f);
 
     fdt_state_t s = { .yaw_deg = 7.0f };
@@ -173,8 +168,6 @@ static void test_coord_step(void)
     assert(fabsf(gn[0].yaw_deg - 3.0f) < 1e-6f);
     assert(fabsf(gn[1].yaw_deg - 5.0f) < 1e-6f);
 
-    /* This frame's g^t becomes the next frame's g^{t-1} with no copying by
-     * the caller. */
     assert(fdt_coord_step(&co, ins, 1, gp, gn, bs, as) == 0);
     assert(fabsf(gp[0].yaw_deg - 3.0f) < 1e-6f);
     assert(cc.ctx_calls == 2);

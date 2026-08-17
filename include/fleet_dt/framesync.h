@@ -9,27 +9,6 @@
 /**
  * @file framesync.h
  * @brief Detects and counts the frame pathology of Section V-B.
- *
- * Section V-B, on the fleet validation: "In practice, the state of some boats
- * was only partially updated, because some packets missed their deadlines and
- * could not reach the DTI in time. As late packets were still in the input
- * buffer (network stack), the state of some boats was updated twice within
- * the same simulation frame. This example raises the question of whether a
- * timestamp or identification number should be added to packets to prevent
- * DTIs from erroneously updating from outdated packets."
- *
- * Three distinct failures hide in that paragraph, and this monitor keeps them
- * apart:
- *
- * - a **partial frame**, where some vessel contributed nothing;
- * - a **double update**, where one vessel contributed twice inside a frame;
- * - a **stale packet**, one older than what that vessel already delivered.
- *
- * Counting, not correcting. The paper poses the timestamp as an open
- * question, and dropping late packets at the receiver is item D6 of
- * docs/spec/paper-claims.md, declared future work by Section VI. This monitor
- * therefore returns a verdict and lets the caller decide; it never withholds
- * a packet.
  */
 
 /** What ::fdt_fs_accept decided about one packet. */
@@ -41,8 +20,6 @@ typedef enum {
 
 /**
  * @brief Per-frame arrival bookkeeping for a fleet.
- *
- * Storage belongs to the caller: two arrays of one entry per vessel.
  */
 typedef struct {
     uint32_t *seq;  /**< Highest sequence seen per vessel, caller-owned. */
@@ -74,18 +51,11 @@ void fdt_fs_begin_frame(fdt_framesync_t *fs);
  * @return The verdict. An out-of-range vessel index yields ::FDT_FS_STALE
  *         without touching any counter, since it belongs to no vessel this
  *         monitor covers.
- *
- * A duplicate still advances the vessel's high-water mark: the packet is
- * genuinely newer, and what is pathological is that two of them landed inside
- * one frame.
  */
 fdt_fs_verdict_t fdt_fs_accept(fdt_framesync_t *fs, const fdt_env_t *env);
 
 /**
  * @brief Closes a frame and folds it into the partial-frame statistics.
- *
- * A frame in which any vessel contributed nothing is a partial frame, which
- * is Section V-B's first failure.
  */
 void fdt_fs_end_frame(fdt_framesync_t *fs);
 

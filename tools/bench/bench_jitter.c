@@ -1,19 +1,6 @@
 /**
  * @file bench_jitter.c
  * @brief Frame timing against the 125 ms deadline of Section IV.
- *
- * Claims measured: C13 (the 8 Hz hard real-time frame) and the measurable
- * half of C21 ("MQTT introduced no notable latency, nor did WeBots' visual
- * feedback (3D model) suffer from stuttering").
- *
- * The WeBots half of C21 is a boundary: stuttering is a property of the
- * renderer, and reproducing it needs WeBots. What is measurable here is
- * whether the frame clock holds while a full fleet steps and publishes
- * underneath it — which is the half that would make the renderer stutter if
- * it failed.
- *
- * The run takes FRAMES * 125 ms of wall clock by construction. That is the
- * measurement.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -197,9 +184,6 @@ int main(void)
         prev = t;
     }
 
-    /* The first frame's period is measured from before the pacer was armed,
-     * so it is not a frame interval; drop it from the statistics rather than
-     * letting it skew the worst case. */
     static double sorted[FRAMES - 1];
     for (int i = 1; i < FRAMES; i++) {
         sorted[i - 1] = deviation_ms[i] < 0.0 ? -deviation_ms[i]

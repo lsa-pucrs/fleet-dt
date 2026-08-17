@@ -100,9 +100,6 @@ long fdt_env_decode(const uint8_t *buf, size_t len, fdt_env_t *env,
     if (!kind_known(out.kind)) {
         return -1;
     }
-    /* A truncated frame is rejected whole. Accepting the header and half the
-     * payload would put an incomplete state into the twin's queue, where it
-     * would be indistinguishable from a measurement. */
     if (len < (size_t)FDT_ENV_HEADER_BYTES + (size_t)out.payload_len) {
         return -1;
     }

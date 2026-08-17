@@ -1,20 +1,6 @@
 /**
  * @file test_world.c
  * @brief Checks the WeBots world against what the controller assumes of it.
- *
- * The controller cannot be linked on a machine without the WeBots SDK, so its
- * assumptions about the world would otherwise go unchecked until someone with
- * the SDK opened the simulation and found a DEF renamed or a mesh path stale.
- *
- * The world file is text, and every assumption the controller makes about it
- * is textual: a DEF name it resolves, a mesh URL it renders through, a time
- * step it divides. Those are checkable here, in the ordinary suite, on any
- * machine. This does not prove the simulation runs; it proves the controller
- * and the world still agree about what they are.
- *
- * Claims touched: C3 and C8, which remain boundaries — the artefacts are
- * complete and mutually consistent, but neither has been through the real
- * WeBots toolchain. See docs/spec/paper-claims.md.
  */
 #include <fleet_dt/tick.h>
 
@@ -35,10 +21,6 @@ static const char *const VESSEL_DEF[] = { "PINTADO", "TILAPIA" };
 
 /**
  * The three worlds, differing only in vessel count.
- *
- * They exist so the CPU claim of Section V-A can be measured as a difference:
- * the empty world is the renderer's own cost, and each vessel after that is
- * an increment. tools/bench/bench_webots_cpu.c runs all three.
  */
 typedef struct {
     const char *file;
@@ -103,16 +85,9 @@ static int mesh_exists(const char *relative)
 
 /**
  * The frame of Section IV has to be a whole number of physics steps.
- *
- * The source world this one derives from left basicTimeStep at the 32 ms
- * default, and 125/32 is not an integer: wb_robot_step() would have rounded
- * the DT frame to something other than the deadline the model is defined by,
- * quietly. This is the check that keeps that from coming back.
  */
 static void test_time_step_divides_the_frame(void)
 {
-    /* Search from WorldInfo, not from the top: the header comment explains
-     * the setting by name, and a plain search finds the prose first. */
     const char *info = strstr(g_world, "WorldInfo {");
     assert(info != NULL);
 
@@ -136,10 +111,6 @@ static void test_vessel_defs(void)
         char def[64];
         snprintf(def, sizeof def, "DEF %s Robot", VESSEL_DEF[k]);
 
-        /* Present exactly once below the vessel count, absent above it. Two
-         * nodes sharing a DEF would make the lookup return whichever the
-         * parser reached first, silently; a gap in the middle would truncate
-         * the fleet, because the controller stops at the first miss. */
         assert(count_of(def) == (k < g_expect ? 1 : 0));
     }
     assert(count_of("Robot {") == g_expect);
@@ -147,10 +118,6 @@ static void test_vessel_defs(void)
 
 /**
  * One supervisor, not one per hull.
- *
- * Figure 4 has a single coordinator computing c^t across the fleet. A
- * controller per vessel could not compute it, because no instance would see
- * more than its own state.
  */
 static void test_single_coordinator(void)
 {
@@ -181,26 +148,12 @@ static void test_meshes_resolve(void)
         assert(mesh_exists(MESHES[i]));
     }
 
-    /* The material and its texture travel with the hull; an .obj whose .mtl
-     * is missing renders untextured rather than failing, which is the kind of
-     * breakage nobody notices in a screenshot. */
     assert(mesh_exists("../3d_models/drone_boat/full_model/boat_model.mtl"));
     assert(mesh_exists("../3d_models/drone_boat/full_model/boat_uv.png"));
 }
 
 /**
  * The world is ENU, and the controller has to agree with it.
- *
- * WeBots R2025a orders translation as east, north, up. Most 3D tooling is
- * Y-up, and assuming that here adds the northward displacement to the altitude
- * instead: the hulls climb out of the lagoon and fly. Nothing catches it —
- * the frames keep stepping and every counter stays green — until somebody
- * looks at the viewport.
- *
- * The world states the convention if it is read: a hull sits a hand's breadth
- * above water whose box is 0.7 thick, so its vertical component is small,
- * while its horizontal ones are metres. And its rotation axis is 0 0 1,
- * because yaw turns about up.
  */
 static void test_enu_convention(void)
 {
@@ -220,12 +173,8 @@ static void test_enu_convention(void)
     assert(sscanf(p + strlen("translation"), "%lf %lf %lf",
                   &east, &north, &up) == 3);
 
-    /* A boat floats. Its vertical component is centimetres, not metres, and
-     * it is inside the half-thickness of the water box. */
     assert(fabs(up) < 0.35);
 
-    /* Its horizontal placement is metres, so the small component is
-     * unambiguously the third one. */
     assert(fabs(north) > 1.0);
     assert(fabs(up) < fabs(north));
 
@@ -251,12 +200,8 @@ static void test_section_iii_furniture(void)
     assert(count_of("Fluid {") == 1);
     assert(count_of("fluidName \"fluid\"") >= g_expect);
 
-    /* Drag has to be configured per hull, or the boats slide frictionlessly
-     * across a fluid that is only decorative. */
     assert(count_of("dragForceCoefficients") == g_expect);
 
-    /* One stereo view per vessel. The image never travels over MQTT; the
-     * codec carries a presence flag and RTSP carries the frame. */
     assert(count_of("Camera {") == g_expect);
 }
 

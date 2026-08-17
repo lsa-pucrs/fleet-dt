@@ -42,8 +42,6 @@ int fdt_coord_init(fdt_coord_t *co, fdt_fleet_t *fleet, fdt_store_t *bt,
         ctx_fn == NULL || plan_fn == NULL) {
         return -1;
     }
-    /* A store that does not cover the fleet would silently drop a vessel's
-     * state, and c^t would then be computed from an incomplete B^t. */
     if (fdt_fleet_size(fleet) != fdt_store_size(bt)) {
         return -1;
     }
@@ -79,12 +77,8 @@ int fdt_coord_step(fdt_coord_t *co, const fdt_input_t *ins, size_t n,
         fdt_store_put(co->bt, k, &b_out[k]);
     }
 
-    /* c^t from the received states, then g^t seeing that c^t: the two halves
-     * of one step, in the order Section IV puts them. */
     co->ctx_fn(co->bt, co->fleet->ctx, co->user);
 
-    /* The g^t the fleet just consumed becomes the next frame's g^{t-1},
-     * captured before goals_now is overwritten with the new goal. */
     for (size_t k = 0; k < vessels; k++) {
         goals_prev[k] = goals_now[k];
     }

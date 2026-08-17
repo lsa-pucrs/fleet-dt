@@ -48,8 +48,6 @@ long fdt_feas_end(fdt_feas_t *fs)
     if (ns > fs->worst_ns) {
         fs->worst_ns = ns;
     }
-    /* "in less than |t_k - t_{k-1}|": meeting the budget exactly is already
-     * outside the strict inequality the paper writes. */
     if (ns >= fs->budget_ns) {
         fs->violations++;
     }

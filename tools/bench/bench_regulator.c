@@ -1,19 +1,6 @@
 /**
  * @file bench_regulator.c
  * @brief What the bandwidth regulators of Section III actually remove.
- *
- * Claims measured: C5 (the abstract's declared contribution) and C12 (the
- * sensor keeps sampling at its own pace).
- *
- * Section III states the problem and the fix in one breath: "As some sensors,
- * e.g., a gyroscope at 1 Hz, sample faster than the DT frequency, part of the
- * bandwidth is wasted. The proposed regulators overcome this problem by
- * dropping the number of samples in the MQTT client... However, real sensors
- * continue sampling at their own pace, as this is necessary for control
- * algorithms."
- *
- * The chart is the argument: publication collapses to the DT rate while
- * sampling does not move.
  */
 #include "bench_common.h"
 
@@ -57,8 +44,6 @@ int main(void)
         fdt_reg_t reg;
         assert(fdt_reg_init(&reg, hz, DT_HZ) == 0);
 
-        /* The control loop reads every sample the sensor produces, whatever
-         * the regulator decides about publishing. */
         unsigned long control_reads = 0;
         for (int s = 0; s < SAMPLES; s++) {
             control_reads++;
@@ -75,8 +60,6 @@ int main(void)
         published_hz[i] = eff;
         saved_pct[i]    = saved;
 
-        /* The two invariants that make the claim honest: nothing is lost
-         * from the count, and the control path is untouched. */
         assert(fdt_reg_sampled(&reg) ==
                fdt_reg_published(&reg) + fdt_reg_dropped(&reg));
         assert(control_reads == (unsigned long)fdt_reg_sampled(&reg));

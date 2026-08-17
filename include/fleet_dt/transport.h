@@ -7,16 +7,6 @@
 /**
  * @file transport.h
  * @brief The network boundary of Section III, and an in-process loopback.
- *
- * The model core knows nothing about brokers, and the MQTT adapter knows
- * nothing about equations. This header is the seam between them: five
- * function pointers wide, so that a benchmark can run over a loopback while
- * a boat runs over mosquitto with the same code above the line.
- *
- * Publishing and delivery are deliberately separate operations. A publish
- * only enqueues; delivery happens in fdt_transport_t::poll. That separation
- * is what lets a test place a late packet's delivery on the wrong side of a
- * frame boundary, which is the pathology Section V-B reports and leaves open.
  */
 
 /** Topic suffix for I^t, the low-speed telemetry of Section III. */
@@ -30,10 +20,6 @@
 
 /**
  * @brief Builds the topic for one vessel and one kind.
- *
- * The layout is "fleet/{vessel}/{kind}", with no wildcard. Wildcards belong
- * in the broker's bridge configuration, where Section III puts them, not in
- * the data path.
  *
  * @param buf     Destination.
  * @param cap     Capacity of @p buf, including the terminator.
@@ -55,9 +41,6 @@ typedef void (*fdt_on_msg_fn)(const char *topic, const uint8_t *buf,
 
 /**
  * @brief A transport: publish, subscribe, poll, close.
- *
- * Obtain one from an implementation — fdt_loop_transport() here, or
- * fdt_mqtt_open() in adapters/mqtt — and call through the members.
  */
 typedef struct {
     /**
@@ -104,9 +87,6 @@ typedef struct {
 
 /**
  * @brief In-process transport state: no sockets, no broker, no threads.
- *
- * Caller-owned, like everything else in this library, and required to outlive
- * the ::fdt_transport_t built from it.
  */
 typedef struct {
     struct {
@@ -117,8 +97,6 @@ typedef struct {
     } q[FDT_LOOP_QUEUE];
     size_t qlen;
 
-    /* Fault injection. Zero on both means a lossless link, which is the
-     * default and what most measurements want. */
     unsigned drop_every;  /**< Discard every Nth publish; 0 disables. */
     unsigned defer_every; /**< Hold every Nth publish one poll; 0 disables. */
     unsigned published;   /**< Publishes seen, driving the two counters. */
@@ -143,20 +121,12 @@ fdt_transport_t fdt_loop_transport(fdt_loop_t *lo);
 /**
  * @brief Makes the loopback lossy, so the Section V-B pathology can be seen.
  *
- * A lossless transport cannot exhibit what Section V-B reports: "some packets
- * missed their deadlines and could not reach the DTI in time... the state of
- * some boats was updated twice within the same simulation frame". A benchmark
- * over a perfect link therefore measures a fleet that never degrades, which is
- * not the fleet the paper observed.
- *
  * @param drop_every   Discard every Nth publish, producing a partial frame.
  *                     The publisher is told the send succeeded, because on a
  *                     real link it did — the loss happened downstream.
  * @param defer_every  Hold every Nth publish back one poll, so it lands in
  *                     the following frame beside that frame's own message and
  *                     produces the double update.
- *
- * Zero disables either. Both default to zero.
  */
 void fdt_loop_set_loss(fdt_loop_t *lo, unsigned drop_every,
                        unsigned defer_every);

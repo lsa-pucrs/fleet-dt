@@ -1,30 +1,6 @@
 /**
  * @file bench_webots_cpu.c
  * @brief The CPU cost of adding a vessel to the simulation, Section V-A.
- *
- * Claim measured: C22. Section V-A: "On the MCS side, running WeBots adds 10%
- * CPU usage for the first boat and less than 1% for subsequent boats added to
- * the simulation."
- *
- * That is a claim about two *differences*, not about two absolute figures, so
- * three worlds are run and subtracted:
- *
- *   empty  -> the renderer's own cost, water and obstacles and nothing to twin
- *   single -> empty plus one vessel: the "first boat" increment
- *   fleet  -> single plus one vessel: the "subsequent boat" increment
- *
- * The worlds differ in nothing else, which is what makes the subtraction mean
- * something. adapters/webots/worlds/ holds all three and tests/test_world.c
- * checks that they stay consistent with each other and with the controller.
- *
- * CPU is read from /proc/<pid>/stat -- utime plus stime, the process tree's
- * own consumed time -- sampled across a window and divided by wall clock. It
- * is therefore a percentage of one core, which is how the paper's figure reads
- * on a machine where WeBots is the thing being measured.
- *
- * This benchmark needs a WeBots install. Without WEBOTS_HOME it prints why it
- * is skipping and exits successfully, so `make bench` stays green on a machine
- * that has no simulator.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -49,11 +25,6 @@
 
 /**
  * Runs per world, reduced by median.
- *
- * One run per world is not enough. The per-vessel cost here is a couple of
- * percent and the run-to-run spread is of the same order, which showed up as a
- * *negative* increment for the second boat -- adding a hull cannot reduce the
- * cost, so that number was pure noise wearing a result's clothes.
  */
 #define REPEATS 3
 
@@ -100,9 +71,6 @@ static double now_s(void)
 /**
  * @brief CPU time a process has consumed, in seconds.
  *
- * Sums utime and stime from /proc/<pid>/stat. Returns -1.0 when the process is
- * gone, which is how the caller learns that WeBots died rather than settled.
- *
  * @note Fields 14 and 15 are read by skipping past the comm field, which is
  *       parenthesised and may itself contain spaces and parentheses. Anything
  *       that scans forward from the start instead of from the last ')' gets
@@ -132,10 +100,6 @@ static double cpu_seconds(pid_t pid)
 
     unsigned long utime = 0;
     unsigned long stime = 0;
-    /* After ") " come eleven fields -- state, ppid, pgrp, session, tty_nr,
-     * tpgid, flags, minflt, cminflt, majflt, cmajflt -- and then utime and
-     * stime. They are skipped as bare tokens rather than by type, because a
-     * suppressed conversion may not carry a length modifier. */
     if (sscanf(after_comm + 2,
                "%*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %lu %lu",
                &utime, &stime) != 2) {
@@ -146,10 +110,6 @@ static double cpu_seconds(pid_t pid)
 
 /**
  * @brief CPU consumed by a process and every descendant it still has.
- *
- * WeBots launches the controller as a child, and the controller's cost is part
- * of what the paper's figure covers: adding a boat adds both a hull to render
- * and a twin to step. Charging only the parent would undercount every vessel.
  */
 static double tree_cpu_seconds(pid_t root)
 {
@@ -204,22 +164,9 @@ static double measure(const char *webots, const char *world)
     }
 
     if (pid == 0) {
-        /* Quiet, headless-ish, and its own process group so the parent can
-         * take the whole thing down without touching its own shell. */
         setpgid(0, 0);
         freopen("/dev/null", "w", stdout);
         freopen("/dev/null", "w", stderr);
-        /* Real time, and rendering on. Both matter.
-         *
-         * --mode=fast lets WeBots run the simulation as quickly as it can, so
-         * it pins a core at 100 % whatever the world holds, and every
-         * increment measures scheduler noise instead of a vessel. Real time
-         * fixes the work per wall-clock second, which is the only way a
-         * difference between worlds means anything.
-         *
-         * --no-rendering would remove the renderer, and the renderer is most
-         * of what Section V-A is measuring when it says running WeBots adds
-         * CPU per boat. */
         execl(webots, "webots", "--batch", "--mode=realtime", "--minimize",
               path, (char *)NULL);
         _exit(127);
@@ -344,8 +291,6 @@ int main(void)
 
     char buf[64];
 
-    /* An increment smaller than the run-to-run spread is not a measurement of
-     * anything. Saying so is the difference between a benchmark and a number. */
     const double noise = (spread[0] > spread[1]) ? spread[0] : spread[1];
     const double noise2 = (noise > spread[2]) ? noise : spread[2];
     (void)noise;

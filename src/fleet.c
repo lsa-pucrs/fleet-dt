@@ -23,10 +23,6 @@ int fdt_fleet_step(fdt_fleet_t *f, const fdt_input_t *ins,
         return -1;
     }
 
-    /* One window is shared by vessels whose queues may differ in length, so
-     * every vessel is checked before any vessel steps. Equation (5) advances
-     * the fleet as a single frame; a partially advanced fleet is not a state
-     * the model has a name for. */
     for (size_t k = 0; k < f->n; k++) {
         const fdt_twin_t *tw = &f->twins[k];
         if (tw->delta_e == NULL || tw->pi == NULL) {

@@ -8,24 +8,6 @@
 /**
  * @file feasibility.h
  * @brief The feasibility predicate of Section IV, measured per vessel.
- *
- * Section IV: "The DTI is feasible only if delta can be computed in less than
- * |t_k - t_{k-1}| for any arbitrary k; otherwise, it is merely a time-bounded
- * simulation model."
- *
- * Two quantities the paper keeps apart, and so does this type:
- *
- * 1. The time to compute delta, measured here.
- * 2. The latency of delivering the actuation, which Section V-A observes to
- *    be high even when delta is feasible, "as it has to travel back through
- *    the network".
- *
- * This monitor says nothing about the second. Reporting them as one number
- * would misrepresent the paper; tools/bench/bench_latency.c measures them as
- * two.
- *
- * "For any arbitrary k" is a worst case, not an average: a single violation
- * makes the DTI infeasible, and no later fast frame redeems it.
  */
 typedef struct {
     long            budget_ns;  /**< |t_k - t_{k-1}|, strictly positive. */

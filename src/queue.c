@@ -22,9 +22,6 @@ void fdt_queue_push(fdt_queue_t *q, const fdt_state_t *b)
         q->buf[(q->head + q->len) % q->cap] = *b;
         q->len++;
     } else {
-        /* Full: overwrite the oldest entry and slide the window forward. This
-         * is what turns the capacity into the hard 48d ceiling of Section IV
-         * rather than a soft target. */
         q->buf[q->head] = *b;
         q->head = (q->head + 1) % q->cap;
     }

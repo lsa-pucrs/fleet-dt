@@ -34,9 +34,6 @@ static int loop_publish(void *self, const char *topic, const uint8_t *buf,
 
     lo->published++;
 
-    /* A dropped publish reports success. On a real link it did succeed: the
-     * loss happened downstream, and the boat has no way to know. Returning
-     * -1 here would model a different failure, one the sender can react to. */
     if (lo->drop_every != 0 && (lo->published % lo->drop_every) == 0) {
         lo->dropped++;
         return 0;
@@ -91,10 +88,6 @@ static int loop_poll(void *self, int timeout_ms)
 
     for (size_t i = 0; i < pending; i++) {
         if (lo->q[i].deferred) {
-            /* Still in the network stack. Clear the flag and compact it to
-             * the front, so the next poll delivers it -- inside the frame
-             * after the one it belonged to, which is exactly the arrival
-             * Section V-B describes. */
             lo->q[i].deferred = 0;
             if (kept != i) {
                 lo->q[kept] = lo->q[i];
@@ -105,8 +98,6 @@ static int loop_poll(void *self, int timeout_ms)
 
         delivered++;
         for (size_t s = 0; s < lo->nsubs; s++) {
-            /* Exact match. Section III's data path uses no wildcard; the
-             * bridge does, and that lives in the broker configuration. */
             if (strcmp(lo->subs[s].topic, lo->q[i].topic) == 0) {
                 lo->subs[s].cb(lo->q[i].topic, lo->q[i].payload,
                                lo->q[i].len, lo->subs[s].user);
@@ -114,9 +105,6 @@ static int loop_poll(void *self, int timeout_ms)
         }
     }
 
-    /* Drained whether or not anyone was listening: an unsubscribed topic is
-     * published to the void, which is what a real broker does too. Anything
-     * deferred stays queued for the next call. */
     lo->qlen = kept;
     return delivered;
 }

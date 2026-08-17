@@ -1,21 +1,6 @@
 /**
  * @file bench_latency.c
  * @brief Two figures Section V-A keeps apart: delta time and actuation delay.
- *
- * Claim measured: C23. Section V-A: "Running delta in less than 125 ms is
- * feasible. However, actuation is delivered late to the boat, as it has to
- * travel back through the network."
- *
- * Trap 3 of docs/spec/paper-claims.md: these are two measurements, not one.
- * The feasibility predicate of Section IV asks how long delta takes; the
- * observation about late actuation is about a round trip through the network.
- * They are printed in separate blocks and never summed, because a single
- * combined number would misreport whichever question the reader was asking.
- *
- * Over the loopback the round trip is sub-microsecond, which is not a network
- * result and is labelled as such. Run with a real broker for a real figure;
- * the transport in use is printed at the top so no reader mistakes one for
- * the other.
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -237,8 +222,6 @@ int main(void)
         }
         (void)tr.poll(tr.self, 0);
 
-        /* Measurement two: I^t published to A^t delivered. A different
-         * quantity, with the network inside it. */
         const double t_delivered = now_ns();
         assert(g_act_seen == 1);
 

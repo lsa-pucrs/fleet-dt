@@ -8,10 +8,6 @@
 
 /**
  * xorshift32.
- *
- * Deterministic and seedable, which is the whole requirement: a scaling run
- * has to be comparable against the previous one, and it would not be if the
- * telemetry differed between them.
  */
 static uint32_t xorshift32(uint32_t *s)
 {
@@ -62,8 +58,6 @@ void fdt_inj_sample(const fdt_inj_t *inj, unsigned vessel, fdt_input_t *out)
 
     uint32_t s = inj->seed ^ (vessel * 2654435761u) ^ inj->tick;
 
-    /* A slow yaw sweep, so a fleet fans out over a run rather than sitting
-     * still. Each vessel turns at its own rate. */
     const double phase = (double)inj->tick / (inj->hz * 20.0) +
                          (double)vessel * 0.37;
 
@@ -82,11 +76,6 @@ void fdt_inj_sample(const fdt_inj_t *inj, unsigned vessel, fdt_input_t *out)
     out->mz_ut = -14.0f + 0.5f * jitter(&s);
 
     /* The lagoons of southern Brazil, where the eDNA campaign samples. */
-    /* A circle of FDT_INJ_SWEEP_DEG about the sampling point, with the
-     * vessels offset from one another by a quarter of it so a fleet is a
-     * fleet rather than a stack. */
-    /* The spacing runs east, across the operator's view rather than into it,
-     * so a fleet reads as a fleet instead of as one hull hiding another. */
     out->gps_lat_deg = (float)(-30.05 + FDT_INJ_SWEEP_DEG * sin(phase));
     out->gps_lon_deg = (float)(-51.17 + FDT_INJ_SWEEP_DEG * cos(phase) +
                                FDT_INJ_SPACING_DEG * (double)vessel);
@@ -104,8 +93,6 @@ void fdt_inj_sample(const fdt_inj_t *inj, unsigned vessel, fdt_input_t *out)
                   0.02f * jitter(&s);
     out->ibat_a = 6.0f + 0.5f * jitter(&s);
 
-    /* The stereo views exist but do not travel this path: Section III moves
-     * the camera feed onto RTSP. */
     out->x_left  = FDT_VIEW_PRESENT;
     out->x_right = FDT_VIEW_PRESENT;
 }
@@ -149,8 +136,6 @@ int fdt_inj_tick(fdt_inj_t *inj)
             inj->published++;
             sent++;
         } else {
-            /* The transport refused. Counted rather than retried: a retry
-             * would hide the very congestion the benchmark is measuring. */
             inj->refused++;
         }
     }

@@ -7,18 +7,6 @@
  * @file dte.h
  * @brief The Digital Twin Environment: parallel simulations on one tick.
  *
- * Section I, feature (ii): the architecture "supports running multiple
- * simulations in parallel in the same DTE".
- *
- * Section III names what runs there besides WeBots: "In the DTE there are a
- * couple of other simulation tools besides Webots, including a fluid
- * simulator and machine learning (ML) applications for image processing,
- * e.g., object detection and avoidance composing the AS [Application Space]."
- *
- * This registry is what ties them to one clock. Every registered simulation
- * advances on the same tick index, so the fluid solver and the obstacle
- * detector see the same instant the twin does.
- *
  * @note The boundary is deliberate and worth stating plainly. Section VI
  *       lists as future work "developing a more comprehensive model for
  *       describing vessels and fleets... That would be adequate to describe
@@ -70,10 +58,6 @@ int fdt_dte_register(fdt_dte_t *dte, const char *name, fdt_sim_fn fn,
 
 /**
  * @brief Advances every registered simulation by one tick.
- *
- * Simulations run in registration order, each receiving the same tick index.
- * That shared index is the synchronisation Section I promises; nothing here
- * runs a simulation on a clock of its own.
  *
  * @return The tick index just issued, or (size_t)-1 when @p dte is NULL.
  */

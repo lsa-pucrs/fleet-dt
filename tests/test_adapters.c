@@ -1,9 +1,6 @@
 /**
  * @file test_adapters.c
  * @brief The Ardupilot ingest mapping and the HSDT camera boundary.
- *
- * Claims covered: the Ardupilot and camera halves of C3, and C11 (the camera
- * feed kept off the MQTT path). See docs/spec/paper-claims.md.
  */
 #include "mavlink/fdt_mavlink.h"
 #include "rtsp/fdt_rtsp.h"
@@ -24,8 +21,6 @@ static void test_mavlink_conversions(void)
     assert(fdt_mav_input(NULL) == NULL);
     assert(fdt_mav_complete(NULL) == 0);
 
-    /* SCALED_IMU2. 1000 milli-g is exactly one standard gravity; 500 mrad/s
-     * is 0.5 rad/s; 230 milligauss is 23 uT, a plausible southern field. */
     fdt_mav_on_scaled_imu(&ing, 1000, 0, -1000, 500, -250, 0, 230, 0, -140);
     const fdt_input_t *in = fdt_mav_input(&ing);
 
@@ -74,13 +69,9 @@ static void test_mavlink_completeness(void)
     fdt_mav_on_scaled_pressure(&ing, 1013.25f, 2200);
     assert(fdt_mav_complete(&ing) == 0);
 
-    /* Only the fifth family completes it. A partial frame would hand delta^e
-     * zeros indistinguishable from real readings. */
     fdt_mav_on_battery(&ing, 18500, 600);
     assert(fdt_mav_complete(&ing) == 1);
 
-    /* Attaching views does not affect completeness: they arrive over RTSP,
-     * and their absence must not hold up a frame MAVLink has finished. */
     fdt_mav_init(&ing);
     fdt_mav_attach_views(&ing, (const void *)"L", (const void *)"R");
     assert(fdt_mav_complete(&ing) == 0);
@@ -91,8 +82,6 @@ static void test_mavlink_completeness(void)
     assert(fdt_mav_complete(&ing) == 0);
     assert(fdt_mav_input(&ing)->vbat_v == 0.0f);
 
-    /* Unknown current is reported as no draw, not as a negative one that
-     * would read as charging. */
     fdt_mav_on_battery(&ing, 18500, -1);
     assert(fdt_mav_input(&ing)->ibat_a == 0.0f);
 }
@@ -117,8 +106,6 @@ static void test_actuation_to_rc(void)
     fdt_mav_actuation_to_rc(&full, &thr, &cage);
     assert(thr == 2000);
 
-    /* The cage is centred, and clamps at the mechanical limit rather than
-     * wrapping past it. */
     const fdt_actuation_t hard = { .throttle_pct = 0.0f,
                                    .cage_rad = FDT_CAGE_LIMIT_RAD };
     fdt_mav_actuation_to_rc(&hard, &thr, &cage);
@@ -180,8 +167,6 @@ static void test_rtsp_boundary(void)
     assert(at_ground.x_left == (const void *)left.data);
     assert(fdt_rtsp_pending(&at_ground) == 0);
 
-    /* No frame available clears the field rather than leaving a sentinel a
-     * reader might dereference. */
     const fdt_view_t empty = {0};
     assert(fdt_rtsp_attach(&at_ground, &empty, NULL) == 0);
     assert(at_ground.x_left == NULL && at_ground.x_right == NULL);

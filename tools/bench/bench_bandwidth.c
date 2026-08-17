@@ -1,20 +1,6 @@
 /**
  * @file bench_bandwidth.c
  * @brief Link budget over the LSDT and HSDT stream profiles of the paper.
- *
- * Claims measured: C10 (LSDT is small against 100 Mbps), C20 (the Section V-A
- * bandwidth figure), and the effect of C5's regulators on the offered load.
- *
- * Two traps from docs/spec/paper-claims.md are structural here.
- *
- * Trap 1: 48 KB is the Section V-A packet payload; 48 bytes is the Section IV
- * state width. Both appear in the table below, on separate rows, so the
- * distinction is visible rather than assumed.
- *
- * Ambiguity 5: "the bandwidth usage increased < 1%" does not reconcile with
- * absolute occupancy, which is 3.1% for that payload on a 100 Mbps link. Both
- * readings are computed and printed; neither is asserted, because choosing
- * one would be choosing on the authors' behalf.
  */
 #include "bench_common.h"
 
@@ -42,9 +28,6 @@ typedef struct {
 
 /**
  * The traffic profiles, each traceable to a sentence.
- *
- * The camera row is marked off-MQTT: Section III moves it to RTSP, and adding
- * it to the MQTT budget would reproduce a number the paper does not claim.
  */
 static const profile_t PROFILES[] = {
     { "imu",       8 * 3,        100.0, "Sec. III, 8 bytes per IMU axis",  1 },
@@ -88,8 +71,6 @@ int main(void)
                                    .hz = p->sensor_hz,
                                    .vessels = 1 };
 
-        /* What the regulator leaves: publication decimated to the DT rate,
-         * with a sensor slower than the DT passing untouched. */
         fdt_reg_t reg;
         fdt_reg_init(&reg, p->sensor_hz, DT_HZ);
         const double pub_hz = (p->sensor_hz <= DT_HZ) ? p->sensor_hz : DT_HZ;
@@ -145,8 +126,6 @@ int main(void)
     bench_compare(&r, "A: absolute occupancy", buf, "increased < 1 %",
                   BENCH_DIVERGE);
 
-    /* Reading B needs a baseline. The camera feed is the obvious one: it is
-     * on the link before the twin publishes anything. */
     const fdt_stream_t cam = { .name = "camera",
                                .payload_bytes = 250u * 1024u * 1024u,
                                .hz = 1.0, .vessels = 1 };
@@ -194,8 +173,6 @@ int main(void)
     fdt_plot_write_svg(&p, "results/bandwidth.svg");
     fdt_plot_write_csv(&p, "results/bandwidth.csv");
 
-    /* How occupancy grows with the fleet, against the two thresholds a
-     * reader cares about: the whole link, and the paper's 1 %. */
     static double vs[16];
     static double util_pct[16];
     for (int i = 0; i < 16; i++) {

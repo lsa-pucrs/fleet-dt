@@ -11,19 +11,6 @@
 /**
  * @file bench_common.h
  * @brief Shared reporting for the measurement campaign.
- *
- * Every benchmark writes the same three artefacts into results/:
- *
- * - `<name>.txt`  the human report, also echoed to stdout;
- * - `<name>.csv`  the raw series, so a reader can re-plot or re-analyse;
- * - `<name>.svg`  the chart, with the paper's figure drawn as a rule.
- *
- * The verdict helper is the important part. A benchmark measures a machine,
- * and a machine is not the machine the paper measured, so a divergence from a
- * published number is information rather than failure. Divergence is labelled
- * and printed; it never aborts a run. What would abort a run is a structural
- * error — a vessel lost, a counter that does not balance — and those are
- * plain assertions in the benchmark itself.
  */
 
 /** Open report: writes to stdout and to results/<name>.txt at once. */

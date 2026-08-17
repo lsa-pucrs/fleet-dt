@@ -29,10 +29,6 @@ typedef struct {
 
 /**
  * Dispatches an arriving message to the matching subscriptions.
- *
- * Matching is by exact topic, as in the loopback: the data path of Section
- * III uses no wildcard, and the bridge's wildcards live in the broker
- * configuration rather than here.
  */
 static void on_message(struct mosquitto *m, void *obj,
                        const struct mosquitto_message *msg)
@@ -53,8 +49,6 @@ static void on_message(struct mosquitto *m, void *obj,
         }
     }
     if (matched) {
-        /* Messages delivered, not callbacks fired, so the count stays
-         * comparable with the loopback's. */
         st->delivered++;
     }
 }
@@ -140,9 +134,6 @@ int fdt_mqtt_open(const char *host, int port, const char *client_id,
         return -1;
     }
 
-    /* clean_session false, so a session that outlives a dropped link keeps
-     * its subscriptions and its queued messages. That is the client-side
-     * half of the instability tolerance Section III attributes to the bridge. */
     st->mosq = mosquitto_new(client_id, false, st);
     if (st->mosq == NULL) {
         free(st);

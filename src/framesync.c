@@ -37,15 +37,11 @@ fdt_fs_verdict_t fdt_fs_accept(fdt_framesync_t *fs, const fdt_env_t *env)
         return FDT_FS_STALE;
     }
     if ((size_t)env->vessel >= fs->n) {
-        /* Not a vessel this monitor covers: no counter is touched, because
-         * charging it to some other vessel's statistics would be a lie. */
         return FDT_FS_STALE;
     }
 
     const size_t k = (size_t)env->vessel;
 
-    /* Section V-B's third failure: a packet the network held so long that the
-     * vessel has already delivered a newer one. */
     if (env->seq <= fs->seq[k]) {
         fs->stale_packets++;
         return FDT_FS_STALE;
@@ -54,10 +50,6 @@ fdt_fs_verdict_t fdt_fs_accept(fdt_framesync_t *fs, const fdt_env_t *env)
     fs->seq[k] = env->seq;
 
     if (fs->hit[k] != 0) {
-        /* Section V-B's second failure: "the state of some boats was updated
-         * twice within the same simulation frame". The packet is genuinely
-         * newer, so the high-water mark advanced above; what is pathological
-         * is that two of them landed inside one frame. */
         fs->double_updates++;
         return FDT_FS_DUPLICATE_IN_FRAME;
     }
@@ -75,8 +67,6 @@ void fdt_fs_end_frame(fdt_framesync_t *fs)
 
     fs->frames++;
 
-    /* Section V-B's first failure: "the state of some boats was only
-     * partially updated, because some packets missed their deadlines". */
     uint64_t missing = 0;
     for (size_t k = 0; k < fs->n; k++) {
         if (fs->hit[k] == 0) {

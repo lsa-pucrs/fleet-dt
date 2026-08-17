@@ -1,11 +1,6 @@
 /**
  * @file test_injector.c
  * @brief The synthetic telemetry injectors of Section V-B.
- *
- * Claim covered in part: C26. The injector's own ceiling is measured by
- * tools/bench/bench_scale.c; what is checked here is that its output is
- * well-formed and repeatable, without which a scaling result could not be
- * compared against a previous one.
  */
 #include "injector/injector.h"
 
@@ -89,8 +84,6 @@ static void test_publishes_one_per_vessel(void)
     assert(sink.decoded == 4);   /* every frame survived the round trip */
     assert(fdt_inj_published(&inj) == 4);
 
-    /* The sequence advances per tick, which is what lets the framesync
-     * monitor tell a fresh packet from a late one. */
     const uint32_t seq_first = sink.last_seq;
     assert(fdt_inj_tick(&inj) == 4);
     assert(tr.poll(tr.self, 0) == 4);
@@ -175,9 +168,6 @@ static void test_refusal_is_measured(void)
     fdt_transport_t tr = fdt_loop_transport(&loop);
     fdt_inj_t inj;
 
-    /* More vessels than the loopback queue holds, and nothing polls, so the
-     * transport starts refusing partway through. Retrying would hide exactly
-     * the congestion the scaling benchmark exists to find. */
     assert(fdt_inj_init(&inj, &tr, FDT_LOOP_QUEUE + 8, 8.0, 1) == 0);
 
     const int sent = fdt_inj_tick(&inj);

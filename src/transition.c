@@ -7,8 +7,6 @@ const fdt_state_t *fdt_window_at(const fdt_queue_t *q, size_t n, size_t k)
     if (n == 0 || n > len || k >= n) {
         return NULL;
     }
-    /* k counts from the present backwards; the queue counts from the oldest
-     * forwards. len - 1 is the newest, so k == 0 lands on B^{t-1}. */
     return fdt_queue_at(q, len - 1 - k);
 }
 
@@ -29,11 +27,6 @@ int fdt_twin_init(fdt_twin_t *tw, fdt_state_t *q_storage, size_t cap,
 
 /**
  * The projection of A^t_i out of B^t_i for a non-autonomous vessel.
- *
- * Table I gives tau in percent and alpha in radians; the state carries surge
- * in m/s and yaw rate in rad/s. The cage angle comes from the yaw rate with
- * no conversion because both are radians; the throttle comes from surge,
- * which is the quantity it commands.
  */
 static void absorbed_pi(const fdt_state_t *b, const fdt_goal_t *g_now,
                         fdt_actuation_t *out, void *ctx, void *fleet_ctx)
@@ -77,14 +70,10 @@ int fdt_twin_step_ctx(fdt_twin_t *tw, const fdt_input_t *in,
     if (g_prev == NULL || g_now == NULL || b_out == NULL || a_out == NULL) {
         return -1;
     }
-    /* An unseeded twin holds zero states and fails here for every n, which is
-     * how the window rules stay total with no empty-queue special case. */
     if (n == 0 || n > fdt_queue_len(&tw->q)) {
         return -1;
     }
 
-    /* Equation (3) under g^{t-1}_k. Equation (2) is the n == 1 case, and c^t
-     * reaches the dynamics as fleet_ctx. */
     fdt_state_t b = {0};
     tw->delta_e(&tw->q, n, in, g_prev, &b, tw->ctx, fleet_ctx);
 

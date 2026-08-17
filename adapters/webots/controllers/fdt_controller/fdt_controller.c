@@ -2,25 +2,6 @@
  * @file fdt_webots_controller.c
  * @brief The custom WeBots module that runs delta, Section IV.
  *
- * Section IV: "A custom module within WeBots implements delta in C language
- * and carries out the dynamics of the model. The simulation frequency is
- * 8 Hz, i.e. delta is a hard real-time task with deadline of 125 ms."
- *
- * Section III adds where it sits: "A 3D model derived from the DTP resides in
- * a WeBots world as a DTI inside the VE, receiving input from the MQTT
- * infrastructure (except for the camera feed, directly driven by the RTSP
- * client in MCS)."
- *
- * This file is that module. It is the one place where the model's tick and
- * the simulator's tick are the same tick: wb_robot_step() is called with the
- * model's own period, so a frame of the twin is a frame of the world. Letting
- * them drift would make the 3D view a rendering of a different instant than
- * the one the coordinator just computed, and Section I feature (iii) promises
- * a near-real-time visual reference rather than an approximate one.
- *
- * Built by `make webots`, which skips with a notice when WEBOTS_HOME is
- * unset. Nothing in the core library links the WeBots controller library.
- *
  * @note The CPU figures of Section V-A — "running WeBots adds 10% CPU usage
  *       for the first boat and less than 1% for subsequent boats" — are
  *       measured by tools/bench/bench_webots_cpu.c, which opens the
@@ -68,23 +49,11 @@
 
 /**
  * Frame at which FDT_SHOT, if set, captures the 3D view to that path.
- *
- * Numbers cannot tell you the view is right. Both position bugs this
- * controller has had -- hulls rendered 5700 km away, then hulls climbing out
- * of the water -- left every counter green and were caught by a person
- * looking at the viewport. This exists so that looking does not require a
- * person to be present.
  */
 #define SHOT_FRAME 80  /* FDT_SHOT_FRAME overrides */
 
 /**
  * WeBots node DEF names, one per vessel, matching worlds/jundia_fleet.wbt.
- *
- * Resolved by DEF rather than by display name because equation (4) indexes
- * vessels, and a lookup by the string shown in the scene tree would break the
- * moment someone renames a node in the editor. tests/test_world.c checks that
- * each of these exists in the world exactly once, which is the half of this
- * file that can be verified without the SDK.
  */
 static const char *const VESSEL_DEF[MAX_VESSELS] = {
     "PINTADO", "TILAPIA", "DOURADO", "PIAVA",
@@ -118,27 +87,11 @@ static WbFieldRef g_rotation[MAX_VESSELS];
 
 /**
  * Where the world put each hull, and the geodetic point taken to match it.
- *
- * The twin reports a latitude and a longitude; the world wants metres from an
- * arbitrary origin. The two are reconciled by anchoring rather than by
- * converting, for the reason spelled out in render_vessel().
  */
 static double g_origin[MAX_VESSELS][3];
 
 /**
  * One anchor for the whole fleet, not one per vessel.
- *
- * Anchoring each hull on its own first fix quietly deletes the fleet geometry:
- * every vessel then renders as a displacement from wherever the world file
- * happened to place it, so the separation between hulls is whatever the .wbt
- * says and the telemetry's own spacing cancels out exactly. Two boats four
- * metres apart in the data rendered 1.5 m apart, overlapping, because that is
- * what the world file said.
- *
- * A digital twin shows where the vessels are relative to each other. So the
- * first fix from any vessel fixes the geodetic origin, vessel 0's placement
- * fixes the world origin, and every hull is drawn as an offset from that one
- * pair.
  */
 static double g_ref_lat;
 static double g_ref_lon;
@@ -155,10 +108,6 @@ typedef struct {
 
 /**
  * delta^e: the dynamics Section IV says this module carries out.
- *
- * A placeholder integrator, as in examples/daemon.c. Substituting the real
- * hull model is the point of the file being here rather than in the library:
- * the library owns the frame, the application owns the physics.
  */
 static void webots_delta_e(const fdt_queue_t *q, size_t n,
                            const fdt_input_t *in, const fdt_goal_t *g_prev,
@@ -245,8 +194,6 @@ static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
         return;
     }
 
-    /* Judged, never withheld: Section VI lists dropping late packets as
-     * future work, so the verdict is counted and the packet still lands. */
     (void)fdt_fs_accept(&g_fs, &env);
     (void)fdt_dec_input(payload, env.payload_len, &g_decoded[env.vessel]);
 }
@@ -257,73 +204,34 @@ static void render_vessel(size_t k, const fdt_state_t *b)
     if (g_translation[k] == NULL || g_rotation[k] == NULL) {
         return;
     }
-    /* FDT_NO_POSE leaves the hulls wherever the world put them. It exists
-     * because "the boats are not in the view" has two causes that look
-     * identical -- the twin writing a wrong pose, or the camera pointed
-     * somewhere else -- and this separates them in one run. */
     if (getenv("FDT_NO_POSE") != NULL) {
         return;
     }
 
-    /* A state produced before any telemetry arrived carries no position.
-     * Rendering the zero it holds would drag the hull to the null island. */
     if (b->lat_deg == 0.0f && b->lon_deg == 0.0f) {
         return;
     }
 
-    /* Anchor on the first real fix: that geodetic point is taken to be where
-     * the world already placed this hull.
-     *
-     * Converting latitude and longitude to world metres directly does not
-     * work. Multiplying -51.17 degrees by metres per degree puts the vessel
-     * five thousand kilometres from the origin, and the water in this world is
-     * a thousand metres square, so the hulls leave the scene on the first
-     * frame and the operator sees an empty lagoon. */
     if (!g_anchored) {
         g_ref_lat = (double)b->lat_deg;
         g_ref_lon = (double)b->lon_deg;
         g_anchored = 1;
     }
 
-    /* Displacement on a local tangent plane, which is all the vessels of
-     * Section II ever cross. The arithmetic lives in the library so that
-     * tests/test_geo.c can hold it to account; doing it inline here is how it
-     * was wrong in the first place. */
     double dx = 0.0;
     double dz = 0.0;
     fdt_geo_offset(g_ref_lat, g_ref_lon,
                    (double)b->lat_deg, (double)b->lon_deg, &dx, &dz);
 
-    /* WeBots R2025a is ENU: index 0 is east, index 1 is north, index 2 is up.
-     *
-     * Not the Y-up convention most 3D tooling uses, and assuming that one adds
-     * the northward displacement to the altitude instead: the hulls climb out
-     * of the lagoon and fly. The world states the convention plainly if you
-     * read it -- the hulls sit at z = 0.24, a hand's breadth above water whose
-     * box is 0.7 thick, and their rotation axis is 0 0 1.
-     *
-     * The height is left where the world put it. Altitude belongs to buoyancy,
-     * which is the fluid node's business; a twin that wrote its own altitude
-     * every frame would be overriding the physics it is supposed to mirror. */
     const double position[3] = { g_origin[k][0] + dx,   /* east */
                                  g_origin[k][1] + dz,   /* north */
                                  g_origin[k][2] };      /* up, untouched */
     wb_supervisor_field_set_sf_vec3f(g_translation[k], position);
 
-    /* Yaw turns about the vertical axis, which in ENU is Z. Table I gives the
-     * angle in degrees and WeBots wants radians, so the unit is crossed here
-     * rather than assumed. */
     const double yaw_rad = (double)b->yaw_deg / (double)RAD2DEG;
     const double rotation[4] = { 0.0, 0.0, 1.0, yaw_rad };
     wb_supervisor_field_set_sf_rotation(g_rotation[k], rotation);
 
-    /* A solid with Physics does not simply appear where its translation field
-     * says. ODE keeps its own body state, and moving the field without telling
-     * it leaves the two disagreeing: the engine sees a body that teleported,
-     * infers an enormous velocity, and throws the hull away from the fleet.
-     * Resetting the physics re-seats the body at the new pose with its
-     * velocities zeroed, which is what a twin wants -- the pose comes from the
-     * telemetry, not from the engine integrating its own guess. */
     if (g_node[k] != NULL) {
         wb_supervisor_node_reset_physics(g_node[k]);
     }
@@ -336,13 +244,8 @@ int main(int argc, char **argv)
 
     wb_robot_init();
 
-    /* The simulator's tick is the model's tick. Not a coincidence to be
-     * maintained by hand: it is read from the same constant. */
     const int step_ms = (int)(FDT_TICK_NS / 1000000L);
 
-    /* Ask the world how many vessels it holds. The DEFs are tried in order and
-     * the first miss ends the fleet, so a world with PINTADO alone yields one
-     * vessel and the same binary drives it. */
     const char *shot_at = getenv("FDT_SHOT_FRAME");
     if (shot_at != NULL && atoi(shot_at) > 0) {
         g_shot_frame = (size_t)atoi(shot_at);
@@ -358,8 +261,6 @@ int main(int argc, char **argv)
         g_translation[k] = wb_supervisor_node_get_field(node, "translation");
         g_rotation[k]    = wb_supervisor_node_get_field(node, "rotation");
 
-        /* Where the world placed this hull; the twin's motion is rendered as
-         * a displacement from here rather than as an absolute position. */
         const double *t = wb_supervisor_field_get_sf_vec3f(g_translation[k]);
         if (t != NULL) {
             g_origin[k][0] = t[0];
@@ -375,9 +276,6 @@ int main(int argc, char **argv)
         return EXIT_FAILURE;
     }
 
-    /* Transport. Over a real deployment this is fdt_mqtt_open(host, 1883,
-     * "webots-dti", &tr) from adapters/mqtt; the loopback keeps the
-     * controller runnable in a world with no broker attached. */
     static fdt_loop_t loop;
     fdt_transport_t tr = fdt_loop_transport(&loop);
     static fdt_inj_t inj;
@@ -408,10 +306,6 @@ int main(int argc, char **argv)
     fdt_store_init(&store, g_slots, g_vessels);
     fdt_coord_init(&coord, &fleet, &store, webots_ctx, webots_plan, NULL);
 
-    /* One status line every STATUS_EVERY frames. A simulator console that
-     * says nothing is indistinguishable from one whose controller died, and
-     * the WeBots log reports a controller that returns before the simulation
-     * ends as having "crashed" -- so silence here reads as failure. */
     size_t frames = 0;
 
     printf("fdt_controller: %s, %zu vessels, %d ms frame, window %d\n",
@@ -438,14 +332,10 @@ int main(int argc, char **argv)
             continue;
         }
 
-        /* Section I feature (iii): the near-real-time 3D reference. It is
-         * written from the state the coordinator produced this very frame. */
         for (size_t k = 0; k < g_vessels; k++) {
             render_vessel(k, &g_bs[k]);
         }
 
-        /* A^t travels back to the boats. Over a real link this is where the
-         * latency Section V-A observes is incurred. */
         for (size_t k = 0; k < g_vessels; k++) {
             uint8_t payload[FDT_WIRE_ACT_BYTES];
             if (fdt_enc_act(&g_as[k], payload, sizeof payload) < 0) {
@@ -480,9 +370,6 @@ int main(int argc, char **argv)
         }
 
         if (frames % STATUS_EVERY == 0) {
-            /* All three axes, named. The earlier line printed indices 0 and 2
-             * and called them a position, so a hull climbing out of the water
-             * read as ordinary motion across it. */
             const double *pos0 = (g_translation[0] != NULL)
                 ? wb_supervisor_field_get_sf_vec3f(g_translation[0]) : NULL;
             if (g_vessels > 1 && g_translation[1] != NULL) {
@@ -511,8 +398,6 @@ int main(int argc, char **argv)
         }
 
         if (!fdt_feas_ok(&g_feas[0])) {
-            /* Section IV: a DTI that misses the deadline is "merely a
-             * time-bounded simulation model". Worth saying out loud. */
             fprintf(stderr, "DTI infeasible: worst delta %.3f ms\n",
                     (double)fdt_feas_worst_ns(&g_feas[0]) / 1e6);
         }
