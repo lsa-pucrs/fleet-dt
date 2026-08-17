@@ -5,5 +5,5 @@ examples/daemon
 examples/two_paths
 tools/bench/bench_*
 !tools/bench/bench_*.c
-results/
+results/selftest/
 tools/report/report

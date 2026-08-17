@@ -172,10 +172,21 @@ typedef struct {
     int    feasible;
     unsigned long partial;
     unsigned long doubles;
+    unsigned long stale;
+    unsigned long inj_missed;
 } run_t;
 
-/** Runs FRAMES frames with the given fleet size. */
-static run_t run_fleet(unsigned vessels)
+/**
+ * Runs FRAMES frames with the given fleet size.
+ *
+ * @param drop_every   Loopback loss, producing partial frames; 0 for none.
+ * @param defer_every  Loopback deferral, producing double updates; 0 for none.
+ * @param paced        Non-zero to drive the loop with the 125 ms pacer and
+ *                     count real missed deadlines. Costs FRAMES * 125 ms of
+ *                     wall clock, so it is used once rather than per size.
+ */
+static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
+                          unsigned defer_every, int paced, int frames)
 {
     fdt_loop_t loop;
     fdt_transport_t tr = fdt_loop_transport(&loop);
@@ -187,6 +198,8 @@ static run_t run_fleet(unsigned vessels)
     fleet_ctx_t fc = { .spread_deg = 0.0f, .throttle_ceiling_pct = 60.0f };
     const fdt_state_t zero = {0};
     run_t out = {0};
+
+    fdt_loop_set_loss(&loop, drop_every, defer_every);
 
     assert(fdt_inj_init(&inj, &tr, vessels, 8.0, 20260817u) == 0);
     assert(fdt_fs_init(&g_fs, g_seqs, g_hits, vessels) == 0);
@@ -214,10 +227,15 @@ static run_t run_fleet(unsigned vessels)
 
     fdt_feas_init(&feas, FDT_TICK_NS);
 
+    fdt_tick_t tk;
+    if (paced) {
+        fdt_tick_start(&tk, FDT_TICK_NS);
+    }
+
     double inj_total_ns = 0.0;
     const double wall_begin = now_ns();
 
-    for (int frame = 0; frame < FRAMES; frame++) {
+    for (int frame = 0; frame < frames; frame++) {
         /* Injector side: publish one I^t per vessel and time it. */
         const double inj_t0 = now_ns();
         fdt_fs_begin_frame(&g_fs);
@@ -239,6 +257,17 @@ static run_t run_fleet(unsigned vessels)
                                       g_gprev, g_gnow, g_bs, g_as);
         fdt_feas_end(&feas);
         assert(rc == 0);
+
+        if (paced) {
+            /* The real pace question of Section V-B: can the injector still
+             * produce a frame's telemetry inside the period? A missed
+             * deadline here is observed, not derived from a budget sum. */
+            const uint64_t before = fdt_tick_overruns(&tk);
+            fdt_tick_wait(&tk);
+            if (fdt_tick_overruns(&tk) != before) {
+                fdt_inj_note_missed_deadline(&inj);
+            }
+        }
     }
 
     const double wall_ns = now_ns() - wall_begin;
@@ -246,13 +275,15 @@ static run_t run_fleet(unsigned vessels)
     out.dti_worst_ms = (double)fdt_feas_worst_ns(&feas) / 1e6;
     out.dti_mean_ms  = fdt_feas_mean_ns(&feas) / 1e6;
     out.feasible     = fdt_feas_ok(&feas);
-    out.inj_mean_ms  = inj_total_ns / (double)FRAMES / 1e6;
+    out.inj_mean_ms  = inj_total_ns / (double)frames / 1e6;
     out.partial      = (unsigned long)fdt_fs_partial_frames(&g_fs);
     out.doubles      = (unsigned long)fdt_fs_double_updates(&g_fs);
+    out.stale        = (unsigned long)fdt_fs_stale_packets(&g_fs);
+    out.inj_missed   = (unsigned long)fdt_inj_missed_deadlines(&inj);
 
     /* CPU per DTI: the share of wall-clock one vessel's delta consumed. The
      * paper's "< 1% CPU usage per DTI" is the quantity being compared. */
-    const double delta_total_ns = fdt_feas_mean_ns(&feas) * (double)FRAMES;
+    const double delta_total_ns = fdt_feas_mean_ns(&feas) * (double)frames;
     out.cpu_per_dti_pct = 100.0 * (delta_total_ns / wall_ns) /
                           (double)vessels;
 
@@ -285,7 +316,7 @@ int main(void)
 
     for (int i = 0; i < SWEEP_N; i++) {
         const unsigned v = SWEEP[i];
-        const run_t run = run_fleet(v);
+        const run_t run = run_fleet_ex(v, 0, 0, 0, FRAMES);
 
         xs[i]       = (double)v;
         worst_ms[i] = run.dti_worst_ms;
@@ -296,8 +327,9 @@ int main(void)
         if (run.feasible) {
             dti_ceiling = v;
         }
-        /* The injector keeps pace while a whole frame — its publish plus the
-         * DTI's step — still fits inside the 125 ms period. */
+        /* A budget check, not an observation: does one frame's publish plus
+         * one frame's step still fit the period? The observed version, with a
+         * real clock, is the paced confirmation further down. */
         if (run.inj_mean_ms + run.dti_worst_ms < 125.0) {
             inj_ceiling = v;
         }
@@ -310,8 +342,9 @@ int main(void)
                   run.cpu_per_dti_pct, run.inj_mean_ms * 1e3,
                   run.feasible ? "yes" : "NO");
 
-        /* Structural invariants. These do abort: a lost vessel or an
-         * unbalanced counter is a bug, not a slow machine. */
+        /* Structural invariants for the clean sweep. These do abort: over a
+         * lossless link a partial or doubled frame is a bug, not a slow
+         * machine. The lossy row below is where they are expected. */
         assert(run.partial == 0);
         assert(run.doubles == 0);
     }
@@ -330,22 +363,61 @@ int main(void)
     bench_compare(&r, "DTI ceiling here", buf, "not the paper's 25",
                   BENCH_OK);
 
-    bench_section(&r, "injector side — what actually capped the paper at ~25");
+    bench_section(&r, "injector side — the ceiling Section V-B actually hit");
     snprintf(buf, sizeof buf, ">= %u vessels", inj_ceiling);
-    bench_compare(&r, "injector ceiling here", buf,
-                  "> 25 boats, same computer", BENCH_OK);
+    bench_compare(&r, "publish+step fits period", buf,
+                  "budget check, not a pace observation", BENCH_OK);
+
+    /* The observed version. Section V-B's injectors failed because they could
+     * not "keep the simulation pace", which is a missed-deadline count under
+     * a real clock, not a sum of two budgets. One paced run confirms the
+     * derivation at the top of the sweep; running the whole sweep paced would
+     * cost FRAMES * 125 ms per size. */
+    const int paced_frames = 40;
+    const run_t paced = run_fleet_ex(SWEEP[SWEEP_N - 1], 0, 0, 1,
+                                     paced_frames);
+    snprintf(buf, sizeof buf, "%lu of %d frames", paced.inj_missed,
+             paced_frames);
+    bench_compare(&r, "missed deadlines, 64 paced", buf,
+                  "injectors could not keep pace",
+                  (paced.inj_missed == 0) ? BENCH_OK : BENCH_DIVERGE);
     bench_say(&r,
         "  Section V-B attributes its ceiling to the injectors, not to the\n"
         "  DTIs: \"hard-programming injectors to inject packets periodically\n"
         "  could not keep the simulation pace for larger fleets (> 25 boats,\n"
         "  same computer model)\". The two ceilings are reported apart so the\n"
-        "  DTI is not credited with a limit it does not have.\n");
+        "  DTI is not credited with a limit it does not have. This machine\n"
+        "  reaches neither ceiling at 64 vessels; the paper's hardware and\n"
+        "  its real broker are not this loopback.\n");
 
-    bench_section(&r, "frame integrity (Section V-B pathology)");
-    bench_say(&r, "  partial frames: 0   double updates: 0\n");
-    bench_say(&r, "  The loopback transport loses nothing, so the pathology "
-                  "does not\n  appear here. It is exercised over a lossy path "
-                  "in tests/test_wire.c.\n");
+    bench_section(&r, "frame integrity under a lossy link (Section V-B)");
+    bench_say(&r,
+        "  A lossless transport can never show the pathology, so the clean\n"
+        "  sweep above reports zeros by construction. This row injects the\n"
+        "  two faults Section V-B describes: a packet that never arrives, and\n"
+        "  a packet the network stack holds into the following frame.\n\n");
+
+    const run_t lossy = run_fleet_ex(16, 7, 5, 0, FRAMES);
+    bench_say(&r, "  16 vessels, drop 1 in 7, defer 1 in 5, %d frames\n",
+              FRAMES);
+    bench_say(&r, "    partial frames : %lu of %d\n", lossy.partial, FRAMES);
+    bench_say(&r, "    double updates : %lu\n", lossy.doubles);
+    bench_say(&r, "    stale packets  : %lu\n", lossy.stale);
+    bench_say(&r, "    delta worst    : %.1f us   feasible: %s\n",
+              lossy.dti_worst_ms * 1e3, lossy.feasible ? "yes" : "NO");
+
+    snprintf(buf, sizeof buf, "%lu partial, %lu double",
+             lossy.partial, lossy.doubles);
+    bench_compare(&r, "pathology reproduced", buf,
+                  "partial and doubled frame updates",
+                  (lossy.partial > 0 && lossy.doubles > 0)
+                      ? BENCH_OK : BENCH_DIVERGE);
+    bench_say(&r,
+        "  Counted, never corrected. Dropping late packets at the receiver is\n"
+        "  item D6 of docs/spec/paper-claims.md, which Section VI declares\n"
+        "  future work; the DTI keeps stepping and the monitor keeps score.\n"
+        "  Note that delta stays feasible throughout: a degraded link starves\n"
+        "  the model, it does not slow it.\n");
 
     fdt_plot_t p;
     fdt_plot_init(&p, "Fleet scaling: DTI cost against injector cost",

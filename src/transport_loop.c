@@ -32,11 +32,28 @@ static int loop_publish(void *self, const char *topic, const uint8_t *buf,
         return -1;
     }
 
+    lo->published++;
+
+    /* A dropped publish reports success. On a real link it did succeed: the
+     * loss happened downstream, and the boat has no way to know. Returning
+     * -1 here would model a different failure, one the sender can react to. */
+    if (lo->drop_every != 0 && (lo->published % lo->drop_every) == 0) {
+        lo->dropped++;
+        return 0;
+    }
+
+    const int hold = (lo->defer_every != 0 &&
+                      (lo->published % lo->defer_every) == 0);
+    if (hold) {
+        lo->deferred++;
+    }
+
     snprintf(lo->q[lo->qlen].topic, FDT_LOOP_TOPIC, "%s", topic);
     if (len > 0) {
         memcpy(lo->q[lo->qlen].payload, buf, len);
     }
-    lo->q[lo->qlen].len = len;
+    lo->q[lo->qlen].len      = len;
+    lo->q[lo->qlen].deferred = hold;
     lo->qlen++;
     return 0;
 }
@@ -69,7 +86,24 @@ static int loop_poll(void *self, int timeout_ms)
     }
 
     const size_t pending = lo->qlen;
+    size_t       kept    = 0;
+    int          delivered = 0;
+
     for (size_t i = 0; i < pending; i++) {
+        if (lo->q[i].deferred) {
+            /* Still in the network stack. Clear the flag and compact it to
+             * the front, so the next poll delivers it -- inside the frame
+             * after the one it belonged to, which is exactly the arrival
+             * Section V-B describes. */
+            lo->q[i].deferred = 0;
+            if (kept != i) {
+                lo->q[kept] = lo->q[i];
+            }
+            kept++;
+            continue;
+        }
+
+        delivered++;
         for (size_t s = 0; s < lo->nsubs; s++) {
             /* Exact match. Section III's data path uses no wildcard; the
              * bridge does, and that lives in the broker configuration. */
@@ -81,9 +115,10 @@ static int loop_poll(void *self, int timeout_ms)
     }
 
     /* Drained whether or not anyone was listening: an unsubscribed topic is
-     * published to the void, which is what a real broker does too. */
-    lo->qlen = 0;
-    return (int)pending;
+     * published to the void, which is what a real broker does too. Anything
+     * deferred stays queued for the next call. */
+    lo->qlen = kept;
+    return delivered;
 }
 
 static void loop_close(void *self)
@@ -92,6 +127,26 @@ static void loop_close(void *self)
     if (lo != NULL) {
         memset(lo, 0, sizeof *lo);
     }
+}
+
+void fdt_loop_set_loss(fdt_loop_t *lo, unsigned drop_every,
+                       unsigned defer_every)
+{
+    if (lo == NULL) {
+        return;
+    }
+    lo->drop_every  = drop_every;
+    lo->defer_every = defer_every;
+}
+
+uint64_t fdt_loop_dropped(const fdt_loop_t *lo)
+{
+    return (lo == NULL) ? 0 : lo->dropped;
+}
+
+uint64_t fdt_loop_deferred(const fdt_loop_t *lo)
+{
+    return (lo == NULL) ? 0 : lo->deferred;
 }
 
 fdt_transport_t fdt_loop_transport(fdt_loop_t *lo)

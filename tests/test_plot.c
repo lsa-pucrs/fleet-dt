@@ -58,8 +58,8 @@ static void test_init_and_guards(void)
      * frame that reads as "measured nothing" rather than "wrote nothing". */
     fdt_plot_t empty;
     assert(fdt_plot_init(&empty, "T", "x", "y") == 0);
-    assert(fdt_plot_write_svg(&empty, "results/should-not-exist.svg") == -1);
-    assert(fdt_plot_write_csv(&empty, "results/should-not-exist.csv") == -1);
+    assert(fdt_plot_write_svg(&empty, "results/selftest/should-not-exist.svg") == -1);
+    assert(fdt_plot_write_csv(&empty, "results/selftest/should-not-exist.csv") == -1);
 }
 
 static void test_svg_output(void)
@@ -81,12 +81,16 @@ static void test_svg_output(void)
     assert(fdt_plot_series(&p, "overruns", xs, bars, 32, FDT_PLOT_BAR) == 0);
     assert(fdt_plot_hline(&p, 125.0, "paper: 125 ms deadline") == 0);
 
+    /* Unit-test output goes to a subdirectory of its own. results/ holds
+     * measurements, and synthetic data sitting beside real data is how a
+     * reader ends up citing a number that came from a test fixture. */
     assert(fdt_mkdir_p("results") == 0);
     assert(fdt_mkdir_p("results") == 0);  /* idempotent */
-    assert(fdt_plot_write_svg(&p, "results/test_plot.svg") == 0);
+    assert(fdt_mkdir_p("results/selftest") == 0);
+    assert(fdt_plot_write_svg(&p, "results/selftest/plot.svg") == 0);
 
     static char buf[65536];
-    const size_t n = slurp("results/test_plot.svg", buf, sizeof buf);
+    const size_t n = slurp("results/selftest/plot.svg", buf, sizeof buf);
     assert(n > 0);
 
     /* Well-formed and self-contained. */
@@ -124,11 +128,11 @@ static void test_csv_output(void)
     assert(fdt_plot_series(&p, "long", xs, ya, 4, FDT_PLOT_LINE) == 0);
     assert(fdt_plot_series(&p, "short", xs, yb, 2, FDT_PLOT_LINE) == 0);
 
-    assert(fdt_mkdir_p("results") == 0);
-    assert(fdt_plot_write_csv(&p, "results/test_plot.csv") == 0);
+    assert(fdt_mkdir_p("results/selftest") == 0);
+    assert(fdt_plot_write_csv(&p, "results/selftest/plot.csv") == 0);
 
     static char buf[4096];
-    assert(slurp("results/test_plot.csv", buf, sizeof buf) > 0);
+    assert(slurp("results/selftest/plot.csv", buf, sizeof buf) > 0);
 
     assert(strncmp(buf, "x,long,short\n", 13) == 0);
     assert(strstr(buf, "0,10,1.5\n") != NULL);
@@ -149,11 +153,11 @@ static void test_log_axis(void)
     fdt_plot_set_log_y(&p, 1);
     assert(p.log_y == 1);
 
-    assert(fdt_mkdir_p("results") == 0);
-    assert(fdt_plot_write_svg(&p, "results/test_plot_log.svg") == 0);
+    assert(fdt_mkdir_p("results/selftest") == 0);
+    assert(fdt_plot_write_svg(&p, "results/selftest/plot_log.svg") == 0);
 
     static char buf[65536];
-    assert(slurp("results/test_plot_log.svg", buf, sizeof buf) > 0);
+    assert(slurp("results/selftest/plot_log.svg", buf, sizeof buf) > 0);
     assert(strstr(buf, "<circle") != NULL);
 }
 
@@ -164,7 +168,7 @@ int main(void)
     test_csv_output();
     test_log_axis();
 
-    printf("wrote results/test_plot.svg, results/test_plot.csv\n");
+    printf("wrote results/selftest/plot.svg and .csv\n");
     printf("test_plot: ok\n");
     return 0;
 }

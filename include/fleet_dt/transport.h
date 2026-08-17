@@ -113,8 +113,17 @@ typedef struct {
         char    topic[FDT_LOOP_TOPIC];
         uint8_t payload[FDT_LOOP_PAYLOAD];
         size_t  len;
+        int     deferred; /**< Held back for the next poll. */
     } q[FDT_LOOP_QUEUE];
     size_t qlen;
+
+    /* Fault injection. Zero on both means a lossless link, which is the
+     * default and what most measurements want. */
+    unsigned drop_every;  /**< Discard every Nth publish; 0 disables. */
+    unsigned defer_every; /**< Hold every Nth publish one poll; 0 disables. */
+    unsigned published;   /**< Publishes seen, driving the two counters. */
+    uint64_t dropped;     /**< Publishes discarded. */
+    uint64_t deferred;    /**< Publishes held back at least one poll. */
 
     struct {
         char          topic[FDT_LOOP_TOPIC];
@@ -130,5 +139,32 @@ typedef struct {
  *         member is NULL, which the caller can test.
  */
 fdt_transport_t fdt_loop_transport(fdt_loop_t *lo);
+
+/**
+ * @brief Makes the loopback lossy, so the Section V-B pathology can be seen.
+ *
+ * A lossless transport cannot exhibit what Section V-B reports: "some packets
+ * missed their deadlines and could not reach the DTI in time... the state of
+ * some boats was updated twice within the same simulation frame". A benchmark
+ * over a perfect link therefore measures a fleet that never degrades, which is
+ * not the fleet the paper observed.
+ *
+ * @param drop_every   Discard every Nth publish, producing a partial frame.
+ *                     The publisher is told the send succeeded, because on a
+ *                     real link it did — the loss happened downstream.
+ * @param defer_every  Hold every Nth publish back one poll, so it lands in
+ *                     the following frame beside that frame's own message and
+ *                     produces the double update.
+ *
+ * Zero disables either. Both default to zero.
+ */
+void fdt_loop_set_loss(fdt_loop_t *lo, unsigned drop_every,
+                       unsigned defer_every);
+
+/** @brief Publishes the lossy loopback discarded. */
+uint64_t fdt_loop_dropped(const fdt_loop_t *lo);
+
+/** @brief Publishes the lossy loopback held back at least one poll. */
+uint64_t fdt_loop_deferred(const fdt_loop_t *lo);
 
 #endif /* FLEET_DT_TRANSPORT_H */

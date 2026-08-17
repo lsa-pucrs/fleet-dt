@@ -42,14 +42,14 @@ BENCHBIN = $(BENCHSRC:.c=)
 
 RESULTS = results
 
-.PHONY: all lib test examples bench report mqtt webots clean
+.PHONY: all lib test examples bench report syntax mqtt webots clean
 
 # Adapters needing a third-party SDK. Each skips with a notice rather than
 # failing the build, so a reader without the SDK still gets a green tree.
 MOSQ_CFLAGS = $(shell pkg-config --cflags libmosquitto 2>/dev/null)
 MOSQ_LIBS   = $(shell pkg-config --libs libmosquitto 2>/dev/null)
 
-all: lib test examples bench report
+all: lib test examples bench syntax report
 
 lib: $(LIB)
 
@@ -77,6 +77,17 @@ bench: $(BENCHBIN)
 	@mkdir -p $(RESULTS)
 	@for b in $(BENCHBIN); do echo "== $$b"; ./$$b || exit 1; echo; done
 	@echo "artefacts in $(RESULTS)/"
+
+# Compile coverage for the adapters whose SDK is not installed here. Parsing
+# and type-checking them against stub headers is the difference between
+# "written" and "known to compile"; it does not replace a real build, which is
+# the only thing that can catch a wrong assumption about the API.
+syntax:
+	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
+	  adapters/mqtt/fdt_mqtt.c && echo "syntax ok: adapters/mqtt"
+	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
+	  adapters/webots/fdt_webots_controller.c && \
+	  echo "syntax ok: adapters/webots"
 
 mqtt: $(LIB)
 	@if [ -z "$(MOSQ_LIBS)" ]; then \

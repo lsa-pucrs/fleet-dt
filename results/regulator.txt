@@ -1,0 +1,31 @@
+== fleet-dt bandwidth regulator bench ==
+fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
+DT rate: 8 Hz   samples per sensor: 20000
+
+--- per sensor rate ---
+   sensor Hz published Hz   control Hz      saved    verdict
+           1         1.00            1       0.0 %  untouched
+           2         2.00            2       0.0 %  untouched
+           4         4.00            4       0.0 %  untouched
+           8         8.00            8       0.0 %  untouched
+          10         8.00           10      20.0 %  decimated
+          20         8.00           20      60.0 %  decimated
+          50         8.00           50      84.0 %  decimated
+         100         7.99          100      92.0 %  decimated
+         200         8.00          200      96.0 %  decimated
+         400         8.00          400      98.0 %  decimated
+        1000         8.00         1000      99.2 %  decimated
+
+--- the two halves of the Section III claim ---
+  publication decimated      8.00 Hz from 1000 Hz   paper: drops samples in the MQTT client   [OK]
+  link traffic removed       99.2 % of traffic      paper: maximizing use of shared links     [OK]
+  1 Hz gyroscope             0 dropped              paper: sensors slower than the DT pass    [OK]
+  The regulator sits in the publish path, never in the sensor path.
+  Sampled counts every reading the sensor produced, including the
+  ones the link never carried, so a control loop reading the sensor
+  directly keeps its full rate. A regulator that slowed the sensor
+  would buy bandwidth by degrading control, which is the opposite of
+  the QoS the abstract claims.
+
+artefacts: results/regulator.txt, results/regulator.csv, results/regulator.svg
+artefacts: results/regulator_saved.svg

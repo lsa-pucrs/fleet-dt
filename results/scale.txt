@@ -1,0 +1,52 @@
+== fleet-dt scale bench ==
+fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
+frames per size: 200   window depth: 4   queue capacity: 8
+
+--- per fleet size ---
+   vessels   delta worst    delta mean     cpu/DTI     inj/frame   feasible
+         1        0.9 us        0.1 us    17.499 %        0.4 us        yes
+         2        0.4 us        0.2 us     9.062 %        0.7 us        yes
+         4        0.6 us        0.3 us     3.927 %        1.4 us        yes
+         8        4.4 us        0.6 us     1.890 %        3.0 us        yes
+        16        1.3 us        0.9 us     0.748 %        6.7 us        yes
+        25        1.9 us        1.6 us     0.436 %       12.5 us        yes
+        32        2.1 us        1.8 us     0.312 %       16.5 us        yes
+        48        7.6 us        2.6 us     0.174 %       27.8 us        yes
+        64        3.4 us        2.1 us     0.119 %       25.8 us        yes
+
+--- DTI side — what Section V-B calls negligible ---
+  cpu per DTI                0.1193 %               paper: < 1 %                              [OK]
+  worst delta, 64 vessels    3.4 us                 paper: < 125 ms deadline                  [OK]
+  DTI ceiling here           >= 64 vessels          paper: not the paper's 25                 [OK]
+
+--- injector side — the ceiling Section V-B actually hit ---
+  publish+step fits period   >= 64 vessels          paper: budget check, not a pace observation [OK]
+  missed deadlines, 64 paced 0 of 40 frames         paper: injectors could not keep pace      [OK]
+  Section V-B attributes its ceiling to the injectors, not to the
+  DTIs: "hard-programming injectors to inject packets periodically
+  could not keep the simulation pace for larger fleets (> 25 boats,
+  same computer model)". The two ceilings are reported apart so the
+  DTI is not credited with a limit it does not have. This machine
+  reaches neither ceiling at 64 vessels; the paper's hardware and
+  its real broker are not this loopback.
+
+--- frame integrity under a lossy link (Section V-B) ---
+  A lossless transport can never show the pathology, so the clean
+  sweep above reports zeros by construction. This row injects the
+  two faults Section V-B describes: a packet that never arrives, and
+  a packet the network stack holds into the following frame.
+
+  16 vessels, drop 1 in 7, defer 1 in 5, 200 frames
+    partial frames : 200 of 200
+    double updates : 455
+    stale packets  : 0
+    delta worst    : 1.6 us   feasible: yes
+  pathology reproduced       200 partial, 455 double paper: partial and doubled frame updates  [OK]
+  Counted, never corrected. Dropping late packets at the receiver is
+  item D6 of docs/spec/paper-claims.md, which Section VI declares
+  future work; the DTI keeps stepping and the monitor keeps score.
+  Note that delta stays feasible throughout: a degraded link starves
+  the model, it does not slow it.
+
+artefacts: results/scale.txt, results/scale.csv, results/scale.svg
+artefacts: results/scale_cpu.svg

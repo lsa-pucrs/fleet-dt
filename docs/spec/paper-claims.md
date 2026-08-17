@@ -43,11 +43,20 @@ em uma equação a partir da (3).
   **desalinha**.
 - **pendente** — ainda não construído.
 
-¹ O artefato existe e está versionado; o *runtime* depende de um SDK externo
-(WeBots, libmosquitto) e fica atrás de `make webots` / `make mqtt`, que pulam
-com aviso quando ele falta. `make lib` e `make test` seguem verdes sem nada
-instalado. Medir o que o SDK faz — o consumo de CPU do WeBots, C22 — continua
-sendo fronteira: nenhum artefato deste repositório pode produzir esse número.
+¹ **Existir não é compilar.** Dois adaptadores — MQTT e WeBots — não podem ser
+linkados sem seus SDKs, que não estão nesta máquina. `make syntax` os
+type-checa contra headers-stub em `tools/stubs/`, o que separa "escrito" de
+"sabidamente compila", mas não substitui um build real: um erro de premissa
+sobre a API sobrevive ao stub.
+
+Por isso C3 e C8 ficam em **fronteira**, não em `quita`: um arquivo que nunca
+passou por um linker não é evidência de integração. C2 fica em `quita` porque o
+que ele afirma — a arquitetura assenta em MQTT — é a costura `transport.h` mais
+o loopback, ambos testados, mais a config de bridge versionada; o cliente
+mosquitto é a implementação daquela costura, não a afirmação.
+
+Medir o que o SDK faz — consumo de CPU do WeBots, C22 — é fronteira por
+natureza: nenhum artefato deste repositório pode produzir esse número.
 
 O status desta tabela é gerado por `make report`, que percorre a lista e
 imprime o que ela deveria dizer. Ele nunca edita a tabela: divergência entre as
@@ -58,8 +67,8 @@ duas é exatamente o que um humano precisa olhar.
 | id | Afirmação | § | Artefato que quita | Status |
 |---|---|---|---|---|
 | C1 | "a fleet-level Digital Twin model and architecture for AUSVs" | Abstract | **roll-up**: quita quando C2–C19 estiverem em `quita` ou `fronteira` | quita |
-| C2 | "The architecture relies on the MQTT protocol" | Abstract, §III | `include/fleet_dt/transport.h` + `adapters/mqtt/` | quita |
-| C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/`, `adapters/webots/`, `include/fleet_dt/dte.h` | quita ¹ |
+| C2 | "The architecture relies on the MQTT protocol" | Abstract, §III | `transport.h` + loopback testados; `adapters/mqtt/` só sintaxe | quita ¹ |
+| C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/` (testado), `adapters/webots/` (só sintaxe), `dte.h` (testado) | fronteira ¹ |
 | C4 | "Link-budget modeling is validated in the context of the Jundiá Project's fleet" | Abstract, §V-A | `include/fleet_dt/linkbudget.h` + `tools/bench/link_budget` | quita |
 | C5 | "introduces bandwidth regulators that guarantee QoS while maximizing the use of shared wireless links" | Abstract, §III | `include/fleet_dt/regulator.h` + `tests/test_regulator.c` | quita |
 
@@ -71,7 +80,7 @@ C5 é a contribuição declarada do paper. Sem ela o repo não quita o abstract.
 |---|---|---|---|
 | C6 | "(i) it models fleets as a DTA composed of DTIs per-vessel" | `fdt_fleet_t` sobre `fdt_twin_t` | quita |
 | C7 | "(ii) it supports running multiple simulations in parallel in the same DTE" | `adapters/sim/` — registro de simulações amarradas ao mesmo tick | quita |
-| C8 | "(iii) it provides a near-real-time 3D visual reference for the mission operator" | `adapters/webots/` + `adapters/rtsp/` | quita ¹ |
+| C8 | "(iii) it provides a near-real-time 3D visual reference for the mission operator" | `adapters/webots/` — escreve nos campos do supervisor; só sintaxe aqui | fronteira ¹ |
 
 ## C. Arquitetura, §III
 
