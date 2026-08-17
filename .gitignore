@@ -12,3 +12,11 @@ tools/bench/bench_*
 results/selftest/
 tools/report/report
 fleet_dt_it_mqtt
+
+# The WeBots controller binary sits beside its source, because that is where
+# the simulator looks for it; and WeBots writes a .wbproj next to the world to
+# remember viewport state. Neither belongs in the repository.
+adapters/webots/controllers/*/[!.]*
+!adapters/webots/controllers/*/*.c
+!adapters/webots/controllers/*/*.h
+adapters/webots/worlds/.*.wbproj
