@@ -26,15 +26,15 @@
 <line class="grid" x1="72.0" y1="358.0" x2="670.0" y2="358.0"/>
 <text class="tick" x="64.0" y="362.0" text-anchor="end">0</text>
 <line class="grid" x1="72.0" y1="296.8" x2="670.0" y2="296.8"/>
-<text class="tick" x="64.0" y="300.8" text-anchor="end">4.16</text>
+<text class="tick" x="64.0" y="300.8" text-anchor="end">4.152</text>
 <line class="grid" x1="72.0" y1="235.6" x2="670.0" y2="235.6"/>
-<text class="tick" x="64.0" y="239.6" text-anchor="end">8.321</text>
+<text class="tick" x="64.0" y="239.6" text-anchor="end">8.305</text>
 <line class="grid" x1="72.0" y1="174.4" x2="670.0" y2="174.4"/>
-<text class="tick" x="64.0" y="178.4" text-anchor="end">12.48</text>
+<text class="tick" x="64.0" y="178.4" text-anchor="end">12.46</text>
 <line class="grid" x1="72.0" y1="113.2" x2="670.0" y2="113.2"/>
-<text class="tick" x="64.0" y="117.2" text-anchor="end">16.64</text>
+<text class="tick" x="64.0" y="117.2" text-anchor="end">16.61</text>
 <line class="grid" x1="72.0" y1="52.0" x2="670.0" y2="52.0"/>
-<text class="tick" x="64.0" y="56.0" text-anchor="end">20.8</text>
+<text class="tick" x="64.0" y="56.0" text-anchor="end">20.76</text>
 <line class="grid" x1="72.0" y1="52.0" x2="72.0" y2="358.0"/>
 <text class="tick" x="72.0" y="376.0" text-anchor="middle">1</text>
 <line class="grid" x1="171.7" y1="52.0" x2="171.7" y2="358.0"/>
@@ -55,14 +55,14 @@
 <line class="rule" x1="72.0" y1="343.3" x2="670.0" y2="343.3"/>
 <text class="rulelab" x="678.0" y="347.3">&lt; 1 % per DTI (Sec. V-B)</text>
 <rect x="48.08" y="74.67" width="47.84" height="283.33" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="57.57" y="222.88" width="47.84" height="135.12" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="76.56" y="292.60" width="47.84" height="65.40" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="114.52" y="330.35" width="47.84" height="27.65" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="190.46" y="346.77" width="47.84" height="11.23" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="275.89" y="351.36" width="47.84" height="6.64" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="342.33" y="353.37" width="47.84" height="4.63" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="57.57" y="233.30" width="47.84" height="124.70" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="76.56" y="299.16" width="47.84" height="58.84" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="114.52" y="330.39" width="47.84" height="27.61" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="190.46" y="345.66" width="47.84" height="12.34" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="275.89" y="351.42" width="47.84" height="6.58" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="342.33" y="353.06" width="47.84" height="4.94" fill="#2563eb" fill-opacity="0.85"/>
 <rect x="494.21" y="355.24" width="47.84" height="2.76" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="646.08" y="356.27" width="47.84" height="1.73" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="646.08" y="356.19" width="47.84" height="1.81" fill="#2563eb" fill-opacity="0.85"/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
 <text class="legend" x="698.0" y="64.0">measured</text>
 </svg>

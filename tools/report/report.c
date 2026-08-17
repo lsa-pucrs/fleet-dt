@@ -152,6 +152,8 @@ static const bench_t BENCHES[] = {
       { "latency", NULL, NULL } },
     { "jitter",    "Frame timing (C13, C21)",
       { "jitter", "jitter_deviation", NULL } },
+    { "webots_cpu", "CPU cost per vessel in the simulation (C22)",
+      { "webots_cpu", NULL, NULL } },
 };
 #define NBENCHES ((int)(sizeof BENCHES / sizeof BENCHES[0]))
 

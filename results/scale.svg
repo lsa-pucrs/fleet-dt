@@ -24,15 +24,15 @@
 <rect class="bg" x="0" y="0" width="860" height="420"/>
 <text class="title" x="72.0" y="28">Fleet scaling: DTI cost against injector cost</text>
 <line class="grid" x1="72.0" y1="358.0" x2="670.0" y2="358.0"/>
-<text class="tick" x="64.0" y="362.0" text-anchor="end">0.0002429</text>
+<text class="tick" x="64.0" y="362.0" text-anchor="end">0.0001557</text>
 <line class="grid" x1="72.0" y1="296.8" x2="670.0" y2="296.8"/>
-<text class="tick" x="64.0" y="300.8" text-anchor="end">0.003423</text>
+<text class="tick" x="64.0" y="300.8" text-anchor="end">0.002398</text>
 <line class="grid" x1="72.0" y1="235.6" x2="670.0" y2="235.6"/>
-<text class="tick" x="64.0" y="239.6" text-anchor="end">0.04824</text>
+<text class="tick" x="64.0" y="239.6" text-anchor="end">0.03694</text>
 <line class="grid" x1="72.0" y1="174.4" x2="670.0" y2="174.4"/>
-<text class="tick" x="64.0" y="178.4" text-anchor="end">0.6798</text>
+<text class="tick" x="64.0" y="178.4" text-anchor="end">0.569</text>
 <line class="grid" x1="72.0" y1="113.2" x2="670.0" y2="113.2"/>
-<text class="tick" x="64.0" y="117.2" text-anchor="end">9.58</text>
+<text class="tick" x="64.0" y="117.2" text-anchor="end">8.764</text>
 <line class="grid" x1="72.0" y1="52.0" x2="670.0" y2="52.0"/>
 <text class="tick" x="64.0" y="56.0" text-anchor="end">135</text>
 <line class="grid" x1="72.0" y1="52.0" x2="72.0" y2="358.0"/>
@@ -52,11 +52,11 @@
 <rect class="frame" x="72.0" y="52.0" width="598.0" height="306.0"/>
 <text class="axis" x="371.0" y="402.0" text-anchor="middle">vessels in the fleet</text>
 <text class="axis" x="22.0" y="205.0" text-anchor="middle" transform="rotate(-90 22.0 205.0)">milliseconds per frame (log)</text>
-<line class="rule" x1="72.0" y1="53.8" x2="670.0" y2="53.8"/>
-<text class="rulelab" x="678.0" y="57.8">125 ms deadline (Sec. IV)</text>
-<polyline fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round" points="72.00,314.70 81.49,330.90 100.48,261.04 138.44,284.21 214.38,264.98 299.81,263.90 366.25,262.41 518.13,266.22 670.00,287.59 "/>
-<polyline fill="none" stroke="#dc2626" stroke-width="2" stroke-linejoin="round" points="72.00,358.00 81.49,349.79 100.48,337.12 138.44,323.06 214.38,307.86 299.81,296.19 366.25,293.25 518.13,299.06 670.00,299.89 "/>
-<polyline fill="none" stroke="#059669" stroke-width="2" stroke-linejoin="round" points="72.00,329.89 81.49,318.15 100.48,303.16 138.44,283.72 214.38,262.60 299.81,248.83 366.25,242.88 518.13,245.68 670.00,241.97 "/>
+<line class="rule" x1="72.0" y1="53.7" x2="670.0" y2="53.7"/>
+<text class="rulelab" x="678.0" y="57.7">125 ms deadline (Sec. IV)</text>
+<polyline fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round" points="72.00,313.84 81.49,334.75 100.48,321.88 138.44,278.65 214.38,257.35 299.81,284.44 366.25,257.30 518.13,242.06 670.00,242.68 "/>
+<polyline fill="none" stroke="#dc2626" stroke-width="2" stroke-linejoin="round" points="72.00,358.00 81.49,349.81 100.48,337.41 138.44,323.69 214.38,312.03 299.81,301.28 366.25,286.68 518.13,274.55 670.00,272.16 "/>
+<polyline fill="none" stroke="#059669" stroke-width="2" stroke-linejoin="round" points="72.00,331.00 81.49,318.96 100.48,301.69 138.44,285.58 214.38,270.58 299.81,255.08 366.25,239.44 518.13,222.88 670.00,217.09 "/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
 <text class="legend" x="698.0" y="64.0">delta worst (DTI)</text>
 <rect x="680.0" y="74.0" width="12" height="12" fill="#dc2626"/>

@@ -74,15 +74,30 @@ o loopback, ambos testados, mais a config de bridge versionada; o cliente
 mosquitto é a implementação daquela costura, não a afirmação.
 
 C22 mudou de natureza mas não de status. O benchmark existe, roda e mede: três
-mundos idênticos exceto no número de vasos, mediana de 3 execuções, e a
-diferença entre eles. O que ele reporta é que **esta máquina não resolve o
-sinal**: o incremento do segundo barco deu −1,60% com dispersão de 3,00%, e um
-incremento negativo é fisicamente impossível, logo é ruído. O relatório diz
-isso em vez de publicar o número, e não calcula a razão primeiro:subsequente
-porque dividir por algo que não se mede vestiria ruído de achado.
+mundos idênticos exceto no número de vasos, mediana de N execuções, e a
+diferença entre eles.
 
-O caminho para fechar é amostragem mais longa num host mais quieto —
-`SAMPLE_S` e `REPEATS` em `bench_webots_cpu.c` são as alavancas.
+Com amostras de 10 s, duas execuções discordaram **até no sinal** — uma deu o
+segundo barco em −1,60%, que é fisicamente impossível e portanto ruído puro.
+Com 25 s × 5 execuções (`FDT_CPU_SAMPLE_S=25 FDT_CPU_REPEATS=5`) a dispersão
+caiu de 3–6% para 0,8% e o resultado estabilizou:
+
+| mundo | vasos | CPU mediana | dispersão | incremento |
+|---|---|---|---|---|
+| `jundia_empty` | 0 | 8,76% | 0,76% | 8,76% (só o renderizador) |
+| `jundia_single` | 1 | 10,28% | 0,80% | **1,52%** (primeiro barco) |
+| `jundia_fleet` | 2 | 10,80% | 2,08% | **0,52%** (segundo barco) |
+
+**A forma da afirmação se reproduz**: o primeiro casco custa cerca de três
+vezes o segundo, porque o renderizador, o mundo físico e o fluido são pagos uma
+vez só. É essa forma que sustenta a arquitetura — uma frota é viável porque o
+vaso N+1 é quase de graça.
+
+**Os valores absolutos não se reproduzem**, e nenhum dos dois incrementos passa
+o piso de ruído deste host (2,08%). Por isso ambos saem como `[BOUNDARY]` em
+vez de `[OK]` ou `[DIVERGE]`: um número que a máquina não resolve não é
+concordância nem discordância — não é medição. Fechar de vez pede um host mais
+quieto e amostras mais longas.
 
 O status desta tabela é gerado por `make report`, que percorre a lista e
 imprime o que ela deveria dizer. Ele nunca edita a tabela: divergência entre as
@@ -135,7 +150,7 @@ C5 é a contribuição declarada do paper. Sem ela o repo não quita o abstract.
 |---|---|---|---|
 | C20 | "Due to the size of packets (48 KB payload plus camera feed frame), the bandwidth usage increased < 1% for an update window of 125 ms" | `tools/bench/link_budget` — payload de **48 KB**, não 48 bytes | quita |
 | C21 | "MQTT introduced no notable latency, nor did WeBots' visual feedback (3D model) suffer from stuttering" | `tools/bench/jitter` sobre o transporte | quita |
-| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | `tools/bench/bench_webots_cpu.c` + os três mundos — **medido, inconclusivo**: o custo por casco fica sob o piso de ruído desta máquina | fronteira |
+| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | `tools/bench/bench_webots_cpu.c` + os três mundos — medido; a **forma** da afirmação se reproduz, os valores absolutos não, e nenhum incremento passa o piso de ruído deste host | fronteira |
 | C23 | "Running δ in less than 125 ms is feasible. However, actuation is delivered late to the boat, as it has to travel back through the network" | duas medições distintas: tempo de δ (`feasibility`) e RTT de atuação (`bench/latency`) | quita |
 | C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | exemplo com janela de profundidade > 1 | quita |
 | C25 | "the resources required to add more DTIs to the fleet are negligible (< 1% CPU usage per DTI)" | `tools/bench/scale` | quita |
