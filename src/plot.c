@@ -98,6 +98,75 @@ typedef struct {
     double y_pos_min; /**< Smallest strictly positive y, for the log axis. */
 } bounds_t;
 
+/**
+ * @brief A tick step a reader can hold in their head.
+ *
+ * Dividing a range into a fixed number of equal parts produces labels like
+ * 107.1 and 0.8333, which say nothing about the data and everything about the
+ * divisor. This rounds the step to 1, 2, 2.5 or 5 times a power of ten, so the
+ * labels land on values a reader recognises.
+ */
+static double nice_step(double range, int target)
+{
+    double raw, mag, frac;
+
+    if (!(range > 0.0) || target <= 0) {
+        return 1.0;
+    }
+    raw  = range / (double)target;
+    mag  = pow(10.0, floor(log10(raw)));
+    frac = raw / mag;
+
+    if (frac <= 1.0) {
+        return 1.0 * mag;
+    }
+    if (frac <= 2.0) {
+        return 2.0 * mag;
+    }
+    if (frac <= 2.5) {
+        return 2.5 * mag;
+    }
+    if (frac <= 5.0) {
+        return 5.0 * mag;
+    }
+    return 10.0 * mag;
+}
+
+/** Non-zero when every abscissa of every series is a whole number. */
+static int x_is_integral(const fdt_plot_t *p)
+{
+    for (size_t s = 0; s < p->nseries; s++) {
+        for (size_t i = 0; i < p->series[s].n; i++) {
+            const double v = p->series[s].x[i];
+
+            if (v != floor(v) || fabs(v) > 1e9) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/** Smallest gap between neighbouring abscissae of the bar series. */
+static double min_bar_gap(const fdt_plot_t *p)
+{
+    double gap = 0.0;
+
+    for (size_t s = 0; s < p->nseries; s++) {
+        if (p->series[s].kind != FDT_PLOT_BAR) {
+            continue;
+        }
+        for (size_t i = 1; i < p->series[s].n; i++) {
+            const double d = fabs(p->series[s].x[i] - p->series[s].x[i - 1]);
+
+            if (d > 0.0 && (gap == 0.0 || d < gap)) {
+                gap = d;
+            }
+        }
+    }
+    return gap;
+}
+
 static bounds_t compute_bounds(const fdt_plot_t *p)
 {
     bounds_t b = { .x_min = 1e308, .x_max = -1e308,
@@ -140,6 +209,28 @@ static bounds_t compute_bounds(const fdt_plot_t *p)
     }
     if (b.y_pos_min > 1e307) {
         b.y_pos_min = 1e-9;
+    }
+
+    /* A bar centred on the first abscissa would hang half outside the frame,
+       so the horizontal range widens by half a bar on each side. */
+    {
+        const double gap = min_bar_gap(p);
+
+        if (gap > 0.0) {
+            b.x_min -= gap / 2.0;
+            b.x_max += gap / 2.0;
+        }
+    }
+
+    /* Snap the linear ordinate to the tick step, so the axis begins and ends
+       on a label rather than on a remainder. */
+    if (!p->log_y) {
+        const double step = nice_step(b.y_max - b.y_min, TICKS_Y);
+
+        if (step > 0.0) {
+            b.y_min = floor(b.y_min / step) * step;
+            b.y_max = ceil(b.y_max / step) * step;
+        }
     }
     return b;
 }
@@ -212,33 +303,61 @@ static void put_style(FILE *f)
 static void put_axes(FILE *f, const fdt_plot_t *p, const bounds_t *b,
                      double left, double right, double top, double bottom)
 {
-    for (int i = 0; i <= TICKS_Y; i++) {
-        const double t = (double)i / TICKS_Y;
-        const double py = bottom - t * (bottom - top);
-        double value;
-        if (p->log_y) {
+    if (p->log_y) {
+        for (int i = 0; i <= TICKS_Y; i++) {
+            const double t = (double)i / TICKS_Y;
+            const double py = bottom - t * (bottom - top);
             const double lo = log10((b->y_min > 0.0) ? b->y_min : b->y_pos_min);
             const double hi = log10((b->y_max > 0.0) ? b->y_max : b->y_pos_min);
-            value = pow(10.0, lo + t * (hi - lo));
-        } else {
-            value = b->y_min + t * (b->y_max - b->y_min);
+            const double value = pow(10.0, lo + t * (hi - lo));
+
+            fprintf(f, "<line class=\"grid\" x1=\"%.1f\" y1=\"%.1f\" "
+                       "x2=\"%.1f\" y2=\"%.1f\"/>\n", left, py, right, py);
+            fprintf(f, "<text class=\"tick\" x=\"%.1f\" y=\"%.1f\" "
+                       "text-anchor=\"end\">%.3g</text>\n",
+                    left - 8.0, py + 4.0, value);
         }
-        fprintf(f, "<line class=\"grid\" x1=\"%.1f\" y1=\"%.1f\" "
-                   "x2=\"%.1f\" y2=\"%.1f\"/>\n", left, py, right, py);
-        fprintf(f, "<text class=\"tick\" x=\"%.1f\" y=\"%.1f\" "
-                   "text-anchor=\"end\">%.4g</text>\n", left - 8.0, py + 4.0,
-                value);
+    } else {
+        const double step = nice_step(b->y_max - b->y_min, TICKS_Y);
+        double v;
+
+        for (v = ceil(b->y_min / step) * step; v <= b->y_max + step * 1e-6;
+             v += step) {
+            const double t = (v - b->y_min) / (b->y_max - b->y_min);
+            const double py = bottom - t * (bottom - top);
+            const double shown = (fabs(v) < step * 1e-9) ? 0.0 : v;
+
+            fprintf(f, "<line class=\"grid\" x1=\"%.1f\" y1=\"%.1f\" "
+                       "x2=\"%.1f\" y2=\"%.1f\"/>\n", left, py, right, py);
+            fprintf(f, "<text class=\"tick\" x=\"%.1f\" y=\"%.1f\" "
+                       "text-anchor=\"end\">%.6g</text>\n",
+                    left - 8.0, py + 4.0, shown);
+        }
     }
 
-    for (int i = 0; i <= TICKS_X; i++) {
-        const double t = (double)i / TICKS_X;
-        const double px = left + t * (right - left);
-        const double value = b->x_min + t * (b->x_max - b->x_min);
-        fprintf(f, "<line class=\"grid\" x1=\"%.1f\" y1=\"%.1f\" "
-                   "x2=\"%.1f\" y2=\"%.1f\"/>\n", px, top, px, bottom);
-        fprintf(f, "<text class=\"tick\" x=\"%.1f\" y=\"%.1f\" "
-                   "text-anchor=\"middle\">%.4g</text>\n", px, bottom + 18.0,
-                value);
+    {
+        double step = nice_step(b->x_max - b->x_min, TICKS_X);
+        double v;
+
+        /* Whole-numbered abscissae, such as a vessel count or a frame index,
+           never take a fractional tick: a label of 0.8333 vessels describes
+           the divisor and not the data. */
+        if (x_is_integral(p) && step < 1.0) {
+            step = 1.0;
+        }
+
+        for (v = ceil(b->x_min / step) * step; v <= b->x_max + step * 1e-6;
+             v += step) {
+            const double t = (v - b->x_min) / (b->x_max - b->x_min);
+            const double px = left + t * (right - left);
+            const double shown = (fabs(v) < step * 1e-9) ? 0.0 : v;
+
+            fprintf(f, "<line class=\"grid\" x1=\"%.1f\" y1=\"%.1f\" "
+                       "x2=\"%.1f\" y2=\"%.1f\"/>\n", px, top, px, bottom);
+            fprintf(f, "<text class=\"tick\" x=\"%.1f\" y=\"%.1f\" "
+                       "text-anchor=\"middle\">%.6g</text>\n",
+                    px, bottom + 18.0, shown);
+        }
     }
 
     fprintf(f, "<rect class=\"frame\" x=\"%.1f\" y=\"%.1f\" "
@@ -302,8 +421,24 @@ static void put_series(FILE *f, const fdt_plot_t *p, const bounds_t *b,
         bar_series = 1;
     }
 
-    const double slot = (right - left) / (double)(ser->n > 0 ? ser->n : 1);
-    const double w    = (slot * 0.72) / (double)bar_series;
+    /* The slot follows the spacing of the data, not the number of points.
+       Deriving it from the count draws every bar the same width even when the
+       abscissae are unevenly spaced, which overlaps them where the data is
+       dense and strands them where it is sparse. */
+    const double gap  = min_bar_gap(p);
+    const double span = (b->x_max > b->x_min) ? (b->x_max - b->x_min) : 1.0;
+    const double slot = (gap > 0.0)
+                            ? (right - left) * (gap / span)
+                            : (right - left) / (double)(ser->n > 0 ? ser->n : 1);
+    double w = (slot * 0.72) / (double)bar_series;
+
+    /* Logarithmically spaced abscissae put the closest pair of points a
+       thousandth of the range apart, and a bar that thin renders as nothing.
+       Three pixels is the floor at which a bar still reads as a bar; below it
+       the chart silently loses its data. */
+    if (w < 3.0) {
+        w = 3.0;
+    }
     const double zero = map_y(p, b, (b->y_min < 0.0) ? 0.0 : b->y_min,
                               top, bottom);
 
@@ -312,10 +447,15 @@ static void put_series(FILE *f, const fdt_plot_t *p, const bounds_t *b,
         const double py = map_y(p, b, ser->y[i], top, bottom);
         const double x0 = cx - (w * (double)bar_series) / 2.0 +
                           w * (double)bar_index;
-        const double h  = (zero > py) ? (zero - py) : 1.0;
-        fprintf(f, "<rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" height=\"%.2f\" "
-                   "fill=\"%s\" fill-opacity=\"0.85\"/>\n",
-                x0, py, w, h, color);
+        /* A bar grows from the baseline towards its value, in whichever
+           direction that lies. Anchoring it at the value instead leaves a
+           negative reading as a sliver hanging off the axis. */
+        const double y0 = (py < zero) ? py : zero;
+        const double h  = fabs(zero - py);
+
+        fprintf(f, "<rect x=\"%.2f\" y=\"%.2f\" width=\"%.2f\" "
+                   "height=\"%.2f\" fill=\"%s\" fill-opacity=\"0.85\"/>\n",
+                x0, y0, w, (h > 1.0) ? h : 1.0, color);
     }
 }
 
@@ -353,13 +493,20 @@ int fdt_plot_write_svg(const fdt_plot_t *p, const char *path)
 
     put_axes(f, p, &b, left, right, top, bottom);
 
-    /* Reference lines first, so the data draws on top of them. */
+    /* Reference lines first, so the data draws on top of them.
+
+       The caption sits inside the plot, right-aligned above its own line. It
+       used to sit in the right-hand gutter at the height of the line, which
+       is where the legend lives, so any rule near the top of the range landed
+       on top of a legend entry. */
     for (size_t r = 0; r < p->nrules; r++) {
         const double py = map_y(p, &b, p->rules[r].y, top, bottom);
+        const double ty = (py - 6.0 < top + 12.0) ? (py + 14.0) : (py - 6.0);
+
         fprintf(f, "<line class=\"rule\" x1=\"%.1f\" y1=\"%.1f\" "
                    "x2=\"%.1f\" y2=\"%.1f\"/>\n", left, py, right, py);
-        fprintf(f, "<text class=\"rulelab\" x=\"%.1f\" y=\"%.1f\">",
-                right + 8.0, py + 4.0);
+        fprintf(f, "<text class=\"rulelab\" x=\"%.1f\" y=\"%.1f\" "
+                   "text-anchor=\"end\">", right - 6.0, ty);
         put_escaped(f, p->rules[r].label);
         fputs("</text>\n", f);
     }
@@ -368,8 +515,8 @@ int fdt_plot_write_svg(const fdt_plot_t *p, const char *path)
         put_series(f, p, &b, s, left, right, top, bottom);
     }
 
-    /* Legend, stacked under the reference-line captions. */
-    double ly = top + 12.0 + (double)p->nrules * 0.0;
+    /* Legend, alone in the right-hand gutter. */
+    double ly = top + 12.0;
     for (size_t s = 0; s < p->nseries; s++) {
         fprintf(f, "<rect x=\"%.1f\" y=\"%.1f\" width=\"12\" height=\"12\" "
                    "fill=\"%s\"/>\n",
