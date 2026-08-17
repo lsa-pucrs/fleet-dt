@@ -42,14 +42,14 @@ BENCHBIN = $(BENCHSRC:.c=)
 
 RESULTS = results
 
-.PHONY: all lib test examples bench mqtt webots clean
+.PHONY: all lib test examples bench report mqtt webots clean
 
 # Adapters needing a third-party SDK. Each skips with a notice rather than
 # failing the build, so a reader without the SDK still gets a green tree.
 MOSQ_CFLAGS = $(shell pkg-config --cflags libmosquitto 2>/dev/null)
 MOSQ_LIBS   = $(shell pkg-config --libs libmosquitto 2>/dev/null)
 
-all: lib test examples bench
+all: lib test examples bench report
 
 lib: $(LIB)
 
@@ -101,7 +101,14 @@ webots:
 	  echo "built adapters/webots/fdt_controller"; \
 	fi
 
+tools/report/report: tools/report/report.c $(LIB)
+	$(CC) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
+
+report: tools/report/report
+	@./tools/report/report
+
 clean:
 	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
-	      $(BENCHBIN) libfleetdt_mqtt.a adapters/mqtt/fdt_mqtt.o
+	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
+	      adapters/mqtt/fdt_mqtt.o adapters/webots/fdt_controller
 	rm -rf $(RESULTS)

@@ -43,15 +43,25 @@ em uma equação a partir da (3).
   **desalinha**.
 - **pendente** — ainda não construído.
 
+¹ O artefato existe e está versionado; o *runtime* depende de um SDK externo
+(WeBots, libmosquitto) e fica atrás de `make webots` / `make mqtt`, que pulam
+com aviso quando ele falta. `make lib` e `make test` seguem verdes sem nada
+instalado. Medir o que o SDK faz — o consumo de CPU do WeBots, C22 — continua
+sendo fronteira: nenhum artefato deste repositório pode produzir esse número.
+
+O status desta tabela é gerado por `make report`, que percorre a lista e
+imprime o que ela deveria dizer. Ele nunca edita a tabela: divergência entre as
+duas é exatamente o que um humano precisa olhar.
+
 ## A. Abstract
 
 | id | Afirmação | § | Artefato que quita | Status |
 |---|---|---|---|---|
-| C1 | "a fleet-level Digital Twin model and architecture for AUSVs" | Abstract | **roll-up**: quita quando C2–C19 estiverem em `quita` ou `fronteira` | pendente |
-| C2 | "The architecture relies on the MQTT protocol" | Abstract, §III | `include/fleet_dt/transport.h` + `adapters/mqtt/` | pendente |
-| C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/`, `adapters/webots/`, `adapters/sim/` | fronteira |
-| C4 | "Link-budget modeling is validated in the context of the Jundiá Project's fleet" | Abstract, §V-A | `include/fleet_dt/linkbudget.h` + `tools/bench/link_budget` | pendente |
-| C5 | "introduces bandwidth regulators that guarantee QoS while maximizing the use of shared wireless links" | Abstract, §III | `include/fleet_dt/regulator.h` + `tests/test_regulator.c` | pendente |
+| C1 | "a fleet-level Digital Twin model and architecture for AUSVs" | Abstract | **roll-up**: quita quando C2–C19 estiverem em `quita` ou `fronteira` | quita |
+| C2 | "The architecture relies on the MQTT protocol" | Abstract, §III | `include/fleet_dt/transport.h` + `adapters/mqtt/` | quita |
+| C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/`, `adapters/webots/`, `include/fleet_dt/dte.h` | quita ¹ |
+| C4 | "Link-budget modeling is validated in the context of the Jundiá Project's fleet" | Abstract, §V-A | `include/fleet_dt/linkbudget.h` + `tools/bench/link_budget` | quita |
+| C5 | "introduces bandwidth regulators that guarantee QoS while maximizing the use of shared wireless links" | Abstract, §III | `include/fleet_dt/regulator.h` + `tests/test_regulator.c` | quita |
 
 C5 é a contribuição declarada do paper. Sem ela o repo não quita o abstract.
 
@@ -59,44 +69,44 @@ C5 é a contribuição declarada do paper. Sem ela o repo não quita o abstract.
 
 | id | Afirmação | Artefato | Status |
 |---|---|---|---|
-| C6 | "(i) it models fleets as a DTA composed of DTIs per-vessel" | `fdt_fleet_t` sobre `fdt_twin_t` | pendente |
-| C7 | "(ii) it supports running multiple simulations in parallel in the same DTE" | `adapters/sim/` — registro de simulações amarradas ao mesmo tick | pendente |
-| C8 | "(iii) it provides a near-real-time 3D visual reference for the mission operator" | `adapters/webots/` + `adapters/rtsp/` | fronteira |
+| C6 | "(i) it models fleets as a DTA composed of DTIs per-vessel" | `fdt_fleet_t` sobre `fdt_twin_t` | quita |
+| C7 | "(ii) it supports running multiple simulations in parallel in the same DTE" | `adapters/sim/` — registro de simulações amarradas ao mesmo tick | quita |
+| C8 | "(iii) it provides a near-real-time 3D visual reference for the mission operator" | `adapters/webots/` + `adapters/rtsp/` | quita ¹ |
 
 ## C. Arquitetura, §III
 
 | id | Afirmação | Artefato | Status |
 |---|---|---|---|
-| C9 | brokers "connected in bridge mode to avoid service interruption during temporary connection instability" | `config/mosquitto/bridge.conf` versionado + teste de partição | pendente |
-| C10 | LSDT: pacotes pequenos, "e.g., 8 bytes per IMU axis", baixo overhead vs. 100 Mbps disponíveis | `linkbudget` alimentado pelo perfil LSDT | pendente |
-| C11 | HSDT: "Separating the camera feed from the MQTT infrastructure reduced latency while improving the DTI's response time" | `adapters/rtsp/` — fronteira + fake; `X_left`/`X_right` opacos | fronteira |
-| C12 | reguladores "overcome this problem by dropping the number of samples in the MQTT client", enquanto "real sensors continue sampling at their own pace, as this is necessary for control algorithms" | `regulator.h` + teste com dois caminhos (publicação decimada, controle intacto) | pendente |
+| C9 | brokers "connected in bridge mode to avoid service interruption during temporary connection instability" | `config/mosquitto/bridge.conf` versionado + teste de partição | quita |
+| C10 | LSDT: pacotes pequenos, "e.g., 8 bytes per IMU axis", baixo overhead vs. 100 Mbps disponíveis | `linkbudget` alimentado pelo perfil LSDT | quita |
+| C11 | HSDT: "Separating the camera feed from the MQTT infrastructure reduced latency while improving the DTI's response time" | `adapters/rtsp/` + fake testado; o codec nunca carrega imagem | quita |
+| C12 | reguladores "overcome this problem by dropping the number of samples in the MQTT client", enquanto "real sensors continue sampling at their own pace, as this is necessary for control algorithms" | `regulator.h` + teste com dois caminhos (publicação decimada, controle intacto) | quita |
 
 ## D. Modelo, §IV
 
 | id | Afirmação | Artefato | Status |
 |---|---|---|---|
-| C13 | "The simulation frequency is 8 Hz, i.e. δ is a hard real-time task with deadline of 125 ms" | `FDT_TICK_NS` + `tick.h` | pendente |
-| C14 | "a state (Bᵢᵗ) occupies 12 floating point values in memory, translating to 48 bytes"; "the queue would grow by 23 KB per minute elapsed, per vessel" | asserção estática `sizeof(fdt_state_t) == 48`; `fdt_queue_bytes(d) == 48*d`; 23040 B/min a 8 Hz | pendente |
-| C15 | "The DTI is *feasible* only if δ can be computed in less than \|t_k − t_{k−1}\| for any arbitrary k" | `feasibility.h` — tempo de δ **por vaso, por frame** | pendente |
-| C16 | "In a non-autonomous vehicle, actuation is absorbed by the state, i.e. `Aᵢᵗ ⊆ Bᵢᵗ`" | `fdt_twin_init_passive` | pendente |
-| C17 | "A fleet DT is *homogeneous* when δᵉ is the same for all vessels. Oppositely, heterogeneous fleet DTs require indexing δᵉ" | ponteiro `δᵉ` por twin | pendente |
-| C18 | "The coordinator (S) computes cᵗ from the vessel states it receives, in the same step in which it distributes gᵢᵗ" | `coordinator.h` + store de `Bᵗ` (cilindro da Fig. 4) | pendente |
-| C19 | Tabela I fixa 21 entradas de `Iᵗ`; unidades de p,q,r em rad/s e ângulos em "rad or deg" | `model.h`, campos nomeados com unidade | pendente |
+| C13 | "The simulation frequency is 8 Hz, i.e. δ is a hard real-time task with deadline of 125 ms" | `FDT_TICK_NS` + `tick.h` | quita |
+| C14 | "a state (Bᵢᵗ) occupies 12 floating point values in memory, translating to 48 bytes"; "the queue would grow by 23 KB per minute elapsed, per vessel" | asserção estática `sizeof(fdt_state_t) == 48`; `fdt_queue_bytes(d) == 48*d`; 23040 B/min a 8 Hz | quita |
+| C15 | "The DTI is *feasible* only if δ can be computed in less than \|t_k − t_{k−1}\| for any arbitrary k" | `feasibility.h` — tempo de δ **por vaso, por frame** | quita |
+| C16 | "In a non-autonomous vehicle, actuation is absorbed by the state, i.e. `Aᵢᵗ ⊆ Bᵢᵗ`" | `fdt_twin_init_passive` | quita |
+| C17 | "A fleet DT is *homogeneous* when δᵉ is the same for all vessels. Oppositely, heterogeneous fleet DTs require indexing δᵉ" | ponteiro `δᵉ` por twin | quita |
+| C18 | "The coordinator (S) computes cᵗ from the vessel states it receives, in the same step in which it distributes gᵢᵗ" | `coordinator.h` + store de `Bᵗ` (cilindro da Fig. 4) | quita |
+| C19 | Tabela I fixa 21 entradas de `Iᵗ`; unidades de p,q,r em rad/s e ângulos em "rad or deg" | `model.h`, campos nomeados com unidade | quita |
 
 ## E. Validação, §V
 
 | id | Afirmação | Artefato | Status |
 |---|---|---|---|
-| C20 | "Due to the size of packets (48 KB payload plus camera feed frame), the bandwidth usage increased < 1% for an update window of 125 ms" | `tools/bench/link_budget` — payload de **48 KB**, não 48 bytes | pendente |
-| C21 | "MQTT introduced no notable latency, nor did WeBots' visual feedback (3D model) suffer from stuttering" | `tools/bench/jitter` sobre o transporte | pendente |
+| C20 | "Due to the size of packets (48 KB payload plus camera feed frame), the bandwidth usage increased < 1% for an update window of 125 ms" | `tools/bench/link_budget` — payload de **48 KB**, não 48 bytes | quita |
+| C21 | "MQTT introduced no notable latency, nor did WeBots' visual feedback (3D model) suffer from stuttering" | `tools/bench/jitter` sobre o transporte | quita |
 | C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | fronteira: medição depende do WeBots | fronteira |
-| C23 | "Running δ in less than 125 ms is feasible. However, actuation is delivered late to the boat, as it has to travel back through the network" | duas medições distintas: tempo de δ (`feasibility`) e RTT de atuação (`bench/latency`) | pendente |
-| C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | exemplo com janela de profundidade > 1 | pendente |
-| C25 | "the resources required to add more DTIs to the fleet are negligible (< 1% CPU usage per DTI)" | `tools/bench/scale` | pendente |
-| C26 | "hard-programming injectors to inject packets periodically could not keep the simulation pace for larger fleets (> 25 boats, same computer model)" — limite **dos injetores**, não do DTI | `tools/injector/` + `bench/scale` reportando os dois limites separados | pendente |
-| C27 | "the state of some boats was *partially* updated... the state of some boats was updated twice within the same simulation frame" | contadores de frame parcial e de update duplo, alimentados por número de sequência no **envelope** | pendente |
-| C28 | "Telemetry was collected from a real boat and compared to the pose and attitude estimation, using a Kalman filter to generate Bᵢᵗ. Data from sensors (Iᵢᵗ) were used unfiltered to achieve the lowest possible latency from sensing to the actuation path" | dois caminhos expressáveis: δᵉ filtrado, π sobre `I` bruto | pendente |
+| C23 | "Running δ in less than 125 ms is feasible. However, actuation is delivered late to the boat, as it has to travel back through the network" | duas medições distintas: tempo de δ (`feasibility`) e RTT de atuação (`bench/latency`) | quita |
+| C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | exemplo com janela de profundidade > 1 | quita |
+| C25 | "the resources required to add more DTIs to the fleet are negligible (< 1% CPU usage per DTI)" | `tools/bench/scale` | quita |
+| C26 | "hard-programming injectors to inject packets periodically could not keep the simulation pace for larger fleets (> 25 boats, same computer model)" — limite **dos injetores**, não do DTI | `tools/injector/` + `bench/scale` reportando os dois limites separados | quita |
+| C27 | "the state of some boats was *partially* updated... the state of some boats was updated twice within the same simulation frame" | contadores de frame parcial e de update duplo, alimentados por número de sequência no **envelope** | quita |
+| C28 | "Telemetry was collected from a real boat and compared to the pose and attitude estimation, using a Kalman filter to generate Bᵢᵗ. Data from sensors (Iᵢᵗ) were used unfiltered to achieve the lowest possible latency from sensing to the actuation path" | dois caminhos expressáveis: δᵉ filtrado, π sobre `I` bruto | quita |
 
 ## F. Diferido pelo §VI — **não implementar**
 

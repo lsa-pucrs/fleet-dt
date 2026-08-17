@@ -6,3 +6,4 @@ examples/two_paths
 tools/bench/bench_*
 !tools/bench/bench_*.c
 results/
+tools/report/report
