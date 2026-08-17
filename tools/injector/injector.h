@@ -27,6 +27,24 @@
  * compared against a previous one.
  */
 
+/**
+ * Amplitude of the synthetic position sweep, in degrees.
+ *
+ * Section II gives the Jundiá hull as 1.2 m long. The sweep has to be on that
+ * scale or the fleet is invisible in its own simulation: at 0.001 degrees --
+ * 111 m -- the vessels wandered out of the viewport in half a minute, and at
+ * 0.0002 they were two dark pixels on dark water. 0.00002 degrees is about
+ * 2.2 m, under two hull lengths, which is what a boat holding station over a
+ * sampling point actually does -- and it keeps the fleet inside the viewport,
+ * because the world's follow does not track a hull the supervisor teleports.
+ *
+ * The wander is twice this, not once: the WeBots controller anchors its local
+ * origin on the first fix it sees, and that lands at an arbitrary phase of the
+ * circle. tests/test_geo.c pins the doubled figure against both the water box
+ * and the viewport.
+ */
+#define FDT_INJ_SWEEP_DEG 0.00002
+
 /** One injector driving a whole fleet's worth of synthetic vessels. */
 typedef struct {
     fdt_transport_t *tr;      /**< Where samples are published. */

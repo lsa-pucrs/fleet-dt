@@ -11,6 +11,8 @@
  *
  * Moving the arithmetic into the library is what makes these checks possible.
  */
+#include "injector/injector.h"
+
 #include <fleet_dt/geo.h>
 
 #include <assert.h>
@@ -95,7 +97,7 @@ static void test_directions(void)
  */
 static void test_injector_track_fits_the_world(void)
 {
-    const double sweep_deg = 0.001;
+    const double sweep_deg = FDT_INJ_SWEEP_DEG;
     const double water_half_m = 500.0;
 
     double worst = 0.0;
@@ -117,10 +119,15 @@ static void test_injector_track_fits_the_world(void)
 
     printf("injector track radius: %.1f m, water half-width %.0f m\n",
            worst, water_half_m);
-    assert(worst < water_half_m);
 
-    /* And it is not so small that the motion is invisible either. */
-    assert(worst > 50.0);
+    /* The controller anchors on the first fix it sees, at an arbitrary phase
+     * of this circle, so a vessel can sit two radii from its anchor. That is
+     * what has to fit the world, and it has to fit the viewport too. */
+    assert(2.0 * worst < water_half_m);
+    assert(2.0 * worst < 6.0);
+
+    /* And not so small that the motion is invisible. */
+    assert(worst > 1.2);   /* at least a hull length of motion */
 }
 
 /** Every output pointer is optional. */

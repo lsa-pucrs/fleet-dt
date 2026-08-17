@@ -39,9 +39,58 @@ WorldInfo {
     }
   ]
 }
+# The operator's reference of Section I, feature (iii).
+#
+# Pulled back and raised from the source world's 18 m. The telemetry sweeps the
+# vessels through an orbit about 111 m across -- a thousandth of a degree of
+# latitude -- so a viewpoint close enough to admire one hull loses the fleet
+# within a minute, and the spread between vessels is the thing an operator is
+# watching. followType defaults to "Tracking Shot", which keeps Pintado
+# centred as it goes.
+# The operator's reference of Section I, feature (iii).
+#
+# The source world's viewpoint, kept. It frames a 1.2 m hull at a readable
+# size, which a wider shot cannot: the vessels of Section II are four hull
+# lengths across their whole station-keeping track, so a camera far enough to
+# see the track renders each boat as two dark pixels on dark water. The
+# telemetry sweep in tools/injector/injector.h is sized to stay inside this
+# frame for the same reason.
+# The operator's reference of Section I, feature (iii).
+#
+# The source world's viewing direction, pulled back to about 2.2 times its
+# distance. Two constraints fix this, and neither is taste.
+#
+# It has to be a low angle. The hulls float with their decks at the waterline,
+# and the water box is 70 percent opaque, so a camera looking down sees the
+# vessels through it and they wash out -- which is why the oil barrels, whose
+# tops sit clear of the surface, stay visible from above while the boats do
+# not.
+#
+# And it has to be close. Section II gives the hull as 1.2 m; a camera far
+# enough to frame a wide track renders each vessel as two dark pixels on dark
+# water. The station-keeping sweep in tools/injector/injector.h is sized to
+# stay inside this frame for the same reason.
+# The operator's reference of Section I, feature (iii).
+#
+# The source world's viewpoint, unchanged, including its follow. Two things
+# about it are load-bearing and were learned by getting them wrong.
+#
+# The angle is low on purpose. The hulls float with their decks at the
+# waterline and the water box is 70 percent opaque, so a camera looking down
+# sees the vessels through it and they wash out -- which is why the oil
+# barrels, whose tops clear the surface, stay visible from above while the
+# boats do not.
+#
+# The height is 1.95 rather than the source world's 3.28, and that is the whole
+# of the aiming. With this orientation the line of sight drops 0.168 for every
+# metre it runs, so from 3.28 m it met the water eight metres past the fleet
+# and the hulls sat at the bottom edge of the frame. From 1.95 m it lands on
+# them. follow is kept, but it does not do the work: WeBots does not track a
+# hull the supervisor teleports, and this fleet's poses come from telemetry
+# rather than from the physics engine.
 Viewpoint {
   orientation 0.08456816707905672 0.08802039870455405 -0.9925223597122536 1.5382971163050991
-  position -1.4435065496148234 18.81056688881332 3.2776503209054155
+  position -1.4435065496148234 18.81056688881332 1.95
   follow "Pintado"
 }
 TexturedBackground {

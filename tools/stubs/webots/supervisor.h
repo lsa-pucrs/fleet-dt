@@ -14,5 +14,8 @@ const double *wb_supervisor_field_get_sf_vec3f(WbFieldRef field);
 void wb_supervisor_field_set_sf_vec3f(WbFieldRef field, const double values[3]);
 void wb_supervisor_field_set_sf_rotation(WbFieldRef field,
                                          const double values[4]);
+void wb_supervisor_export_image(const char *file, int quality);
+void wb_supervisor_node_reset_physics(WbNodeRef node);
+const double *wb_supervisor_node_get_position(WbNodeRef node);
 
 #endif /* FDT_STUB_WEBOTS_SUPERVISOR_H */

@@ -82,10 +82,13 @@ void fdt_inj_sample(const fdt_inj_t *inj, unsigned vessel, fdt_input_t *out)
     out->mz_ut = -14.0f + 0.5f * jitter(&s);
 
     /* The lagoons of southern Brazil, where the eDNA campaign samples. */
-    out->gps_lat_deg = (float)(-30.05 + 0.001 * sin(phase) +
-                               0.0005 * (double)vessel);
-    out->gps_lon_deg = (float)(-51.17 + 0.001 * cos(phase) +
-                               0.0005 * (double)vessel);
+    /* A circle of FDT_INJ_SWEEP_DEG about the sampling point, with the
+     * vessels offset from one another by a quarter of it so a fleet is a
+     * fleet rather than a stack. */
+    out->gps_lat_deg = (float)(-30.05 + FDT_INJ_SWEEP_DEG * sin(phase) +
+                               0.25 * FDT_INJ_SWEEP_DEG * (double)vessel);
+    out->gps_lon_deg = (float)(-51.17 + FDT_INJ_SWEEP_DEG * cos(phase) +
+                               0.25 * FDT_INJ_SWEEP_DEG * (double)vessel);
     out->gps_alt_m   = 3.0f + 0.2f * jitter(&s);
 
     out->vn_mps = (float)(1.2 * cos(phase)) + 0.02f * jitter(&s);

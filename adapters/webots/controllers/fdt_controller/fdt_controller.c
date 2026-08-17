@@ -67,6 +67,17 @@
 #define STATUS_EVERY 40
 
 /**
+ * Frame at which FDT_SHOT, if set, captures the 3D view to that path.
+ *
+ * Numbers cannot tell you the view is right. Both position bugs this
+ * controller has had -- hulls rendered 5700 km away, then hulls climbing out
+ * of the water -- left every counter green and were caught by a person
+ * looking at the viewport. This exists so that looking does not require a
+ * person to be present.
+ */
+#define SHOT_FRAME 80  /* FDT_SHOT_FRAME overrides */
+
+/**
  * WeBots node DEF names, one per vessel, matching worlds/jundia_fleet.wbt.
  *
  * Resolved by DEF rather than by display name because equation (4) indexes
@@ -83,6 +94,9 @@ static const char *const VESSEL_DEF[MAX_VESSELS] = {
 /** Vessels this world actually holds; resolved in main(). */
 static size_t g_vessels;
 
+/** Frame at which the view is captured; FDT_SHOT_FRAME overrides. */
+static size_t g_shot_frame = SHOT_FRAME;
+
 static fdt_state_t     g_queues[MAX_VESSELS][QUEUE_CAP];
 static fdt_twin_t      g_twins[MAX_VESSELS];
 static fdt_state_t     g_slots[MAX_VESSELS];
@@ -98,6 +112,7 @@ static fdt_framesync_t g_fs;
 static fdt_feas_t      g_feas[MAX_VESSELS];
 
 /** Supervisor handles for writing the twin state into the 3D world. */
+static WbNodeRef  g_node[MAX_VESSELS];
 static WbFieldRef g_translation[MAX_VESSELS];
 static WbFieldRef g_rotation[MAX_VESSELS];
 
@@ -226,6 +241,13 @@ static void render_vessel(size_t k, const fdt_state_t *b)
     if (g_translation[k] == NULL || g_rotation[k] == NULL) {
         return;
     }
+    /* FDT_NO_POSE leaves the hulls wherever the world put them. It exists
+     * because "the boats are not in the view" has two causes that look
+     * identical -- the twin writing a wrong pose, or the camera pointed
+     * somewhere else -- and this separates them in one run. */
+    if (getenv("FDT_NO_POSE") != NULL) {
+        return;
+    }
 
     /* A state produced before any telemetry arrived carries no position.
      * Rendering the zero it holds would drag the hull to the null island. */
@@ -278,6 +300,17 @@ static void render_vessel(size_t k, const fdt_state_t *b)
     const double yaw_rad = (double)b->yaw_deg / (double)RAD2DEG;
     const double rotation[4] = { 0.0, 0.0, 1.0, yaw_rad };
     wb_supervisor_field_set_sf_rotation(g_rotation[k], rotation);
+
+    /* A solid with Physics does not simply appear where its translation field
+     * says. ODE keeps its own body state, and moving the field without telling
+     * it leaves the two disagreeing: the engine sees a body that teleported,
+     * infers an enormous velocity, and throws the hull away from the fleet.
+     * Resetting the physics re-seats the body at the new pose with its
+     * velocities zeroed, which is what a twin wants -- the pose comes from the
+     * telemetry, not from the engine integrating its own guess. */
+    if (g_node[k] != NULL) {
+        wb_supervisor_node_reset_physics(g_node[k]);
+    }
 }
 
 int main(int argc, char **argv)
@@ -294,12 +327,18 @@ int main(int argc, char **argv)
     /* Ask the world how many vessels it holds. The DEFs are tried in order and
      * the first miss ends the fleet, so a world with PINTADO alone yields one
      * vessel and the same binary drives it. */
+    const char *shot_at = getenv("FDT_SHOT_FRAME");
+    if (shot_at != NULL && atoi(shot_at) > 0) {
+        g_shot_frame = (size_t)atoi(shot_at);
+    }
+
     g_vessels = 0;
     for (size_t k = 0; k < MAX_VESSELS; k++) {
         WbNodeRef node = wb_supervisor_node_get_from_def(VESSEL_DEF[k]);
         if (node == NULL) {
             break;
         }
+        g_node[k]        = node;
         g_translation[k] = wb_supervisor_node_get_field(node, "translation");
         g_rotation[k]    = wb_supervisor_node_get_field(node, "rotation");
 
@@ -415,6 +454,16 @@ int main(int argc, char **argv)
         }
 
         frames++;
+
+        if (frames == g_shot_frame) {
+            const char *shot = getenv("FDT_SHOT");
+            if (shot != NULL && shot[0] != '\0') {
+                wb_supervisor_export_image(shot, 100);
+                printf("fdt_controller: view captured to %s\n", shot);
+                fflush(stdout);
+            }
+        }
+
         if (frames % STATUS_EVERY == 0) {
             /* All three axes, named. The earlier line printed indices 0 and 2
              * and called them a position, so a hull climbing out of the water

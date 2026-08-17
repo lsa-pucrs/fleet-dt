@@ -11,7 +11,12 @@
 # the reader cannot act on.
 
 CC      = gcc
-CFLAGS  = -std=c18 -Wall -Wextra -Werror -pedantic-errors -O2 \
+# -MMD -MP emit a .d beside every .o listing the headers it included, and the
+# generated rules are pulled in below. Without them, editing a header rebuilds
+# nothing: a constant changed in tools/injector/injector.h once left every
+# object stale and the simulation kept running the old value, which looks
+# exactly like a change that did not work.
+CFLAGS  = -std=c18 -Wall -Wextra -Werror -pedantic-errors -O2 -MMD -MP \
           -Iinclude -Itools -Iadapters
 LDLIBS  = -lm
 
@@ -127,7 +132,7 @@ mqtt-test: mqtt
 	  exit $$rc; \
 	fi
 
-webots:
+webots: $(LIB) $(TOOLOBJ)
 	@if [ -z "$$WEBOTS_HOME" ]; then \
 	  echo "WEBOTS_HOME is not set; skipping the WeBots controller."; \
 	  echo "  see adapters/webots/README.md"; \
@@ -137,7 +142,7 @@ webots:
 	    $(TOOLOBJ) $(LIB) -L$$WEBOTS_HOME/lib/controller \
 	    -lController $(LDLIBS) \
 	    -o adapters/webots/controllers/fdt_controller/fdt_controller && \
-	  echo "built adapters/webots/controllers/fdt_controller/fdt_controller"; \
+	  echo "built adapters/webots/controllers/fdt_controller/fdt_controller" && \
 	  echo "open the world with:  webots adapters/webots/worlds/jundia_fleet.wbt"; \
 	fi
 
@@ -147,7 +152,11 @@ tools/report/report: tools/report/report.c $(LIB)
 report: tools/report/report
 	@./tools/report/report
 
+# Header dependencies for everything compiled so far.
+-include $(LIBOBJ:.o=.d) $(TOOLOBJ:.o=.d) $(ADAPTOBJ:.o=.d)
+
 clean:
+	rm -f $(LIBOBJ:.o=.d) $(TOOLOBJ:.o=.d) $(ADAPTOBJ:.o=.d)
 	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
 	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
 	      adapters/mqtt/fdt_mqtt.o fleet_dt_it_mqtt \

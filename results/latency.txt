@@ -3,12 +3,12 @@ fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
 transport: in-process loopback   vessels: 4   frames: 400
 
 --- measurement 1 — delta compute time (Section IV) ---
-  p50     0.44 us   p95     0.54 us   p99     0.76 us   worst     1.69 us
-  delta under the deadline   1.69 us worst          paper: delta in less than 125 ms is feasible [OK]
+  p50     0.35 us   p95     0.38 us   p99     0.51 us   worst     2.27 us
+  delta under the deadline   2.27 us worst          paper: delta in less than 125 ms is feasible [OK]
 
 --- measurement 2 — actuation round trip (Section V-A) ---
   I^t published -> A^t delivered
-  p50     4.89 us   p95     5.66 us   p99     9.17 us   worst    33.53 us
+  p50     4.17 us   p95     4.85 us   p99     7.51 us   worst    77.90 us
   round trip over a network  not measured here      paper: actuation is delivered late        [BOUNDARY]
   This run uses the in-process loopback, so the round trip carries
   no network. Section V-A's observation is about a real link, and
@@ -18,8 +18,8 @@ transport: in-process loopback   vessels: 4   frames: 400
   actuation arrives.
 
 --- why they are not one number ---
-  delta worst    :     1.69 us  (compute)
-  round trip p50 :     4.89 us  (compute + transport)
+  delta worst    :     2.27 us  (compute)
+  round trip p50 :     4.17 us  (compute + transport)
   The second contains the first. Adding them would count
   the compute twice.
 

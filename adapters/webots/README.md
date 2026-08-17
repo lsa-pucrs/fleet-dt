@@ -61,6 +61,24 @@ pose. A controller per hull *cannot* compute `cᵗ`, because no instance would
 see more than its own state. The second hull therefore has
 `controller "<none>"` — it is a DTI the coordinator drives, not an agent.
 
+## Proof that it renders
+
+![the Jundiá fleet in WeBots](../docs/simulation.jpg)
+
+Captured from a live run at frame 240. Setting `FDT_SHOT` to a path makes the
+controller export the 3D view there, and `FDT_SHOT_FRAME` chooses when:
+
+    FDT_SHOT=/tmp/view.jpg FDT_SHOT_FRAME=240 \
+      webots --batch --mode=realtime adapters/webots/worlds/jundia_fleet.wbt
+
+That exists because two position bugs in this controller left every counter
+green and were caught only by a person looking at the viewport. A picture is
+the only assertion that covers a rendering.
+
+`FDT_NO_POSE=1` leaves the hulls wherever the world placed them, which
+separates "the twin wrote a wrong pose" from "the camera is pointed elsewhere"
+in a single run. Both look identical from the console.
+
 ## What is checked, and what is not
 
 `tests/test_world.c` runs in the ordinary suite on any machine and checks the
