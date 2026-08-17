@@ -1,0 +1,200 @@
+#VRML_SIM R2025a utf8
+
+# Jundia world, one vessel: the first boat of Section V-A.
+#
+# One of three worlds that differ only in vessel count, so the CPU figures of
+# Section V-A -- "running WeBots adds 10% CPU usage for the first boat and less
+# than 1% for subsequent boats" -- can be measured as differences rather than
+# asserted. tools/bench/bench_webots_cpu.c runs all three.
+#
+# Derived from projeto_barco/worlds/Barco_2_0.wbt by Anderson Domingues and
+# the Jundia project team in lsa-pucrs/boat-digital-twin (MIT). The water, the
+# immersion properties, the hull mesh and the obstacle layout are theirs; what
+# changed here is the wiring to the model of Section IV, and each change is
+# noted where it appears.
+#
+# Three differences from the source world, all forced by the paper:
+#
+#   1. basicTimeStep is 25 ms, so the 125 ms frame of Section IV is exactly
+#      five physics steps. The source world left it at the 32 ms default, and
+#      125/32 is not an integer -- wb_robot_step() would have rounded the DT
+#      frame to something other than the deadline the model is defined by.
+#
+#   2. The two hulls carry DEF names, PINTADO and TILAPIA, after the boats of
+#      Figure 1. The controller resolves them by DEF because equation (4)
+#      indexes vessels, and a name lookup by display string would break the
+#      moment someone renames a node in the editor.
+#
+#   3. One controller drives both vessels instead of one per hull. That is
+#      Figure 4: a single coordinator S computing c^t across the fleet and
+#      distributing g^t_i. A controller per hull cannot compute c^t, because
+#      no instance would see more than its own state.
+
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackground.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/backgrounds/protos/TexturedBackgroundLight.proto"
+EXTERNPROTO "https://raw.githubusercontent.com/cyberbotics/webots/R2025a/projects/objects/obstacles/protos/OilBarrel.proto"
+
+WorldInfo {
+  # 125 ms of Section IV divided into five 25 ms physics steps.
+  basicTimeStep 25
+  gravity 0
+  contactProperties [
+    ContactProperties {
+      maxContactJoints 30
+    }
+  ]
+}
+Viewpoint {
+  orientation 0.08456816707905672 0.08802039870455405 -0.9925223597122536 1.5382971163050991
+  position -1.4435065496148234 18.81056688881332 3.2776503209054155
+  follow "Pintado"
+}
+TexturedBackground {
+}
+TexturedBackgroundLight {
+}
+
+# The fluid simulator Section III lists as sharing the DTE with WeBots. The DTE
+# registry of include/fleet_dt/dte.h is what ties simulations like this one to
+# the same tick the twin runs on.
+DEF WATER Fluid {
+  children [
+    Shape {
+      appearance PBRAppearance {
+        baseColor 0 0.333333 0.498039
+        transparency 0.3
+        roughness 0.6
+        metalness 0
+      }
+      geometry DEF WATER_BOX Box {
+        size 1000 1000 0.7
+      }
+    }
+  ]
+  boundingObject USE WATER_BOX
+  locked TRUE
+}
+OilBarrel {
+  translation 0.7371515879409705 8.419083524412384 0.5595498973533809
+  rotation 0.04442276179975432 -0.9730082893626267 0.22645416106951305 1.6255254597583637
+  physics Physics {
+    density 100
+    damping Damping {
+      linear 0.5
+      angular 0.5
+    }
+  }
+  immersionProperties [
+    ImmersionProperties {
+      fluidName "fluid"
+    }
+  ]
+}
+OilBarrel {
+  translation -14.945856137023352 2.6552925259601894 0.5595498919704248
+  rotation 0.3754257446243558 0.8386219220981002 0.39467554022226414 1.755864172379959
+  name "oil barrel(1)"
+  physics Physics {
+    density 100
+    damping Damping {
+      linear 0.5
+      angular 0.5
+    }
+  }
+  immersionProperties [
+    ImmersionProperties {
+      fluidName "fluid"
+    }
+  ]
+}
+OilBarrel {
+  translation -12.84153292621899 -2.9590451292816424 0.5595498919704248
+  rotation 0.8532138515275621 0.1744585811461465 0.4915183893060122 1.8948628571295547
+  name "oil barrel(2)"
+  physics Physics {
+    density 100
+    damping Damping {
+      linear 0.5
+      angular 0.5
+    }
+  }
+  immersionProperties [
+    ImmersionProperties {
+      fluidName "fluid"
+    }
+  ]
+}
+OilBarrel {
+  translation -0.922007 5.19913 0.531719
+  rotation -0.22060261238192008 0.9729981253772729 -0.06789061365597396 1.5764483419880377
+  name "oil barrel(3)"
+  physics Physics {
+    density 100
+    damping Damping {
+      linear 0.5
+      angular 0.5
+    }
+  }
+  immersionProperties [
+    ImmersionProperties {
+      fluidName "fluid"
+    }
+  ]
+}
+
+# Vessel 0. This hull carries the controller, and its controller is the
+# coordinator for the whole fleet: it resolves every DEF, steps every twin, and
+# writes every pose. Supervisor access is what lets one node move another.
+DEF PINTADO Robot {
+  translation -1.44475 9.01597 0.243555
+  rotation 0 0 1 -1.186295307179586
+  children [
+    Pose {
+      translation -0.01 -3.45307e-06 2e-07
+      rotation -1 0 0 -5.307179586466759e-06
+      children [
+        CadShape {
+          url [
+            "../3d_models/drone_boat/full_model/boat_model.obj"
+          ]
+        }
+      ]
+    }
+    # The stereo view of Table I. Section III routes this feed over RTSP rather
+    # than MQTT, so the twin receives a presence flag here and the image on the
+    # high-speed path; see adapters/rtsp/fdt_rtsp.h.
+    Camera {
+      translation 0 0 0.35
+      width 320
+      height 240
+    }
+  ]
+  name "Pintado"
+  immersionProperties [
+    ImmersionProperties {
+      fluidName "fluid"
+      dragForceCoefficients 1.2 1.2 2
+      dragTorqueCoefficients 5 5 4
+      viscousResistanceTorqueCoefficient 0.8
+    }
+  ]
+  boundingObject Mesh {
+    url [
+      "../3d_models/drone_boat/bounding_box/boat_bounding_box.obj"
+    ]
+  }
+  physics Physics {
+    density -1
+    mass 12
+    centerOfMass [
+      0 0.3 -3.4
+    ]
+    damping Damping {
+      linear 1
+      angular 1
+    }
+  }
+  controller "fdt_controller"
+  supervisor TRUE
+}
+

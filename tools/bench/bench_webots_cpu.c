@@ -1,0 +1,370 @@
+/**
+ * @file bench_webots_cpu.c
+ * @brief The CPU cost of adding a vessel to the simulation, Section V-A.
+ *
+ * Claim measured: C22. Section V-A: "On the MCS side, running WeBots adds 10%
+ * CPU usage for the first boat and less than 1% for subsequent boats added to
+ * the simulation."
+ *
+ * That is a claim about two *differences*, not about two absolute figures, so
+ * three worlds are run and subtracted:
+ *
+ *   empty  -> the renderer's own cost, water and obstacles and nothing to twin
+ *   single -> empty plus one vessel: the "first boat" increment
+ *   fleet  -> single plus one vessel: the "subsequent boat" increment
+ *
+ * The worlds differ in nothing else, which is what makes the subtraction mean
+ * something. adapters/webots/worlds/ holds all three and tests/test_world.c
+ * checks that they stay consistent with each other and with the controller.
+ *
+ * CPU is read from /proc/<pid>/stat -- utime plus stime, the process tree's
+ * own consumed time -- sampled across a window and divided by wall clock. It
+ * is therefore a percentage of one core, which is how the paper's figure reads
+ * on a machine where WeBots is the thing being measured.
+ *
+ * This benchmark needs a WeBots install. Without WEBOTS_HOME it prints why it
+ * is skipping and exits successfully, so `make bench` stays green on a machine
+ * that has no simulator.
+ */
+#define _POSIX_C_SOURCE 200809L
+
+#include "bench_common.h"
+
+#include <errno.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+
+/** Seconds of settling before sampling starts, so startup is not counted. */
+#define WARMUP_S 6
+
+/** Seconds the CPU sample spans. */
+#define SAMPLE_S 10
+
+/**
+ * Runs per world, reduced by median.
+ *
+ * One run per world is not enough. The per-vessel cost here is a couple of
+ * percent and the run-to-run spread is of the same order, which showed up as a
+ * *negative* increment for the second boat -- adding a hull cannot reduce the
+ * cost, so that number was pure noise wearing a result's clothes.
+ */
+#define REPEATS 3
+
+/** One world in the sweep. */
+typedef struct {
+    const char *file;
+    int         vessels;
+    const char *what;
+} world_t;
+
+static const world_t WORLDS[] = {
+    { "jundia_empty.wbt",  0, "renderer only" },
+    { "jundia_single.wbt", 1, "first boat" },
+    { "jundia_fleet.wbt",  2, "second boat" },
+};
+#define NWORLDS ((int)(sizeof WORLDS / sizeof WORLDS[0]))
+
+/** Clock ticks per second, for interpreting /proc/<pid>/stat. */
+static double g_hz;
+
+/** Wall-clock seconds, monotonic. */
+static double now_s(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+/**
+ * @brief CPU time a process has consumed, in seconds.
+ *
+ * Sums utime and stime from /proc/<pid>/stat. Returns -1.0 when the process is
+ * gone, which is how the caller learns that WeBots died rather than settled.
+ *
+ * @note Fields 14 and 15 are read by skipping past the comm field, which is
+ *       parenthesised and may itself contain spaces and parentheses. Anything
+ *       that scans forward from the start instead of from the last ')' gets
+ *       this wrong for a process whose name has a space in it.
+ */
+static double cpu_seconds(pid_t pid)
+{
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/stat", (int)pid);
+
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        return -1.0;
+    }
+
+    static char line[4096];
+    if (fgets(line, sizeof line, f) == NULL) {
+        fclose(f);
+        return -1.0;
+    }
+    fclose(f);
+
+    const char *after_comm = strrchr(line, ')');
+    if (after_comm == NULL) {
+        return -1.0;
+    }
+
+    unsigned long utime = 0;
+    unsigned long stime = 0;
+    /* After ") " come eleven fields -- state, ppid, pgrp, session, tty_nr,
+     * tpgid, flags, minflt, cminflt, majflt, cmajflt -- and then utime and
+     * stime. They are skipped as bare tokens rather than by type, because a
+     * suppressed conversion may not carry a length modifier. */
+    if (sscanf(after_comm + 2,
+               "%*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %*s %lu %lu",
+               &utime, &stime) != 2) {
+        return -1.0;
+    }
+    return (double)(utime + stime) / g_hz;
+}
+
+/**
+ * @brief CPU consumed by a process and every descendant it still has.
+ *
+ * WeBots launches the controller as a child, and the controller's cost is part
+ * of what the paper's figure covers: adding a boat adds both a hull to render
+ * and a twin to step. Charging only the parent would undercount every vessel.
+ */
+static double tree_cpu_seconds(pid_t root)
+{
+    double total = cpu_seconds(root);
+    if (total < 0.0) {
+        return -1.0;
+    }
+
+    /* One level of children is enough: WeBots spawns controllers directly. */
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task/%d/children", (int)root,
+             (int)root);
+
+    FILE *f = fopen(path, "r");
+    if (f == NULL) {
+        return total;
+    }
+
+    int child = 0;
+    while (fscanf(f, "%d", &child) == 1) {
+        const double c = cpu_seconds((pid_t)child);
+        if (c > 0.0) {
+            total += c;
+        }
+    }
+    fclose(f);
+    return total;
+}
+
+/** Sleeps for a whole number of seconds, resuming through signals. */
+static void sleep_s(int seconds)
+{
+    struct timespec req = { .tv_sec = seconds, .tv_nsec = 0 };
+    struct timespec rem;
+    while (nanosleep(&req, &rem) == -1 && errno == EINTR) {
+        req = rem;
+    }
+}
+
+/**
+ * @brief Runs one world and returns the CPU percentage it consumed.
+ * @return Percent of one core, or -1.0 when WeBots failed to stay up.
+ */
+static double measure(const char *webots, const char *world)
+{
+    char path[512];
+    snprintf(path, sizeof path, "adapters/webots/worlds/%s", world);
+
+    const pid_t pid = fork();
+    if (pid < 0) {
+        return -1.0;
+    }
+
+    if (pid == 0) {
+        /* Quiet, headless-ish, and its own process group so the parent can
+         * take the whole thing down without touching its own shell. */
+        setpgid(0, 0);
+        freopen("/dev/null", "w", stdout);
+        freopen("/dev/null", "w", stderr);
+        /* Real time, and rendering on. Both matter.
+         *
+         * --mode=fast lets WeBots run the simulation as quickly as it can, so
+         * it pins a core at 100 % whatever the world holds, and every
+         * increment measures scheduler noise instead of a vessel. Real time
+         * fixes the work per wall-clock second, which is the only way a
+         * difference between worlds means anything.
+         *
+         * --no-rendering would remove the renderer, and the renderer is most
+         * of what Section V-A is measuring when it says running WeBots adds
+         * CPU per boat. */
+        execl(webots, "webots", "--batch", "--mode=realtime", "--minimize",
+              path, (char *)NULL);
+        _exit(127);
+    }
+
+    sleep_s(WARMUP_S);
+
+    const double c0 = tree_cpu_seconds(pid);
+    const double t0 = now_s();
+    if (c0 < 0.0) {
+        kill(-pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        return -1.0;
+    }
+
+    sleep_s(SAMPLE_S);
+
+    const double c1 = tree_cpu_seconds(pid);
+    const double t1 = now_s();
+
+    kill(-pid, SIGTERM);
+    kill(-pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+
+    if (c1 < 0.0 || t1 <= t0) {
+        return -1.0;
+    }
+    return 100.0 * (c1 - c0) / (t1 - t0);
+}
+
+int main(void)
+{
+    g_hz = (double)sysconf(_SC_CLK_TCK);
+    if (g_hz <= 0.0) {
+        g_hz = 100.0;
+    }
+
+    const char *home = getenv("WEBOTS_HOME");
+    if (home == NULL || home[0] == '\0') {
+        printf("== fleet-dt WeBots CPU bench ==\n");
+        printf("WEBOTS_HOME is not set; skipping.\n");
+        printf("This benchmark measures C22, which needs the simulator. "
+               "See adapters/webots/README.md.\n\n");
+        return EXIT_SUCCESS;
+    }
+
+    char webots[512];
+    snprintf(webots, sizeof webots, "%s/webots", home);
+
+    bench_report_t r;
+    bench_open(&r, "webots_cpu");
+    bench_banner(&r, "fleet-dt WeBots CPU bench");
+    bench_say(&r, "warmup %d s, sample %d s per world, %.0f clock ticks/s\n",
+              WARMUP_S, SAMPLE_S, g_hz);
+    bench_say(&r, "measuring WeBots and its controller together: adding a boat "
+                  "adds\nboth a hull to render and a twin to step.\n");
+
+    static double xs[NWORLDS];
+    static double cpu[NWORLDS];
+    static double spread[NWORLDS];
+    static double increment[NWORLDS];
+
+    bench_section(&r, "absolute cost per world, median of %d runs");
+    bench_say(&r, "  %-20s %8s %11s %11s %12s\n",
+              "world", "vessels", "cpu median", "spread", "increment");
+
+    int ok = 1;
+    for (int i = 0; i < NWORLDS; i++) {
+        double runs[REPEATS];
+        int got = 0;
+
+        for (int rep = 0; rep < REPEATS; rep++) {
+            const double pct = measure(webots, WORLDS[i].file);
+            if (pct >= 0.0) {
+                runs[got++] = pct;
+            }
+        }
+        if (got == 0) {
+            bench_say(&r, "  %-20s   FAILED to run\n", WORLDS[i].file);
+            ok = 0;
+            continue;
+        }
+
+        /* Median over a handful of runs: an insertion sort is the whole of it. */
+        for (int a = 1; a < got; a++) {
+            const double v = runs[a];
+            int b = a - 1;
+            while (b >= 0 && runs[b] > v) {
+                runs[b + 1] = runs[b];
+                b--;
+            }
+            runs[b + 1] = v;
+        }
+
+        xs[i]     = (double)WORLDS[i].vessels;
+        cpu[i]    = runs[got / 2];
+        spread[i] = runs[got - 1] - runs[0];
+        increment[i] = (i == 0) ? cpu[i] : (cpu[i] - cpu[i - 1]);
+
+        bench_say(&r, "  %-20s %8d %9.2f %% %9.2f %% %10.2f %%   (%s)\n",
+                  WORLDS[i].file, WORLDS[i].vessels, cpu[i], spread[i],
+                  increment[i], WORLDS[i].what);
+    }
+
+    if (!ok) {
+        bench_say(&r, "\nAt least one world failed to run; the differences "
+                      "below are not meaningful.\n");
+        bench_close(&r);
+        return EXIT_SUCCESS;
+    }
+
+    char buf[64];
+
+    /* An increment smaller than the run-to-run spread is not a measurement of
+     * anything. Saying so is the difference between a benchmark and a number. */
+    const double noise = (spread[0] > spread[1]) ? spread[0] : spread[1];
+    const double noise2 = (noise > spread[2]) ? noise : spread[2];
+
+    bench_section(&r, "the two figures Section V-A publishes");
+
+    snprintf(buf, sizeof buf, "%.2f %%", increment[1]);
+    bench_compare(&r, "first boat", buf, "adds 10 % CPU",
+                  (increment[1] < noise)
+                      ? BENCH_NA
+                      : ((increment[1] > 5.0 && increment[1] < 20.0)
+                             ? BENCH_OK : BENCH_DIVERGE));
+
+    snprintf(buf, sizeof buf, "%.2f %%", increment[2]);
+    bench_compare(&r, "each subsequent boat", buf, "less than 1 %",
+                  (increment[2] < noise2 && increment[2] < 1.0)
+                      ? BENCH_NA
+                      : ((increment[2] < 1.0) ? BENCH_OK : BENCH_DIVERGE));
+
+    bench_say(&r, "\n  run-to-run spread: %.2f %%. An increment under that is\n"
+                  "  reported as [BOUNDARY] rather than as a result: this "
+                  "machine\n  cannot separate it from noise, whichever way it "
+                  "points.\n", noise2);
+
+    bench_say(&r,
+        "\n  The shape of the claim is that the first vessel is expensive and\n"
+        "  the rest are nearly free, because the renderer, the physics world\n"
+        "  and the fluid are paid for once. A machine that disagrees on the\n"
+        "  absolute numbers can still reproduce that shape, and the shape is\n"
+        "  what the architecture rests on: a fleet is affordable because\n"
+        "  vessel N+1 costs almost nothing.\n");
+
+    bench_say(&r, "\n  ratio first : subsequent = %.1f : 1\n",
+              (increment[2] > 0.0) ? increment[1] / increment[2] : 0.0);
+
+    fdt_plot_t p;
+    fdt_plot_init(&p, "CPU cost of the simulation against vessel count",
+                  "vessels in the world", "CPU (% of one core)");
+    fdt_plot_series(&p, "total", xs, cpu, NWORLDS, FDT_PLOT_LINE);
+    fdt_plot_series(&p, "increment per vessel", xs, increment, NWORLDS,
+                    FDT_PLOT_BAR);
+    fdt_plot_hline(&p, 10.0, "first boat: 10 % (Sec. V-A)");
+    fdt_plot_hline(&p, 1.0, "each next: < 1 % (Sec. V-A)");
+    fdt_plot_write_svg(&p, "results/webots_cpu.svg");
+    fdt_plot_write_csv(&p, "results/webots_cpu.csv");
+
+    bench_artefacts(&r, "webots_cpu");
+    bench_close(&r);
+    return EXIT_SUCCESS;
+}

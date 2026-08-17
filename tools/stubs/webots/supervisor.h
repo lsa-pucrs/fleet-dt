@@ -10,6 +10,7 @@ typedef void *WbFieldRef;
 
 WbNodeRef  wb_supervisor_node_get_from_def(const char *def);
 WbFieldRef wb_supervisor_node_get_field(WbNodeRef node, const char *name);
+const double *wb_supervisor_field_get_sf_vec3f(WbFieldRef field);
 void wb_supervisor_field_set_sf_vec3f(WbFieldRef field, const double values[3]);
 void wb_supervisor_field_set_sf_rotation(WbFieldRef field,
                                          const double values[4]);

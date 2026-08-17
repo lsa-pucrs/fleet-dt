@@ -22,9 +22,11 @@
  * unset. Nothing in the core library links the WeBots controller library.
  *
  * @note The CPU figures of Section V-A — "running WeBots adds 10% CPU usage
- *       for the first boat and less than 1% for subsequent boats" — are a
- *       boundary. They are a property of the renderer and cannot be
- *       reproduced by `make bench`; see C22 in docs/spec/paper-claims.md.
+ *       for the first boat and less than 1% for subsequent boats" — are
+ *       measured by tools/bench/bench_webots_cpu.c, which opens the
+ *       zero-, one- and two-vessel worlds in turn and subtracts. The vessel
+ *       count is discovered from the world rather than compiled in, which is
+ *       what lets one binary serve all three.
  */
 #include <webots/robot.h>
 #include <webots/supervisor.h>
@@ -36,6 +38,7 @@
 #include <fleet_dt/envelope.h>
 #include <fleet_dt/feasibility.h>
 #include <fleet_dt/framesync.h>
+#include <fleet_dt/geo.h>
 #include <fleet_dt/tick.h>
 #include <fleet_dt/transport.h>
 #include <fleet_dt/version.h>
@@ -45,8 +48,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-/** Vessels this world holds. Must match the number of Robot nodes. */
-#define VESSELS 2
+/**
+ * Upper bound on vessels. The actual count is discovered at startup by asking
+ * the world which DEFs resolve, so one controller binary serves a one-boat
+ * world and a two-boat world without a rebuild. That is what makes the CPU
+ * comparison of Section V-A -- the first boat against each subsequent one --
+ * a matter of opening a different world rather than of editing this file.
+ */
+#define MAX_VESSELS 8
 
 /** Queue depth per vessel: 48 * CAP bytes, the 48d bound of Section IV. */
 #define QUEUE_CAP 16
@@ -66,25 +75,43 @@
  * each of these exists in the world exactly once, which is the half of this
  * file that can be verified without the SDK.
  */
-static const char *const VESSEL_DEF[VESSELS] = { "PINTADO", "TILAPIA" };
+static const char *const VESSEL_DEF[MAX_VESSELS] = {
+    "PINTADO", "TILAPIA", "DOURADO", "PIAVA",
+    "TRAIRA",  "LAMBARI", "CARPA",   "PACU",
+};
 
-static fdt_state_t     g_queues[VESSELS][QUEUE_CAP];
-static fdt_twin_t      g_twins[VESSELS];
-static fdt_state_t     g_slots[VESSELS];
-static fdt_input_t     g_decoded[VESSELS];
-static fdt_input_t     g_ins[VESSELS];
-static fdt_goal_t      g_gprev[VESSELS];
-static fdt_goal_t      g_gnow[VESSELS];
-static fdt_state_t     g_bs[VESSELS];
-static fdt_actuation_t g_as[VESSELS];
-static uint32_t        g_seqs[VESSELS];
-static uint8_t         g_hits[VESSELS];
+/** Vessels this world actually holds; resolved in main(). */
+static size_t g_vessels;
+
+static fdt_state_t     g_queues[MAX_VESSELS][QUEUE_CAP];
+static fdt_twin_t      g_twins[MAX_VESSELS];
+static fdt_state_t     g_slots[MAX_VESSELS];
+static fdt_input_t     g_decoded[MAX_VESSELS];
+static fdt_input_t     g_ins[MAX_VESSELS];
+static fdt_goal_t      g_gprev[MAX_VESSELS];
+static fdt_goal_t      g_gnow[MAX_VESSELS];
+static fdt_state_t     g_bs[MAX_VESSELS];
+static fdt_actuation_t g_as[MAX_VESSELS];
+static uint32_t        g_seqs[MAX_VESSELS];
+static uint8_t         g_hits[MAX_VESSELS];
 static fdt_framesync_t g_fs;
-static fdt_feas_t      g_feas[VESSELS];
+static fdt_feas_t      g_feas[MAX_VESSELS];
 
 /** Supervisor handles for writing the twin state into the 3D world. */
-static WbFieldRef g_translation[VESSELS];
-static WbFieldRef g_rotation[VESSELS];
+static WbFieldRef g_translation[MAX_VESSELS];
+static WbFieldRef g_rotation[MAX_VESSELS];
+
+/**
+ * Where the world put each hull, and the geodetic point taken to match it.
+ *
+ * The twin reports a latitude and a longitude; the world wants metres from an
+ * arbitrary origin. The two are reconciled by anchoring rather than by
+ * converting, for the reason spelled out in render_vessel().
+ */
+static double g_origin[MAX_VESSELS][3];
+static double g_ref_lat[MAX_VESSELS];
+static double g_ref_lon[MAX_VESSELS];
+static int    g_anchored[MAX_VESSELS];
 
 /** Fleet context: yaw spread, standing in for inter-vessel distance. */
 typedef struct {
@@ -183,7 +210,7 @@ static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
     if (fdt_env_decode(buf, len, &env, &payload) < 0 || payload == NULL) {
         return;
     }
-    if (env.kind != FDT_ENV_INPUT || env.vessel >= VESSELS) {
+    if (env.kind != FDT_ENV_INPUT || (size_t)env.vessel >= g_vessels) {
         return;
     }
 
@@ -200,13 +227,38 @@ static void render_vessel(size_t k, const fdt_state_t *b)
         return;
     }
 
-    /* Degrees of latitude and longitude onto world metres. A local tangent
-     * plane is adequate for a lagoon, and the boats of Section II never leave
-     * one. */
-    const double metres_per_deg = 111320.0;
-    const double x = (double)b->lon_deg * metres_per_deg;
-    const double z = (double)b->lat_deg * metres_per_deg;
-    const double position[3] = { x, (double)b->alt_m, z };
+    /* A state produced before any telemetry arrived carries no position.
+     * Rendering the zero it holds would drag the hull to the null island. */
+    if (b->lat_deg == 0.0f && b->lon_deg == 0.0f) {
+        return;
+    }
+
+    /* Anchor on the first real fix: that geodetic point is taken to be where
+     * the world already placed this hull.
+     *
+     * Converting latitude and longitude to world metres directly does not
+     * work. Multiplying -51.17 degrees by metres per degree puts the vessel
+     * five thousand kilometres from the origin, and the water in this world is
+     * a thousand metres square, so the hulls leave the scene on the first
+     * frame and the operator sees an empty lagoon. */
+    if (!g_anchored[k]) {
+        g_ref_lat[k]  = (double)b->lat_deg;
+        g_ref_lon[k]  = (double)b->lon_deg;
+        g_anchored[k] = 1;
+    }
+
+    /* Displacement on a local tangent plane, which is all the vessels of
+     * Section II ever cross. The arithmetic lives in the library so that
+     * tests/test_geo.c can hold it to account; doing it inline here is how it
+     * was wrong in the first place. */
+    double dx = 0.0;
+    double dz = 0.0;
+    fdt_geo_offset(g_ref_lat[k], g_ref_lon[k],
+                   (double)b->lat_deg, (double)b->lon_deg, &dx, &dz);
+
+    const double position[3] = { g_origin[k][0] + dx,
+                                 g_origin[k][1],
+                                 g_origin[k][2] + dz };
     wb_supervisor_field_set_sf_vec3f(g_translation[k], position);
 
     /* Yaw about the vertical axis. Table I gives the angle in degrees and
@@ -227,15 +279,34 @@ int main(int argc, char **argv)
      * maintained by hand: it is read from the same constant. */
     const int step_ms = (int)(FDT_TICK_NS / 1000000L);
 
-    for (size_t k = 0; k < VESSELS; k++) {
+    /* Ask the world how many vessels it holds. The DEFs are tried in order and
+     * the first miss ends the fleet, so a world with PINTADO alone yields one
+     * vessel and the same binary drives it. */
+    g_vessels = 0;
+    for (size_t k = 0; k < MAX_VESSELS; k++) {
         WbNodeRef node = wb_supervisor_node_get_from_def(VESSEL_DEF[k]);
-        if (node != NULL) {
-            g_translation[k] = wb_supervisor_node_get_field(node,
-                                                            "translation");
-            g_rotation[k] = wb_supervisor_node_get_field(node, "rotation");
-        } else {
-            fprintf(stderr, "no node DEF %s in this world\n", VESSEL_DEF[k]);
+        if (node == NULL) {
+            break;
         }
+        g_translation[k] = wb_supervisor_node_get_field(node, "translation");
+        g_rotation[k]    = wb_supervisor_node_get_field(node, "rotation");
+
+        /* Where the world placed this hull; the twin's motion is rendered as
+         * a displacement from here rather than as an absolute position. */
+        const double *t = wb_supervisor_field_get_sf_vec3f(g_translation[k]);
+        if (t != NULL) {
+            g_origin[k][0] = t[0];
+            g_origin[k][1] = t[1];
+            g_origin[k][2] = t[2];
+        }
+        g_anchored[k] = 0;
+        g_vessels++;
+    }
+
+    if (g_vessels == 0) {
+        fprintf(stderr, "no vessel DEF found; this world holds no DTI\n");
+        wb_robot_cleanup();
+        return EXIT_FAILURE;
     }
 
     /* Transport. Over a real deployment this is fdt_mqtt_open(host, 1883,
@@ -244,10 +315,10 @@ int main(int argc, char **argv)
     static fdt_loop_t loop;
     fdt_transport_t tr = fdt_loop_transport(&loop);
     static fdt_inj_t inj;
-    fdt_inj_init(&inj, &tr, VESSELS, 8.0, 20260817u);
+    fdt_inj_init(&inj, &tr, (unsigned)g_vessels, 8.0, 20260817u);
 
     const fdt_state_t zero = {0};
-    for (size_t k = 0; k < VESSELS; k++) {
+    for (size_t k = 0; k < g_vessels; k++) {
         fdt_twin_init(&g_twins[k], g_queues[k], QUEUE_CAP,
                       webots_delta_e, webots_pi, NULL);
         for (int s = 0; s < WINDOW; s++) {
@@ -259,7 +330,7 @@ int main(int argc, char **argv)
         fdt_feas_init(&g_feas[k], FDT_TICK_NS);
     }
 
-    fdt_fs_init(&g_fs, g_seqs, g_hits, VESSELS);
+    fdt_fs_init(&g_fs, g_seqs, g_hits, g_vessels);
 
     static fleet_ctx_t fc = { .spread_deg = 0.0f,
                               .throttle_ceiling_pct = 60.0f };
@@ -267,8 +338,8 @@ int main(int argc, char **argv)
     static fdt_store_t store;
     static fdt_coord_t coord;
 
-    fdt_fleet_init(&fleet, g_twins, VESSELS, &fc);
-    fdt_store_init(&store, g_slots, VESSELS);
+    fdt_fleet_init(&fleet, g_twins, g_vessels, &fc);
+    fdt_store_init(&store, g_slots, g_vessels);
     fdt_coord_init(&coord, &fleet, &store, webots_ctx, webots_plan, NULL);
 
     /* One status line every STATUS_EVERY frames. A simulator console that
@@ -277,8 +348,8 @@ int main(int argc, char **argv)
      * ends as having "crashed" -- so silence here reads as failure. */
     size_t frames = 0;
 
-    printf("fdt_controller: %s, %d vessels, %d ms frame, window %d\n",
-           fdt_version(), VESSELS, step_ms, WINDOW);
+    printf("fdt_controller: %s, %zu vessels, %d ms frame, window %d\n",
+           fdt_version(), g_vessels, step_ms, WINDOW);
     fflush(stdout);
 
     while (wb_robot_step(step_ms) != -1) {
@@ -287,7 +358,7 @@ int main(int argc, char **argv)
         tr.poll(tr.self, 0);
         fdt_fs_end_frame(&g_fs);
 
-        for (size_t k = 0; k < VESSELS; k++) {
+        for (size_t k = 0; k < g_vessels; k++) {
             g_ins[k] = g_decoded[k];
         }
 
@@ -303,13 +374,13 @@ int main(int argc, char **argv)
 
         /* Section I feature (iii): the near-real-time 3D reference. It is
          * written from the state the coordinator produced this very frame. */
-        for (size_t k = 0; k < VESSELS; k++) {
+        for (size_t k = 0; k < g_vessels; k++) {
             render_vessel(k, &g_bs[k]);
         }
 
         /* A^t travels back to the boats. Over a real link this is where the
          * latency Section V-A observes is incurred. */
-        for (size_t k = 0; k < VESSELS; k++) {
+        for (size_t k = 0; k < g_vessels; k++) {
             uint8_t payload[FDT_WIRE_ACT_BYTES];
             if (fdt_enc_act(&g_as[k], payload, sizeof payload) < 0) {
                 continue;
@@ -335,14 +406,21 @@ int main(int argc, char **argv)
         if (frames % STATUS_EVERY == 0) {
             printf("fdt_controller: frame %zu  yaw %.2f / %.2f deg  "
                    "spread %.2f  worst delta %.1f us  feasible %d  "
-                   "partial %llu  double %llu\n",
+                   "partial %llu  double %llu  pos0 %.1f,%.1f\n",
                    frames,
-                   (double)g_bs[0].yaw_deg, (double)g_bs[1].yaw_deg,
+                   (double)g_bs[0].yaw_deg,
+                   (double)g_bs[g_vessels > 1 ? 1 : 0].yaw_deg,
                    (double)fc.spread_deg,
                    (double)fdt_feas_worst_ns(&g_feas[0]) / 1e3,
                    fdt_feas_ok(&g_feas[0]),
                    (unsigned long long)fdt_fs_partial_frames(&g_fs),
-                   (unsigned long long)fdt_fs_double_updates(&g_fs));
+                   (unsigned long long)fdt_fs_double_updates(&g_fs),
+                   g_translation[0] != NULL
+                       ? wb_supervisor_field_get_sf_vec3f(g_translation[0])[0]
+                       : 0.0,
+                   g_translation[0] != NULL
+                       ? wb_supervisor_field_get_sf_vec3f(g_translation[0])[2]
+                       : 0.0);
             fflush(stdout);
         }
 
