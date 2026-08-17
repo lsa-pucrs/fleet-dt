@@ -1,0 +1,8 @@
+*.o
+*.a
+fleet_dt_test_*
+examples/daemon
+examples/two_paths
+tools/bench/bench_*
+!tools/bench/bench_*.c
+results/
