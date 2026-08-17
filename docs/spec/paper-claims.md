@@ -47,7 +47,7 @@ em uma equação a partir da (3).
 
 | id | Afirmação | § | Artefato que quita | Status |
 |---|---|---|---|---|
-| C1 | "a fleet-level Digital Twin model and architecture for AUSVs" | Abstract | `include/fleet_dt/{model,queue,transition,fleet}.h` + `adapters/` | pendente |
+| C1 | "a fleet-level Digital Twin model and architecture for AUSVs" | Abstract | **roll-up**: quita quando C2–C19 estiverem em `quita` ou `fronteira` | pendente |
 | C2 | "The architecture relies on the MQTT protocol" | Abstract, §III | `include/fleet_dt/transport.h` + `adapters/mqtt/` | pendente |
 | C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/`, `adapters/webots/`, `adapters/sim/` | fronteira |
 | C4 | "Link-budget modeling is validated in the context of the Jundiá Project's fleet" | Abstract, §V-A | `include/fleet_dt/linkbudget.h` + `tools/bench/link_budget` | pendente |
@@ -153,5 +153,15 @@ rastreável até uma linha do paper.
    which must be a known starting state", enquanto a recorrência da eq. (3) pede
    um `t−1` anterior ao primeiro passo. O código trata o estado inicial como
    condição de contorno semeada, não como algo que δᵉ produz.
+5. **O período dos 48 KB, e o que "increased < 1%" mede.** §V-A: "Due to the
+   size of packets (48 KB payload plus camera feed frame), the bandwidth usage
+   increased < 1% for an update window of 125 ms". Com 48 KB *por janela de
+   125 ms*, a taxa é 48 × 1024 × 8 × 8 = 3,15 Mbps, ou **3,1%** de um enlace de
+   100 Mbps — não fecha com "< 1%". Duas saídas, e o manuscrito não escolhe:
+   ou os 48 KB são por segundo e não por janela (0,38%, que fecha), ou
+   "increased" é razão contra o tráfego preexistente e não ocupação absoluta.
+   **Decisão: o código não escolhe.** `fdt_link_utilization` calcula a leitura
+   absoluta, `fdt_link_increase` a relativa, e o benchmark imprime as duas
+   rotuladas. Nenhum teste asserta o "< 1%".
 
-Itens 1–3 valem como correção para o manuscrito.
+Itens 1, 2, 3 e 5 valem como correção para o manuscrito.

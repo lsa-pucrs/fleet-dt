@@ -28,13 +28,16 @@
 - Test: `tests/test_codec.c`
 
 **Interfaces:**
-- Produces: `FDT_WIRE_STATE_BYTES` (48), `FDT_WIRE_INPUT_BYTES` (76), `FDT_WIRE_ACT_BYTES` (8); `fdt_enc_state(const fdt_state_t*, uint8_t *buf, size_t cap) -> ssize_t`; `fdt_dec_state(const uint8_t *buf, size_t len, fdt_state_t*) -> ssize_t`; e os pares `fdt_enc_input`/`fdt_dec_input`, `fdt_enc_act`/`fdt_dec_act`. Cada um retorna bytes consumidos ou `-1`.
+- Produces: `FDT_WIRE_STATE_BYTES` (48), `FDT_WIRE_INPUT_BYTES` (**78**), `FDT_WIRE_ACT_BYTES` (8), `FDT_VIEW_PRESENT`; `fdt_enc_state(const fdt_state_t*, uint8_t *buf, size_t cap) -> ssize_t`; `fdt_dec_state(const uint8_t *buf, size_t len, fdt_state_t*) -> ssize_t`; e os pares `fdt_enc_input`/`fdt_dec_input`, `fdt_enc_act`/`fdt_dec_act`. Cada um retorna bytes consumidos ou `-1`.
 
-`FDT_WIRE_INPUT_BYTES` é 76 = 19 escalares × 4 bytes. As duas vistas de câmera
-da Tabela I **não vão no fio**: são ponteiros opacos, e o §III as tira do MQTT
-para o RTSP (C11). O codec grava um byte de flag por vista, indicando presença,
-e o receptor as reamarra pelo caminho HSDT — daí 76 + 2 = 78 no total. Fixe
-`FDT_WIRE_INPUT_BYTES` em **78** e documente a decomposição no header.
+Decomposição de `FDT_WIRE_INPUT_BYTES`, uma vez e só aqui: a Tabela I lista 21
+entradas; duas delas são as vistas de câmera, que **não vão no fio** — são
+ponteiros opacos, e o §III as tira do MQTT para o RTSP (C11). Restam 19
+escalares × 4 bytes = 76, mais 1 byte de flag de presença por vista = **78**.
+O receptor reamarra as imagens pelo caminho HSDT.
+
+`FDT_VIEW_PRESENT` é `((const void *)(uintptr_t)1)`: sentinela que marca "havia
+uma vista aqui", nunca desreferenciada.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -65,11 +68,14 @@ int main(void)
     assert(fdt_enc_state(&b, buf, sizeof buf) == FDT_WIRE_STATE_BYTES);
     assert(fdt_enc_state(&b, buf, 4) == -1);        /* buffer curto */
 
-    /* Little-endian explícito: o primeiro float é lat_deg e o formato não
-     * depende do endianness do host. */
-    float back;
-    memcpy(&back, buf, 4);
-    (void)back;  /* só vale em host LE; a checagem real é o round-trip */
+    /* Little-endian explícito, checado pelo padrão de bytes e não pelo
+     * round-trip: 1.0f em IEEE-754 é 0x3F800000, que no fio sai como
+     * 00 00 80 3F. Um codec que fizesse memcpy do struct passaria no
+     * round-trip e falharia aqui num host big-endian. */
+    fdt_state_t one = { .lat_deg = 1.0f };
+    uint8_t le[FDT_WIRE_STATE_BYTES];
+    assert(fdt_enc_state(&one, le, sizeof le) == FDT_WIRE_STATE_BYTES);
+    assert(le[0] == 0x00 && le[1] == 0x00 && le[2] == 0x80 && le[3] == 0x3F);
 
     fdt_state_t out = {0};
     assert(fdt_dec_state(buf, FDT_WIRE_STATE_BYTES, &out) == FDT_WIRE_STATE_BYTES);
@@ -416,7 +422,15 @@ Quita **C4**, **C10** e dá a aritmética de **C20**.
 - Test: `tests/test_linkbudget.c`
 
 **Interfaces:**
-- Produces: `fdt_stream_t {const char *name; size_t payload_bytes; double hz; unsigned vessels;}`; `fdt_link_t {double capacity_bps; double overhead_ratio;}`; `fdt_link_stream_bps(const fdt_stream_t*) -> double`; `fdt_link_total_bps(const fdt_link_t*, const fdt_stream_t*, size_t n) -> double`; `fdt_link_utilization(const fdt_link_t*, const fdt_stream_t*, size_t n) -> double`; `fdt_link_max_vessels(const fdt_link_t*, const fdt_stream_t*, size_t n, double budget) -> unsigned`.
+- Produces: `fdt_stream_t {const char *name; size_t payload_bytes; double hz; unsigned vessels;}`; `fdt_link_t {double capacity_bps; double overhead_ratio;}`; `fdt_link_stream_bps(const fdt_stream_t*) -> double`; `fdt_link_total_bps(const fdt_link_t*, const fdt_stream_t*, size_t n) -> double`; `fdt_link_utilization(const fdt_link_t*, const fdt_stream_t*, size_t n) -> double`; `fdt_link_increase(const fdt_link_t*, const fdt_stream_t *baseline, size_t nb, const fdt_stream_t *added, size_t na) -> double`; `fdt_link_max_vessels(const fdt_link_t*, const fdt_stream_t*, size_t n, double budget) -> unsigned`.
+
+**`fdt_link_increase` existe porque o §V-A não afirma o que `utilization`
+mede.** A frase é "the bandwidth usage **increased** < 1%" — um delta contra o
+tráfego que já existia, não a ocupação absoluta do enlace. Com ocupação
+absoluta a conta não fecha: 48 KB × 8 bits × 8 Hz são 3,1 Mbps, ou 3,1% de
+100 Mbps. A ambiguidade está registrada como item 5 da seção H do spec; o
+teste **imprime as duas leituras e asserta só a aritmética**, nunca o número
+do paper.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -448,13 +462,36 @@ int main(void)
     assert(fabs(bps - 48.0 * 1024.0 * 8.0 * 8.0) < 1e-6);
 
     /* §V-A: "the bandwidth usage increased < 1% for an update window of
-     * 125 ms". 48 KB * 8 bits * 8 Hz = 3.145 Mbps sobre 100 Mbps são 3.1%, o
-     * que só fecha em < 1% se a capacidade do enlace for maior que a nominal
-     * de 100 Mbps, ou se o payload já vier regulado. O teste registra o
-     * número, não o força. */
+     * 125 ms". Duas leituras possíveis, e o paper não escolhe entre elas.
+     *
+     * Leitura A, ocupação absoluta: 48 KB * 8 bits * 8 Hz = 3.145 Mbps sobre
+     * 100 Mbps = 3.1%. Não fecha com "< 1%".
+     * Leitura B, incremento sobre o tráfego que já existia: é o que a palavra
+     * "increased" diz, e fecha assim que a linha de base é o próprio enlace
+     * em uso.
+     *
+     * O teste asserta a aritmética das duas e imprime os dois números. Não
+     * asserta o "< 1%", porque asserta-lo seria escolher a leitura em nome
+     * dos autores. Item 5 da seção H de docs/spec/paper-claims.md. */
     double util = fdt_link_utilization(&wifi, &lsdt, 1);
-    printf("48 KB at 8 Hz over 100 Mbps: %.3f%% utilization\n", 100.0 * util);
-    assert(util > 0.03 && util < 0.032);
+    printf("reading A, absolute: %.3f%% of a 100 Mbps link\n", 100.0 * util);
+    assert(util > 0.031 && util < 0.032);
+    assert(fabs(util - bps / wifi.capacity_bps) < 1e-12);
+
+    /* Leitura B: quanto o uso do enlace cresceu em relação ao que já
+     * trafegava. "usage increased" é razão contra a linha de base, não contra
+     * a capacidade — é por isso que a linha de base é argumento e não
+     * constante. Com o vídeo HSDT já no ar, o LSDT do DT é ruído em cima
+     * dele. */
+    fdt_stream_t baseline = { .name = "existing", .payload_bytes = 1u << 20,
+                              .hz = 8.0, .vessels = 1 };
+    double inc = fdt_link_increase(&wifi, &baseline, 1, &lsdt, 1);
+    printf("reading B, usage increase over baseline: %.3f%%\n", 100.0 * inc);
+    assert(fabs(inc - fdt_link_stream_bps(&lsdt) /
+                      fdt_link_stream_bps(&baseline)) < 1e-12);
+
+    /* Linha de base vazia não tem incremento relativo definido. */
+    assert(fdt_link_increase(&wifi, NULL, 0, &lsdt, 1) < 0.0);
 
     /* Overhead de cabeçalho: MQTT sobre TCP sobre Wi-Fi. 20% infla o mesmo
      * fluxo proporcionalmente. */
@@ -478,7 +515,7 @@ int main(void)
 
 - [ ] **Step 2: Rodar e ver falhar.**
 
-- [ ] **Step 3: Implementar.** `fdt_link_stream_bps` é `payload_bytes * 8 * hz * vessels`. `fdt_link_total_bps` soma os fluxos e aplica `(1 + overhead_ratio)`. `fdt_link_utilization` divide pela capacidade. `fdt_link_max_vessels` faz a divisão inteira do orçamento pelo custo de um vaso, tratando custo zero como "ilimitado" retornando `UINT_MAX`.
+- [ ] **Step 3: Implementar.** `fdt_link_stream_bps` é `payload_bytes * 8 * hz * vessels`. `fdt_link_total_bps` soma os fluxos e aplica `(1 + overhead_ratio)`. `fdt_link_utilization` divide pela capacidade. `fdt_link_increase` divide o total acrescentado pelo total da linha de base, e retorna `-1.0` quando a linha de base é zero, porque incremento relativo sobre nada não é número. `fdt_link_max_vessels` faz a divisão inteira do orçamento pelo custo de um vaso, tratando custo zero como "ilimitado" retornando `UINT_MAX`.
 
 - [ ] **Step 4: Rodar e ver passar.**
 
@@ -493,10 +530,183 @@ int main(void)
 - Test: `tests/test_transport.c`
 
 **Interfaces:**
-- Produces: `fdt_transport_t` com `publish(void *self, const char *topic, const uint8_t *buf, size_t len, int qos)`, `subscribe(void *self, const char *topic, fdt_on_msg_fn cb, void *user)`, `poll(void *self, int timeout_ms)`, `close(void *self)`, e `void *self`; `typedef void (*fdt_on_msg_fn)(const char *topic, const uint8_t *buf, size_t len, void *user)`; `fdt_loop_transport(fdt_loop_t*) -> fdt_transport_t` — implementação em processo, sem rede, para teste.
-- Tópicos, fixados como constantes: `fleet/{vessel}/lsdt` para `Iᵗ`, `fleet/{vessel}/state` para `Bᵗ`, `fleet/{vessel}/act` para `Aᵗ`, `fleet/{vessel}/goal` para `gᵗ`. Helper `fdt_topic(char *buf, size_t cap, const char *kind, unsigned vessel) -> int`.
+- Produces: `fdt_on_msg_fn`, `fdt_transport_t`, `fdt_loop_t`, `fdt_loop_transport`, `fdt_topic`, e os quatro nomes de tópico.
 
-- [ ] **Step 1–5:** Teste que publica em `fleet/0/state`, verifica que o assinante de `fleet/0/state` recebe e o de `fleet/1/state` não, que `poll` drena a fila e retorna a contagem entregue, e que `fdt_topic` recusa buffer curto. Implementação com fila estática de mensagens e casamento exato de tópico (sem curinga, porque o §III não usa nenhum). Commit: `feat: transport interface with an in-process loopback implementation`.
+**Esta é a task da qual tudo depois depende.** A Task 7 deste plano e as Tasks
+1, 2, 4, 7 e 8 do Plano C consomem `fdt_transport_t`. Uma assinatura errada
+aqui se propaga para dez arquivos.
+
+Tópicos, fixos: `fleet/{vessel}/lsdt` para `Iᵗ`, `fleet/{vessel}/state` para
+`Bᵗ`, `fleet/{vessel}/act` para `Aᵗ`, `fleet/{vessel}/goal` para `gᵗ`. Sem
+curinga, porque o §III não usa nenhum no caminho de dados — só o bridge usa,
+e ali o curinga vive no `mosquitto.conf`, não no código.
+
+- [ ] **Step 1: Escrever o teste que falha**
+
+`tests/test_transport.c`:
+
+```c
+#include <fleet_dt/transport.h>
+#include <assert.h>
+#include <string.h>
+#include <stdio.h>
+
+typedef struct { unsigned hits; uint8_t last; } sink_t;
+
+static void on_msg(const char *topic, const uint8_t *buf, size_t len,
+                   void *user)
+{
+    (void)topic;
+    sink_t *s = (sink_t *)user;
+    s->hits++;
+    s->last = (len > 0) ? buf[0] : 0;
+}
+
+int main(void)
+{
+    char t[64];
+    assert(fdt_topic(t, sizeof t, FDT_TOPIC_STATE, 0) == 0);
+    assert(strcmp(t, "fleet/0/state") == 0);
+    assert(fdt_topic(t, sizeof t, FDT_TOPIC_LSDT, 12) == 0);
+    assert(strcmp(t, "fleet/12/lsdt") == 0);
+    assert(fdt_topic(t, 4, FDT_TOPIC_STATE, 0) == -1);   /* buffer curto */
+    assert(fdt_topic(NULL, sizeof t, FDT_TOPIC_STATE, 0) == -1);
+
+    fdt_loop_t loop;
+    fdt_transport_t tr = fdt_loop_transport(&loop);
+    assert(tr.self != NULL && tr.publish != NULL && tr.subscribe != NULL);
+
+    sink_t s0 = {0}, s1 = {0};
+    assert(tr.subscribe(tr.self, "fleet/0/state", on_msg, &s0) == 0);
+    assert(tr.subscribe(tr.self, "fleet/1/state", on_msg, &s1) == 0);
+
+    /* Publicar não entrega: poll entrega. É assim que o laço de frame
+     * controla quando a entrega acontece, que é o que torna a patologia do
+     * §V-B — pacote no buffer de rede atravessando a fronteira do frame —
+     * reproduzível em teste. */
+    uint8_t payload[1] = { 0xAB };
+    assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == 0);
+    assert(s0.hits == 0);
+
+    assert(tr.poll(tr.self, 0) == 1);          /* uma mensagem entregue */
+    assert(s0.hits == 1 && s0.last == 0xAB);
+    assert(s1.hits == 0);                      /* tópico exato, sem curinga */
+
+    /* Fila drenada: o poll seguinte não reentrega. */
+    assert(tr.poll(tr.self, 0) == 0);
+    assert(s0.hits == 1);
+
+    /* Vários assinantes do mesmo tópico recebem todos. */
+    sink_t s0b = {0};
+    assert(tr.subscribe(tr.self, "fleet/0/state", on_msg, &s0b) == 0);
+    assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == 0);
+    assert(tr.poll(tr.self, 0) == 1);
+    assert(s0.hits == 2 && s0b.hits == 1);
+
+    /* Tópico sem assinante é publicável e simplesmente não entrega. */
+    assert(tr.publish(tr.self, "fleet/9/act", payload, 1, 1) == 0);
+    assert(tr.poll(tr.self, 0) == 1);
+
+    /* Fila cheia rejeita em vez de sobrescrever silenciosamente. */
+    for (size_t i = 0; i < FDT_LOOP_QUEUE; i++) {
+        assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == 0);
+    }
+    assert(tr.publish(tr.self, "fleet/0/state", payload, 1, 1) == -1);
+
+    tr.close(tr.self);
+    printf("test_transport: ok\n");
+    return 0;
+}
+```
+
+- [ ] **Step 2: Rodar e ver falhar.** Run: `make test`.
+
+- [ ] **Step 3: Escrever `include/fleet_dt/transport.h`**
+
+```c
+#ifndef FLEET_DT_TRANSPORT_H
+#define FLEET_DT_TRANSPORT_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+/* Os quatro tópicos do caminho de dados do §III. Sem curinga: o curinga do
+ * bridge vive no mosquitto.conf, não aqui. */
+#define FDT_TOPIC_LSDT  "lsdt"   /* I^t, telemetria de baixa taxa    */
+#define FDT_TOPIC_STATE "state"  /* B^t, estado do gêmeo             */
+#define FDT_TOPIC_ACT   "act"    /* A^t, atuação de volta ao barco   */
+#define FDT_TOPIC_GOAL  "goal"   /* g^t, objetivo vindo do MCS       */
+
+/* Escreve "fleet/{vessel}/{kind}" em buf. 0 em sucesso, -1 com buf NULL,
+ * kind NULL, ou capacidade insuficiente. */
+int fdt_topic(char *buf, size_t cap, const char *kind, unsigned vessel);
+
+/* Entregue por poll, nunca por publish. */
+typedef void (*fdt_on_msg_fn)(const char *topic, const uint8_t *buf,
+                              size_t len, void *user);
+
+/* A fronteira de rede desta biblioteca. Cinco membros e nada mais: o núcleo
+ * do modelo não sabe o que é um broker, e o adaptador MQTT não sabe o que é
+ * uma equação.
+ *
+ * publish    enfileira para envio; 0 em sucesso, -1 se a fila está cheia
+ * subscribe  registra cb para um tópico exato; 0 em sucesso, -1 sem espaço
+ * poll       entrega o que chegou e retorna quantas mensagens entregou, ou
+ *            -1 em erro. timeout_ms é dica; o loopback o ignora.
+ * close      libera o que a implementação alocou
+ * self       estado da implementação, opaco ao chamador */
+typedef struct {
+    int  (*publish)(void *self, const char *topic, const uint8_t *buf,
+                    size_t len, int qos);
+    int  (*subscribe)(void *self, const char *topic, fdt_on_msg_fn cb,
+                      void *user);
+    int  (*poll)(void *self, int timeout_ms);
+    void (*close)(void *self);
+    void *self;
+} fdt_transport_t;
+
+#define FDT_LOOP_QUEUE   64   /* mensagens em voo                */
+#define FDT_LOOP_SUBS    32   /* assinaturas simultâneas         */
+#define FDT_LOOP_TOPIC   64   /* comprimento máximo de tópico    */
+#define FDT_LOOP_PAYLOAD 256  /* payload máximo do loopback      */
+
+/* Transporte em processo, sem rede: publish enfileira, poll entrega. Separar
+ * os dois é o que deixa um teste posicionar a entrega de um pacote atrasado
+ * do lado errado da fronteira do frame, que é a patologia do §V-B. */
+typedef struct {
+    struct {
+        char    topic[FDT_LOOP_TOPIC];
+        uint8_t payload[FDT_LOOP_PAYLOAD];
+        size_t  len;
+    } q[FDT_LOOP_QUEUE];
+    size_t qlen;
+
+    struct {
+        char          topic[FDT_LOOP_TOPIC];
+        fdt_on_msg_fn cb;
+        void         *user;
+    } subs[FDT_LOOP_SUBS];
+    size_t nsubs;
+} fdt_loop_t;
+
+/* Zera lo e devolve um fdt_transport_t apontando para ele. lo é do chamador e
+ * precisa sobreviver ao transporte. */
+fdt_transport_t fdt_loop_transport(fdt_loop_t *lo);
+
+#endif /* FLEET_DT_TRANSPORT_H */
+```
+
+- [ ] **Step 4: Escrever `src/transport_loop.c`.** `fdt_topic` usa `snprintf` e checa o retorno contra `cap`. `loop_publish` recusa payload maior que `FDT_LOOP_PAYLOAD` e fila cheia, ambos com -1. `loop_poll` percorre a fila da frente para trás, e para cada mensagem chama todo assinante cujo tópico casa por `strcmp`, retorna o número de **mensagens** entregues (não de callbacks disparados), e zera `qlen` ao fim. `loop_close` zera a struct.
+
+- [ ] **Step 5: Rodar e ver passar.** Run: `make test`. Expected: `test_transport: ok`.
+
+- [ ] **Step 6: Commit.** `git commit -m "feat: transport interface with an in-process loopback implementation"`
+
+**Nota de ordenação para quem executar:** esta task define `fdt_topic`, que a
+Task 1 do Plano C usa. Ela não é usada pelas Tasks 1 a 5 deste plano — codec,
+envelope, framesync, regulador e link budget não tocam em transporte. A ordem
+dentro do Plano B pode ser 1–5 e depois 6–7, ou 6 primeiro; o que não pode é
+começar o Plano C sem esta task fechada.
 
 ---
 

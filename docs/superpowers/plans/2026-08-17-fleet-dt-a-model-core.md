@@ -29,12 +29,20 @@ Quita **C14** e **C19**.
 
 **Files:**
 - Create: `Makefile`, `.gitignore`, `.github/workflows/ci.yml`
-- Create: `include/fleet_dt/model.h`
+- Create: `include/fleet_dt/model.h`, `include/fleet_dt/version.h`, `src/version.c`
 - Test: `tests/test_model.c`
 
 **Interfaces:**
 - Consumes: nada.
-- Produces: `fdt_input_t`, `fdt_state_t`, `fdt_actuation_t`, `fdt_goal_t` (alias de `fdt_state_t`), `FDT_STATE_FLOATS` (= 12).
+- Produces: `fdt_input_t`, `fdt_state_t`, `fdt_actuation_t`, `fdt_goal_t` (alias de `fdt_state_t`), `FDT_STATE_FLOATS` (= 12), `FDT_PAPER_REVISION`, `fdt_version(void) -> const char*`.
+
+`src/version.c` existe nesta task por dois motivos. O primeiro é de build:
+`LIBSRC = $(wildcard src/*.c)` com `src/` vazio deixa `LIBOBJ` vazio, e
+`ar rcs` sobre zero membros produz um arquivo que algumas versões do GNU ar
+recusam e outras aceitam vazio, quebrando o link do teste. O primeiro `.c` do
+repositório precisa nascer junto do primeiro alvo. O segundo é de conteúdo: a
+revisão do manuscrito fica pregada num símbolo, que é o que torna o
+descolamento de numeração detectável em vez de silencioso.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -42,8 +50,10 @@ Quita **C14** e **C19**.
 
 ```c
 #include <fleet_dt/model.h>
+#include <fleet_dt/version.h>
 #include <assert.h>
 #include <stdio.h>
+#include <string.h>
 
 /* C14, §IV: "a state (B_i^t) occupies 12 floating point values in memory,
  * translating to 48 bytes". Asserção, não medição. */
@@ -81,6 +91,13 @@ int main(void)
     in.x_left = in.x_right = NULL;
     assert(in.ibat_a == 1.0f);
 
+    /* A revisão do manuscrito fica pregada num símbolo: o mapa paper↔código
+     * já se descolou uma vez, quando delta e pi deixaram de ser equações
+     * separadas e viraram as duas metades da eq. (2). */
+    assert(strcmp(FDT_PAPER_REVISION, "-10") == 0);
+    assert(strstr(fdt_version(), FDT_PAPER_REVISION) != NULL);
+
+    printf("%s\n", fdt_version());
     printf("sizeof(fdt_state_t) = %zu\n", sizeof(fdt_state_t));
     printf("sizeof(fdt_input_t) = %zu\n", sizeof(fdt_input_t));
     printf("test_model: ok\n");
@@ -128,9 +145,6 @@ clean:
 	rm -f $(LIBOBJ) $(LIB) $(TESTBIN)
 ```
 
-Nota: `$(LIB)` com zero objetos é válido; `ar rcs` cria arquivo vazio e o link
-segue. A Task 2 é quem põe o primeiro `.c` em `src/`.
-
 `.gitignore`:
 
 ```
@@ -159,7 +173,39 @@ jobs:
         run: make test
 ```
 
-- [ ] **Step 4: Escrever `include/fleet_dt/model.h`**
+- [ ] **Step 4: Escrever `include/fleet_dt/version.h`, `src/version.c` e `include/fleet_dt/model.h`**
+
+`include/fleet_dt/version.h`:
+
+```c
+#ifndef FLEET_DT_VERSION_H
+#define FLEET_DT_VERSION_H
+
+/* A revisão do manuscrito que este repositório rastreia. O modelo é o §IV e as
+ * equações vão de (1) a (6); numa revisão anterior delta e pi eram equações
+ * separadas, o que deslocava tudo a partir da (3). Pregar a revisão num
+ * símbolo é o que torna o próximo deslocamento detectável. */
+#define FDT_PAPER_REVISION "-10"
+#define FDT_VERSION        "0.1.0"
+
+/* "fleet-dt 0.1.0 (ICECS 2026 manuscript -10)" */
+const char *fdt_version(void);
+
+#endif /* FLEET_DT_VERSION_H */
+```
+
+`src/version.c`:
+
+```c
+#include <fleet_dt/version.h>
+
+const char *fdt_version(void)
+{
+    return "fleet-dt " FDT_VERSION " (ICECS 2026 manuscript " FDT_PAPER_REVISION ")";
+}
+```
+
+`include/fleet_dt/model.h`:
 
 ```c
 #ifndef FLEET_DT_MODEL_H
@@ -251,7 +297,9 @@ Expected: PASS — imprime `sizeof(fdt_state_t) = 48` e `test_model: ok`.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add Makefile .gitignore .github/workflows/ci.yml include/fleet_dt/model.h tests/test_model.c
+git add Makefile .gitignore .github/workflows/ci.yml \
+        include/fleet_dt/model.h include/fleet_dt/version.h src/version.c \
+        tests/test_model.c
 git commit -m "feat: model types of equation (1) and Table I"
 ```
 
@@ -468,7 +516,13 @@ Quita **C17**, **C24** e a Ambiguidade 1 do spec.
   - `typedef void (*fdt_delta_e_fn)(const fdt_queue_t *q, size_t n, const fdt_input_t *in, const fdt_goal_t *g_prev, fdt_state_t *out, void *ctx, void *fleet_ctx)` — `n` é a profundidade da janela da eq. (3): os `n` estados mais recentes, acessíveis por `fdt_window_at(q, n, k)` com `k == 0` o mais recente.
   - `typedef void (*fdt_pi_fn)(const fdt_state_t *b, const fdt_goal_t *g_now, fdt_actuation_t *out, void *ctx, void *fleet_ctx)`
   - `fdt_window_at(const fdt_queue_t *q, size_t n, size_t k) -> const fdt_state_t*`
-  - `fdt_twin_t`; `fdt_twin_init(...) -> int`; `fdt_twin_seed(fdt_twin_t*, const fdt_state_t*) -> int`; `fdt_twin_step(fdt_twin_t*, const fdt_input_t*, const fdt_goal_t *g_prev, const fdt_goal_t *g_now, size_t n, fdt_state_t *b_out, fdt_actuation_t *a_out, void *fleet_ctx) -> int`; `fdt_twin_depth(const fdt_twin_t*) -> size_t`; `fdt_twin_newest(const fdt_twin_t*) -> const fdt_state_t*`.
+  - `fdt_twin_t`; `fdt_twin_init(fdt_twin_t*, fdt_state_t *storage, size_t cap, fdt_delta_e_fn, fdt_pi_fn, void *ctx) -> int`; `fdt_twin_seed(fdt_twin_t*, const fdt_state_t*) -> int`; `fdt_twin_depth(const fdt_twin_t*) -> size_t`; `fdt_twin_newest(const fdt_twin_t*) -> const fdt_state_t*`.
+  - **Duas aridades, de propósito.** `fdt_twin_step_ctx(fdt_twin_t*, const fdt_input_t*, const fdt_goal_t *g_prev, const fdt_goal_t *g_now, size_t n, fdt_state_t *b_out, fdt_actuation_t *a_out, void *fleet_ctx) -> int` tem **8** argumentos e é a que a frota chama, porque só a frota tem `cᵗ`. `fdt_twin_step(...)` tem os mesmos **7** primeiros e delega passando `NULL` como `fleet_ctx` — é o caso avulso. Escreva as duas; o teste usa as duas.
+
+**Nota para quem executar:** `probe_pi` neste teste lê `fleet_ctx` como
+`const float*`, e o `demo_pi` do teste da Task 5 o lê como `demo_ctx_t*`. É
+intencional: `cᵗ` é opaco à biblioteca, e cada aplicação escolhe o próprio
+tipo. Não uniformize os dois arquivos.
 
 - [ ] **Step 1: Escrever o teste que falha**
 
@@ -1939,7 +1993,6 @@ static void demo_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
                          void *ctx, void *fleet_ctx)
 {
     (void)g_prev; (void)ctx; (void)fleet_ctx;
-    size_t idx = (size_t)(intptr_t)0; (void)idx;
 
     const fdt_state_t *newest = fdt_window_at(q, n, 0);
     const fdt_state_t *oldest = fdt_window_at(q, n, n - 1);
@@ -2069,9 +2122,6 @@ int main(void)
     return EXIT_SUCCESS;
 }
 ```
-
-Remova a linha `size_t idx = ...; (void)idx;` — ela é resíduo e `-Werror` a
-rejeita. Se o compilador reclamar de `intptr_t`, é porque essa linha ficou.
 
 - [ ] **Step 3: Escrever `examples/README.md`**
 

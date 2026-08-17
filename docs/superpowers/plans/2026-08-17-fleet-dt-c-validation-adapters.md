@@ -122,6 +122,12 @@ Quita **C25** e a segunda metade de **C26**. Aqui mora a Armadilha 2.
 - Consumes: `fdt_fleet_t`, `fdt_coord_t`, `fdt_feas_t`, `fdt_inj_t`, `fdt_tick_t`.
 - Produces: binário `tools/bench/bench_scale`, que aceita `--vessels N --frames F --window n`.
 
+**Semeadura obrigatória antes do frame 0.** A Task 3 do Plano A rejeita um
+passo com janela `n` quando a fila guarda menos de `n` estados, então o bench
+chama `fdt_twin_seed` **`n` vezes por vaso** antes do laço. Sem isso,
+`--window 4` retorna -1 no primeiro frame e o bench reporta uma falha que não
+existe.
+
 - [ ] **Step 1: Escrever o benchmark**
 
 O laço, e o relatório que ele imprime:
@@ -411,6 +417,12 @@ não precisão — fique visível.
 - Modify: `docs/spec/paper-claims.md` (coluna `status`), `README.md`
 
 - [ ] **Step 1: Escrever o script.** Para cada id de `C1` a `C28` e `D1` a `D7`, um `grep` pelo artefato citado na tabela e uma linha de saída: `C5  quita     tests/test_regulator.c`. Ids `fronteira` e `diferido` são impressos como tal, sem procurar arquivo. O script **não** edita a tabela; ele imprime o que a tabela deveria dizer, e a divergência é para o humano resolver.
+
+**C1 é roll-up, não item.** "a fleet-level Digital Twin model and architecture"
+é a soma de C2 a C19, não um artefato próprio; procurar arquivo para ele deixa
+a afirmação de topo do paper permanentemente em `pendente`. O script trata C1
+como derivado: `quita` quando todo id de C2 a C19 está em `quita` ou
+`fronteira`, e `pendente` caso contrário, imprimindo qual id o segura.
 
 - [ ] **Step 2: Rodar, atualizar a coluna `status` do spec, e apontar o README para o script.**
 
