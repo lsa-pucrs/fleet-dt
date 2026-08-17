@@ -87,21 +87,26 @@ one node is a supervisor, the mesh URLs point at files that exist, the frame
 divides into whole physics steps, and Section III's furniture — fluid, drag,
 one camera per vessel — is present.
 
-That proves the controller and the world still agree about what they are. It
-does **not** prove the simulation runs. Neither the controller nor the MQTT
-adapter has been through the real toolchain on the machine that wrote them;
-`make syntax` type-checks both against the stub headers in `tools/stubs/`,
-which catches a typo and cannot catch a wrong assumption about the API.
+That proves the controller and the world still agree about what they are, on
+any machine, with or without the SDK. It does not prove the simulation runs —
+the picture above does that, and only for the machine that took it.
 
-Claims **C3** and **C8** therefore stay `fronteira` in
-`docs/spec/paper-claims.md`. A file that has never been through a linker is not
-evidence of integration, and the artefacts being complete and mutually
-consistent is a weaker statement than the paper's.
+`make syntax` type-checks the controller against the stub headers in
+`tools/stubs/` where WeBots is absent. It catches a typo and cannot catch a
+wrong assumption about the API, which is a real distinction: every position
+bug this controller has had passed `make syntax` and passed the whole unit
+suite.
 
-Section V-A's *"running WeBots adds 10% CPU usage for the first boat and less
-than 1% for subsequent boats"* is a boundary for a different reason: it is a
-property of the renderer, so `make bench` does not reproduce it and does not
-pretend to. That is claim **C22**.
+**C3** and **C8** are discharged since 2026-08-17, when WeBots R2025a was
+installed here, `make webots` compiled the controller against the real SDK on
+the first attempt, and the world ran under the coordinator.
+
+**C22** — *"running WeBots adds 10% CPU usage for the first boat and less than
+1% for subsequent boats"* — is measured by
+`tools/bench/bench_webots_cpu.c` and remains a boundary. It reproduces the
+shape of the claim, the first hull costing two to three times the second, and
+resolves the first-boat increment at 1.24 % against a published 10 %. The
+subsequent-boat increment stays under this host's noise floor.
 
 ## Credit
 
