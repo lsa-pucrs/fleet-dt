@@ -86,12 +86,13 @@ Four statuses, and the third is not a gap:
 - **quita** — an artefact exists and `make test` or `make bench` checks it.
 - **fronteira** — the interface is here, or the measurement is, but the answer
   is not. One claim is in this state: the CPU figures of Section V-A. The
-  benchmark exists and runs three worlds that differ only in vessel count, and
-  it reproduces the *shape* of the claim — the first hull costs about three
-  times the second, because renderer, physics and fluid are paid for once. It
-  does not reproduce the absolute figures, and neither increment clears this
-  host's noise floor, so both are reported as boundary rather than as
-  agreement or disagreement.
+  benchmark exists and runs three worlds that differ only in vessel count. It
+  reproduces the *shape* of the claim — the first hull costs two to three
+  times the second, because renderer, physics and fluid are paid for once —
+  and it resolves the first-boat increment at 1.24 % against a published 10 %,
+  which is a real disagreement rather than noise. The subsequent-boat
+  increment, 0.56 %, stays under the host's 0.88 % noise floor and is reported
+  as boundary: consistent with the paper's "< 1 %" but not measured.
 - **diferido** — Section VI declares it future work. Building it would
   contradict the published text, so its absence is the correct state.
 - **pendente** — not built.

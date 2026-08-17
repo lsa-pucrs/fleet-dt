@@ -152,4 +152,8 @@ clean:
 	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
 	      adapters/mqtt/fdt_mqtt.o fleet_dt_it_mqtt \
 	      adapters/webots/controllers/fdt_controller/fdt_controller
-	rm -rf $(RESULTS)
+	rm -rf $(RESULTS)/selftest
+# results/ itself is NOT removed. It is committed, so that the charts in
+# docs/RESULTS.md resolve on a fresh clone, and a clean that deleted it would
+# stage the deletion of tracked artefacts -- which is exactly what happened
+# once. Only the plotter's self-test output, which is ignored, is swept.

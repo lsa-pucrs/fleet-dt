@@ -80,24 +80,31 @@ diferença entre eles.
 Com amostras de 10 s, duas execuções discordaram **até no sinal** — uma deu o
 segundo barco em −1,60%, que é fisicamente impossível e portanto ruído puro.
 Com 25 s × 5 execuções (`FDT_CPU_SAMPLE_S=25 FDT_CPU_REPEATS=5`) a dispersão
-caiu de 3–6% para 0,8% e o resultado estabilizou:
+caiu para menos de 1% e o resultado estabilizou. Duas execuções cuidadosas:
 
-| mundo | vasos | CPU mediana | dispersão | incremento |
-|---|---|---|---|---|
-| `jundia_empty` | 0 | 8,76% | 0,76% | 8,76% (só o renderizador) |
-| `jundia_single` | 1 | 10,28% | 0,80% | **1,52%** (primeiro barco) |
-| `jundia_fleet` | 2 | 10,80% | 2,08% | **0,52%** (segundo barco) |
+| mundo | vasos | CPU mediana | dispersão | 1º barco | 2º barco |
+|---|---|---|---|---|---|
+| run A | 0/1/2 | 8,76 / 10,28 / 10,80% | ≤2,08% | +1,52% | +0,52% |
+| run B | 0/1/2 | 8,84 / 10,08 / 10,64% | ≤0,88% | **+1,24%** | +0,56% |
 
-**A forma da afirmação se reproduz**: o primeiro casco custa cerca de três
-vezes o segundo, porque o renderizador, o mundo físico e o fluido são pagos uma
-vez só. É essa forma que sustenta a arquitetura — uma frota é viável porque o
-vaso N+1 é quase de graça.
+**O primeiro barco está medido**: +1,24% com piso de ruído de 0,88%, e as duas
+execuções concordam dentro de 0,3 ponto. O paper publica 10%. Isso é
+`[DIVERGE]` — uma discordância real, não ruído.
 
-**Os valores absolutos não se reproduzem**, e nenhum dos dois incrementos passa
-o piso de ruído deste host (2,08%). Por isso ambos saem como `[BOUNDARY]` em
-vez de `[OK]` ou `[DIVERGE]`: um número que a máquina não resolve não é
-concordância nem discordância — não é medição. Fechar de vez pede um host mais
-quieto e amostras mais longas.
+**O segundo barco continua sob o piso**: +0,56% contra 0,88% de dispersão. O
+valor é compatível com o "< 1%" do paper, mas compatível não é medido, e o
+relatório diz `[BOUNDARY]`.
+
+**A forma da afirmação se reproduz**: primeiro casco entre duas e três vezes o
+segundo, porque o renderizador, o mundo físico e o fluido são pagos uma vez só.
+É essa forma que sustenta a arquitetura — uma frota é viável porque o vaso N+1
+é quase de graça.
+
+Sobre a discordância de 1,24% contra 10%: o número do paper é de outra máquina
+e de uma configuração de renderização que não conhecemos. Este run usa
+`--minimize`, que reduz o trabalho de desenho, e roda numa GPU que o §V-A não
+descreve. Reproduzir o 10% exigiria a configuração deles, não uma correção
+aqui.
 
 O status desta tabela é gerado por `make report`, que percorre a lista e
 imprime o que ela deveria dizer. Ele nunca edita a tabela: divergência entre as
