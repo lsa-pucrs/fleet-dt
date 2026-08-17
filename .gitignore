@@ -3,7 +3,11 @@
 fleet_dt_test_*
 examples/daemon
 examples/two_paths
+# The benchmark binaries have no extension, so the pattern that hides them
+# also hides their sources. Both are re-included explicitly; forgetting the
+# header once left a fresh clone unable to build the benchmarks.
 tools/bench/bench_*
 !tools/bench/bench_*.c
+!tools/bench/bench_*.h
 results/selftest/
 tools/report/report
