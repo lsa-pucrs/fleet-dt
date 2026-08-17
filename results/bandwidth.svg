@@ -26,46 +26,44 @@
 <line class="grid" x1="72.0" y1="358.0" x2="670.0" y2="358.0"/>
 <text class="tick" x="64.0" y="362.0" text-anchor="end">0.256</text>
 <line class="grid" x1="72.0" y1="296.8" x2="670.0" y2="296.8"/>
-<text class="tick" x="64.0" y="300.8" text-anchor="end">6.275</text>
+<text class="tick" x="64.0" y="300.8" text-anchor="end">6.27</text>
 <line class="grid" x1="72.0" y1="235.6" x2="670.0" y2="235.6"/>
-<text class="tick" x="64.0" y="239.6" text-anchor="end">153.8</text>
+<text class="tick" x="64.0" y="239.6" text-anchor="end">154</text>
 <line class="grid" x1="72.0" y1="174.4" x2="670.0" y2="174.4"/>
-<text class="tick" x="64.0" y="178.4" text-anchor="end">3770</text>
+<text class="tick" x="64.0" y="178.4" text-anchor="end">3.77e+03</text>
 <line class="grid" x1="72.0" y1="113.2" x2="670.0" y2="113.2"/>
 <text class="tick" x="64.0" y="117.2" text-anchor="end">9.24e+04</text>
 <line class="grid" x1="72.0" y1="52.0" x2="670.0" y2="52.0"/>
-<text class="tick" x="64.0" y="56.0" text-anchor="end">2.265e+06</text>
-<line class="grid" x1="72.0" y1="52.0" x2="72.0" y2="358.0"/>
-<text class="tick" x="72.0" y="376.0" text-anchor="middle">0</text>
-<line class="grid" x1="171.7" y1="52.0" x2="171.7" y2="358.0"/>
-<text class="tick" x="171.7" y="376.0" text-anchor="middle">0.8333</text>
-<line class="grid" x1="271.3" y1="52.0" x2="271.3" y2="358.0"/>
-<text class="tick" x="271.3" y="376.0" text-anchor="middle">1.667</text>
-<line class="grid" x1="371.0" y1="52.0" x2="371.0" y2="358.0"/>
-<text class="tick" x="371.0" y="376.0" text-anchor="middle">2.5</text>
-<line class="grid" x1="470.7" y1="52.0" x2="470.7" y2="358.0"/>
-<text class="tick" x="470.7" y="376.0" text-anchor="middle">3.333</text>
-<line class="grid" x1="570.3" y1="52.0" x2="570.3" y2="358.0"/>
-<text class="tick" x="570.3" y="376.0" text-anchor="middle">4.167</text>
-<line class="grid" x1="670.0" y1="52.0" x2="670.0" y2="358.0"/>
-<text class="tick" x="670.0" y="376.0" text-anchor="middle">5</text>
+<text class="tick" x="64.0" y="56.0" text-anchor="end">2.26e+06</text>
+<line class="grid" x1="121.8" y1="52.0" x2="121.8" y2="358.0"/>
+<text class="tick" x="121.8" y="376.0" text-anchor="middle">0</text>
+<line class="grid" x1="221.5" y1="52.0" x2="221.5" y2="358.0"/>
+<text class="tick" x="221.5" y="376.0" text-anchor="middle">1</text>
+<line class="grid" x1="321.2" y1="52.0" x2="321.2" y2="358.0"/>
+<text class="tick" x="321.2" y="376.0" text-anchor="middle">2</text>
+<line class="grid" x1="420.8" y1="52.0" x2="420.8" y2="358.0"/>
+<text class="tick" x="420.8" y="376.0" text-anchor="middle">3</text>
+<line class="grid" x1="520.5" y1="52.0" x2="520.5" y2="358.0"/>
+<text class="tick" x="520.5" y="376.0" text-anchor="middle">4</text>
+<line class="grid" x1="620.2" y1="52.0" x2="620.2" y2="358.0"/>
+<text class="tick" x="620.2" y="376.0" text-anchor="middle">5</text>
 <rect class="frame" x="72.0" y="52.0" width="598.0" height="306.0"/>
 <text class="axis" x="371.0" y="402.0" text-anchor="middle">stream (see report for names)</text>
 <text class="axis" x="22.0" y="205.0" text-anchor="middle" transform="rotate(-90 22.0 205.0)">kbps, one vessel (log)</text>
 <line class="rule" x1="72.0" y1="111.7" x2="670.0" y2="111.7"/>
-<text class="rulelab" x="678.0" y="115.7">100 Mbps link (Sec. III)</text>
-<rect x="36.12" y="275.41" width="35.88" height="82.59" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="155.72" y="332.71" width="35.88" height="25.29" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="275.32" y="322.94" width="35.88" height="35.06" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="394.92" y="327.21" width="35.88" height="30.79" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="514.52" y="177.86" width="35.88" height="180.14" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="634.12" y="53.47" width="35.88" height="304.53" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="72.00" y="323.72" width="35.88" height="34.28" fill="#dc2626" fill-opacity="0.85"/>
-<rect x="191.60" y="336.98" width="35.88" height="21.02" fill="#dc2626" fill-opacity="0.85"/>
-<rect x="311.20" y="358.00" width="35.88" height="1.00" fill="#dc2626" fill-opacity="0.85"/>
-<rect x="430.80" y="344.74" width="35.88" height="13.26" fill="#dc2626" fill-opacity="0.85"/>
-<rect x="550.40" y="177.86" width="35.88" height="180.14" fill="#dc2626" fill-opacity="0.85"/>
-<rect x="670.00" y="53.47" width="35.88" height="304.53" fill="#dc2626" fill-opacity="0.85"/>
+<text class="rulelab" x="664.0" y="105.7" text-anchor="end">100 Mbps link (Sec. III)</text>
+<rect x="85.95" y="275.41" width="35.88" height="82.59" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="185.62" y="332.71" width="35.88" height="25.29" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="285.29" y="322.94" width="35.88" height="35.06" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="384.95" y="327.21" width="35.88" height="30.79" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="484.62" y="177.86" width="35.88" height="180.14" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="584.29" y="53.47" width="35.88" height="304.53" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="121.83" y="323.72" width="35.88" height="34.28" fill="#dc2626" fill-opacity="0.85"/>
+<rect x="221.50" y="336.98" width="35.88" height="21.02" fill="#dc2626" fill-opacity="0.85"/>
+<rect x="321.17" y="358.00" width="35.88" height="1.00" fill="#dc2626" fill-opacity="0.85"/>
+<rect x="420.83" y="344.74" width="35.88" height="13.26" fill="#dc2626" fill-opacity="0.85"/>
+<rect x="520.50" y="177.86" width="35.88" height="180.14" fill="#dc2626" fill-opacity="0.85"/>
+<rect x="620.17" y="53.47" width="35.88" height="304.53" fill="#dc2626" fill-opacity="0.85"/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
 <text class="legend" x="698.0" y="64.0">unregulated</text>
 <rect x="680.0" y="74.0" width="12" height="12" fill="#dc2626"/>

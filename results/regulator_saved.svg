@@ -26,43 +26,39 @@
 <line class="grid" x1="72.0" y1="358.0" x2="670.0" y2="358.0"/>
 <text class="tick" x="64.0" y="362.0" text-anchor="end">0</text>
 <line class="grid" x1="72.0" y1="296.8" x2="670.0" y2="296.8"/>
-<text class="tick" x="64.0" y="300.8" text-anchor="end">21.43</text>
+<text class="tick" x="64.0" y="300.8" text-anchor="end">25</text>
 <line class="grid" x1="72.0" y1="235.6" x2="670.0" y2="235.6"/>
-<text class="tick" x="64.0" y="239.6" text-anchor="end">42.85</text>
+<text class="tick" x="64.0" y="239.6" text-anchor="end">50</text>
 <line class="grid" x1="72.0" y1="174.4" x2="670.0" y2="174.4"/>
-<text class="tick" x="64.0" y="178.4" text-anchor="end">64.28</text>
+<text class="tick" x="64.0" y="178.4" text-anchor="end">75</text>
 <line class="grid" x1="72.0" y1="113.2" x2="670.0" y2="113.2"/>
-<text class="tick" x="64.0" y="117.2" text-anchor="end">85.71</text>
+<text class="tick" x="64.0" y="117.2" text-anchor="end">100</text>
 <line class="grid" x1="72.0" y1="52.0" x2="670.0" y2="52.0"/>
-<text class="tick" x="64.0" y="56.0" text-anchor="end">107.1</text>
-<line class="grid" x1="72.0" y1="52.0" x2="72.0" y2="358.0"/>
-<text class="tick" x="72.0" y="376.0" text-anchor="middle">1</text>
-<line class="grid" x1="171.7" y1="52.0" x2="171.7" y2="358.0"/>
-<text class="tick" x="171.7" y="376.0" text-anchor="middle">167.5</text>
-<line class="grid" x1="271.3" y1="52.0" x2="271.3" y2="358.0"/>
-<text class="tick" x="271.3" y="376.0" text-anchor="middle">334</text>
-<line class="grid" x1="371.0" y1="52.0" x2="371.0" y2="358.0"/>
-<text class="tick" x="371.0" y="376.0" text-anchor="middle">500.5</text>
-<line class="grid" x1="470.7" y1="52.0" x2="470.7" y2="358.0"/>
-<text class="tick" x="470.7" y="376.0" text-anchor="middle">667</text>
-<line class="grid" x1="570.3" y1="52.0" x2="570.3" y2="358.0"/>
-<text class="tick" x="570.3" y="376.0" text-anchor="middle">833.5</text>
-<line class="grid" x1="670.0" y1="52.0" x2="670.0" y2="358.0"/>
-<text class="tick" x="670.0" y="376.0" text-anchor="middle">1000</text>
+<text class="tick" x="64.0" y="56.0" text-anchor="end">125</text>
+<line class="grid" x1="191.3" y1="52.0" x2="191.3" y2="358.0"/>
+<text class="tick" x="191.3" y="376.0" text-anchor="middle">200</text>
+<line class="grid" x1="310.9" y1="52.0" x2="310.9" y2="358.0"/>
+<text class="tick" x="310.9" y="376.0" text-anchor="middle">400</text>
+<line class="grid" x1="430.5" y1="52.0" x2="430.5" y2="358.0"/>
+<text class="tick" x="430.5" y="376.0" text-anchor="middle">600</text>
+<line class="grid" x1="550.1" y1="52.0" x2="550.1" y2="358.0"/>
+<text class="tick" x="550.1" y="376.0" text-anchor="middle">800</text>
+<line class="grid" x1="669.7" y1="52.0" x2="669.7" y2="358.0"/>
+<text class="tick" x="669.7" y="376.0" text-anchor="middle">1000</text>
 <rect class="frame" x="72.0" y="52.0" width="598.0" height="306.0"/>
 <text class="axis" x="371.0" y="402.0" text-anchor="middle">sensor rate (Hz)</text>
 <text class="axis" x="22.0" y="205.0" text-anchor="middle" transform="rotate(-90 22.0 205.0)">traffic removed (%)</text>
-<rect x="52.43" y="358.00" width="39.14" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="53.03" y="358.00" width="39.14" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="54.22" y="358.00" width="39.14" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="56.62" y="358.00" width="39.14" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="57.82" y="300.88" width="39.14" height="57.12" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="63.80" y="186.63" width="39.14" height="171.37" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="81.76" y="118.08" width="39.14" height="239.92" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="111.69" y="95.22" width="39.14" height="262.78" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="171.55" y="83.81" width="39.14" height="274.19" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="291.27" y="78.09" width="39.14" height="279.91" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="650.43" y="74.67" width="39.14" height="283.33" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="70.80" y="358.00" width="3.00" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="71.40" y="358.00" width="3.00" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="72.59" y="358.00" width="3.00" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="74.98" y="358.00" width="3.00" height="1.00" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="76.18" y="309.04" width="3.00" height="48.96" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="82.16" y="211.12" width="3.00" height="146.88" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="100.10" y="152.37" width="3.00" height="205.63" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="130.00" y="132.77" width="3.00" height="225.23" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="189.80" y="122.99" width="3.00" height="235.01" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="309.40" y="118.10" width="3.00" height="239.90" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="668.20" y="115.16" width="3.00" height="242.84" fill="#2563eb" fill-opacity="0.85"/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
 <text class="legend" x="698.0" y="64.0">saved</text>
 </svg>
