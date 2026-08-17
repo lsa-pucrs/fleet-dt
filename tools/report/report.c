@@ -103,7 +103,7 @@ static const claim_t CLAIMS[] = {
     { "C21", "no notable MQTT latency, no stuttering", "V-A",
       "results/jitter.txt", ST_ARTEFACT },
     { "C22", "WeBots CPU: 10 % then under 1 %", "V-A",
-      "measurable now, not yet measured", ST_BOUNDARY },
+      "measured; under this host's noise floor", ST_BOUNDARY },
     { "C23", "delta feasible, actuation still late", "V-A",
       "results/latency.txt", ST_ARTEFACT },
     { "C24", "state range enabling MPC-like operation", "V-A",

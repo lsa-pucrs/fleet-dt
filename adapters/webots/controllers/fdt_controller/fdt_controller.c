@@ -256,15 +256,27 @@ static void render_vessel(size_t k, const fdt_state_t *b)
     fdt_geo_offset(g_ref_lat[k], g_ref_lon[k],
                    (double)b->lat_deg, (double)b->lon_deg, &dx, &dz);
 
-    const double position[3] = { g_origin[k][0] + dx,
-                                 g_origin[k][1],
-                                 g_origin[k][2] + dz };
+    /* WeBots R2025a is ENU: index 0 is east, index 1 is north, index 2 is up.
+     *
+     * Not the Y-up convention most 3D tooling uses, and assuming that one adds
+     * the northward displacement to the altitude instead: the hulls climb out
+     * of the lagoon and fly. The world states the convention plainly if you
+     * read it -- the hulls sit at z = 0.24, a hand's breadth above water whose
+     * box is 0.7 thick, and their rotation axis is 0 0 1.
+     *
+     * The height is left where the world put it. Altitude belongs to buoyancy,
+     * which is the fluid node's business; a twin that wrote its own altitude
+     * every frame would be overriding the physics it is supposed to mirror. */
+    const double position[3] = { g_origin[k][0] + dx,   /* east */
+                                 g_origin[k][1] + dz,   /* north */
+                                 g_origin[k][2] };      /* up, untouched */
     wb_supervisor_field_set_sf_vec3f(g_translation[k], position);
 
-    /* Yaw about the vertical axis. Table I gives the angle in degrees and
-     * WeBots wants radians, so the unit is crossed here rather than assumed. */
+    /* Yaw turns about the vertical axis, which in ENU is Z. Table I gives the
+     * angle in degrees and WeBots wants radians, so the unit is crossed here
+     * rather than assumed. */
     const double yaw_rad = (double)b->yaw_deg / (double)RAD2DEG;
-    const double rotation[4] = { 0.0, 1.0, 0.0, yaw_rad };
+    const double rotation[4] = { 0.0, 0.0, 1.0, yaw_rad };
     wb_supervisor_field_set_sf_rotation(g_rotation[k], rotation);
 }
 
@@ -404,9 +416,14 @@ int main(int argc, char **argv)
 
         frames++;
         if (frames % STATUS_EVERY == 0) {
+            /* All three axes, named. The earlier line printed indices 0 and 2
+             * and called them a position, so a hull climbing out of the water
+             * read as ordinary motion across it. */
+            const double *pos0 = (g_translation[0] != NULL)
+                ? wb_supervisor_field_get_sf_vec3f(g_translation[0]) : NULL;
             printf("fdt_controller: frame %zu  yaw %.2f / %.2f deg  "
                    "spread %.2f  worst delta %.1f us  feasible %d  "
-                   "partial %llu  double %llu  pos0 %.1f,%.1f\n",
+                   "partial %llu  double %llu  pos0 E%.1f N%.1f U%.2f\n",
                    frames,
                    (double)g_bs[0].yaw_deg,
                    (double)g_bs[g_vessels > 1 ? 1 : 0].yaw_deg,
@@ -415,12 +432,9 @@ int main(int argc, char **argv)
                    fdt_feas_ok(&g_feas[0]),
                    (unsigned long long)fdt_fs_partial_frames(&g_fs),
                    (unsigned long long)fdt_fs_double_updates(&g_fs),
-                   g_translation[0] != NULL
-                       ? wb_supervisor_field_get_sf_vec3f(g_translation[0])[0]
-                       : 0.0,
-                   g_translation[0] != NULL
-                       ? wb_supervisor_field_get_sf_vec3f(g_translation[0])[2]
-                       : 0.0);
+                   pos0 != NULL ? pos0[0] : 0.0,
+                   pos0 != NULL ? pos0[1] : 0.0,
+                   pos0 != NULL ? pos0[2] : 0.0);
             fflush(stdout);
         }
 

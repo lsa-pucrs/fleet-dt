@@ -21,6 +21,7 @@
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 
 #define WORLD_DIR "adapters/webots/worlds/"
@@ -188,6 +189,60 @@ static void test_meshes_resolve(void)
 }
 
 /**
+ * The world is ENU, and the controller has to agree with it.
+ *
+ * WeBots R2025a orders translation as east, north, up. Most 3D tooling is
+ * Y-up, and assuming that here adds the northward displacement to the altitude
+ * instead: the hulls climb out of the lagoon and fly. Nothing catches it —
+ * the frames keep stepping and every counter stays green — until somebody
+ * looks at the viewport.
+ *
+ * The world states the convention if it is read: a hull sits a hand's breadth
+ * above water whose box is 0.7 thick, so its vertical component is small,
+ * while its horizontal ones are metres. And its rotation axis is 0 0 1,
+ * because yaw turns about up.
+ */
+static void test_enu_convention(void)
+{
+    if (g_expect == 0) {
+        return;
+    }
+
+    const char *p = strstr(g_world, "DEF PINTADO Robot");
+    assert(p != NULL);
+
+    p = strstr(p, "translation");
+    assert(p != NULL);
+
+    double east = 0.0;
+    double north = 0.0;
+    double up = 0.0;
+    assert(sscanf(p + strlen("translation"), "%lf %lf %lf",
+                  &east, &north, &up) == 3);
+
+    /* A boat floats. Its vertical component is centimetres, not metres, and
+     * it is inside the half-thickness of the water box. */
+    assert(fabs(up) < 0.35);
+
+    /* Its horizontal placement is metres, so the small component is
+     * unambiguously the third one. */
+    assert(fabs(north) > 1.0);
+    assert(fabs(up) < fabs(north));
+
+    /* Yaw turns about up, which is the third axis. */
+    const char *rot = strstr(p, "rotation");
+    assert(rot != NULL);
+
+    double ax = 0.0;
+    double ay = 0.0;
+    double az = 0.0;
+    assert(sscanf(rot + strlen("rotation"), "%lf %lf %lf",
+                  &ax, &ay, &az) == 3);
+    assert(fabs(ax) < 1e-9 && fabs(ay) < 1e-9);
+    assert(fabs(az - 1.0) < 1e-9);
+}
+
+/**
  * The pieces of Section III that have to be in the world rather than in code.
  */
 static void test_section_iii_furniture(void)
@@ -215,6 +270,7 @@ int main(void)
         test_single_coordinator();
         test_meshes_resolve();
         test_section_iii_furniture();
+        test_enu_convention();
 
         printf("%-20s %d vessel(s), consistent with the controller\n",
                WORLDS[i].file, WORLDS[i].vessels);

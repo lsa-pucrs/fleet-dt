@@ -73,8 +73,16 @@ que ele afirma — a arquitetura assenta em MQTT — é a costura `transport.h` 
 o loopback, ambos testados, mais a config de bridge versionada; o cliente
 mosquitto é a implementação daquela costura, não a afirmação.
 
-Medir o que o SDK faz — consumo de CPU do WeBots, C22 — é fronteira por
-natureza: nenhum artefato deste repositório pode produzir esse número.
+C22 mudou de natureza mas não de status. O benchmark existe, roda e mede: três
+mundos idênticos exceto no número de vasos, mediana de 3 execuções, e a
+diferença entre eles. O que ele reporta é que **esta máquina não resolve o
+sinal**: o incremento do segundo barco deu −1,60% com dispersão de 3,00%, e um
+incremento negativo é fisicamente impossível, logo é ruído. O relatório diz
+isso em vez de publicar o número, e não calcula a razão primeiro:subsequente
+porque dividir por algo que não se mede vestiria ruído de achado.
+
+O caminho para fechar é amostragem mais longa num host mais quieto —
+`SAMPLE_S` e `REPEATS` em `bench_webots_cpu.c` são as alavancas.
 
 O status desta tabela é gerado por `make report`, que percorre a lista e
 imprime o que ela deveria dizer. Ele nunca edita a tabela: divergência entre as
@@ -127,7 +135,7 @@ C5 é a contribuição declarada do paper. Sem ela o repo não quita o abstract.
 |---|---|---|---|
 | C20 | "Due to the size of packets (48 KB payload plus camera feed frame), the bandwidth usage increased < 1% for an update window of 125 ms" | `tools/bench/link_budget` — payload de **48 KB**, não 48 bytes | quita |
 | C21 | "MQTT introduced no notable latency, nor did WeBots' visual feedback (3D model) suffer from stuttering" | `tools/bench/jitter` sobre o transporte | quita |
-| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | **mensurável agora** — WeBots R2025a instalado; falta um mundo de 1 vaso para comparar | fronteira |
+| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | `tools/bench/bench_webots_cpu.c` + os três mundos — **medido, inconclusivo**: o custo por casco fica sob o piso de ruído desta máquina | fronteira |
 | C23 | "Running δ in less than 125 ms is feasible. However, actuation is delivered late to the boat, as it has to travel back through the network" | duas medições distintas: tempo de δ (`feasibility`) e RTT de atuação (`bench/latency`) | quita |
 | C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | exemplo com janela de profundidade > 1 | quita |
 | C25 | "the resources required to add more DTIs to the fleet are negligible (< 1% CPU usage per DTI)" | `tools/bench/scale` | quita |

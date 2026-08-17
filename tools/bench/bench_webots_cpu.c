@@ -34,6 +34,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -43,7 +44,7 @@
 /** Seconds of settling before sampling starts, so startup is not counted. */
 #define WARMUP_S 6
 
-/** Seconds the CPU sample spans. */
+/** Default seconds the CPU sample spans; FDT_CPU_SAMPLE_S overrides it. */
 #define SAMPLE_S 10
 
 /**
@@ -55,6 +56,21 @@
  * cost, so that number was pure noise wearing a result's clothes.
  */
 #define REPEATS 3
+
+/** Resolved from the environment at startup, so a careful run costs no rebuild. */
+static int g_sample_s = SAMPLE_S;
+static int g_repeats  = REPEATS;
+
+/** Reads a positive integer from the environment, or keeps the default. */
+static int env_int(const char *name, int fallback)
+{
+    const char *v = getenv(name);
+    if (v == NULL || v[0] == '\0') {
+        return fallback;
+    }
+    const int n = atoi(v);
+    return (n > 0) ? n : fallback;
+}
 
 /** One world in the sweep. */
 typedef struct {
@@ -219,7 +235,7 @@ static double measure(const char *webots, const char *world)
         return -1.0;
     }
 
-    sleep_s(SAMPLE_S);
+    sleep_s(g_sample_s);
 
     const double c1 = tree_cpu_seconds(pid);
     const double t1 = now_s();
@@ -236,6 +252,12 @@ static double measure(const char *webots, const char *world)
 
 int main(void)
 {
+    g_sample_s = env_int("FDT_CPU_SAMPLE_S", SAMPLE_S);
+    g_repeats  = env_int("FDT_CPU_REPEATS", REPEATS);
+    if (g_repeats > 64) {
+        g_repeats = 64;
+    }
+
     g_hz = (double)sysconf(_SC_CLK_TCK);
     if (g_hz <= 0.0) {
         g_hz = 100.0;
@@ -256,8 +278,11 @@ int main(void)
     bench_report_t r;
     bench_open(&r, "webots_cpu");
     bench_banner(&r, "fleet-dt WeBots CPU bench");
-    bench_say(&r, "warmup %d s, sample %d s per world, %.0f clock ticks/s\n",
-              WARMUP_S, SAMPLE_S, g_hz);
+    bench_say(&r, "warmup %d s, sample %d s x %d runs per world, "
+                  "%.0f clock ticks/s\n",
+              WARMUP_S, g_sample_s, g_repeats, g_hz);
+    bench_say(&r, "raise FDT_CPU_SAMPLE_S and FDT_CPU_REPEATS for a careful "
+                  "run on a quiet host.\n");
     bench_say(&r, "measuring WeBots and its controller together: adding a boat "
                   "adds\nboth a hull to render and a twin to step.\n");
 
@@ -266,16 +291,18 @@ int main(void)
     static double spread[NWORLDS];
     static double increment[NWORLDS];
 
-    bench_section(&r, "absolute cost per world, median of %d runs");
+    bench_section(&r, "absolute cost per world");
+    bench_say(&r, "  median of %d runs each; spread is max minus min\n",
+              g_repeats);
     bench_say(&r, "  %-20s %8s %11s %11s %12s\n",
               "world", "vessels", "cpu median", "spread", "increment");
 
     int ok = 1;
     for (int i = 0; i < NWORLDS; i++) {
-        double runs[REPEATS];
+        double runs[64];
         int got = 0;
 
-        for (int rep = 0; rep < REPEATS; rep++) {
+        for (int rep = 0; rep < g_repeats; rep++) {
             const double pct = measure(webots, WORLDS[i].file);
             if (pct >= 0.0) {
                 runs[got++] = pct;
@@ -321,19 +348,20 @@ int main(void)
      * anything. Saying so is the difference between a benchmark and a number. */
     const double noise = (spread[0] > spread[1]) ? spread[0] : spread[1];
     const double noise2 = (noise > spread[2]) ? noise : spread[2];
+    (void)noise;
 
     bench_section(&r, "the two figures Section V-A publishes");
 
     snprintf(buf, sizeof buf, "%.2f %%", increment[1]);
     bench_compare(&r, "first boat", buf, "adds 10 % CPU",
-                  (increment[1] < noise)
+                  (fabs(increment[1]) < noise2)
                       ? BENCH_NA
                       : ((increment[1] > 5.0 && increment[1] < 20.0)
                              ? BENCH_OK : BENCH_DIVERGE));
 
     snprintf(buf, sizeof buf, "%.2f %%", increment[2]);
     bench_compare(&r, "each subsequent boat", buf, "less than 1 %",
-                  (increment[2] < noise2 && increment[2] < 1.0)
+                  (fabs(increment[2]) < noise2)
                       ? BENCH_NA
                       : ((increment[2] < 1.0) ? BENCH_OK : BENCH_DIVERGE));
 
@@ -350,8 +378,16 @@ int main(void)
         "  what the architecture rests on: a fleet is affordable because\n"
         "  vessel N+1 costs almost nothing.\n");
 
-    bench_say(&r, "\n  ratio first : subsequent = %.1f : 1\n",
-              (increment[2] > 0.0) ? increment[1] / increment[2] : 0.0);
+    if (increment[2] > 0.0 && increment[2] >= noise2) {
+        bench_say(&r, "\n  ratio first : subsequent = %.1f : 1\n",
+                  increment[1] / increment[2]);
+    } else {
+        bench_say(&r,
+            "\n  No ratio is reported. The subsequent-boat increment is under\n"
+            "  the noise floor, and dividing by a number this machine cannot\n"
+            "  measure would dress noise as a finding. Longer sampling is the\n"
+            "  lever: raise SAMPLE_S and REPEATS on a quieter host.\n");
+    }
 
     fdt_plot_t p;
     fdt_plot_init(&p, "CPU cost of the simulation against vessel count",
