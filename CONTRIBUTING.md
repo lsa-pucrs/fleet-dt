@@ -26,6 +26,18 @@ Three published figures are static assertions rather than measurements:
 
 Weakening one of these to make a change compile is not a fix.
 
+## `make bench` dirties the tree
+
+`results/` is committed, so the charts in `docs/RESULTS.md` resolve on a fresh
+clone. Every benchmark run overwrites them with your machine's timings, which
+means a clean checkout goes dirty the first time you build.
+
+That is expected. Either commit the regenerated artefacts, or
+
+    git checkout results/ docs/RESULTS.md
+
+before pushing. You have not broken anything.
+
 ## What a test may assert
 
 Tests assert what the paper states and what the arithmetic requires. They do

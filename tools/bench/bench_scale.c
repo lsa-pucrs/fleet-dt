@@ -397,9 +397,21 @@ int main(void)
         "  two faults Section V-B describes: a packet that never arrives, and\n"
         "  a packet the network stack holds into the following frame.\n\n");
 
-    const run_t lossy = run_fleet_ex(16, 7, 5, 0, FRAMES);
-    bench_say(&r, "  16 vessels, drop 1 in 7, defer 1 in 5, %d frames\n",
-              FRAMES);
+    /* The fault rates are sparse and coprime with the vessel count, so the
+     * faults land on scattered frames rather than on every one. A dense rate
+     * saturates the counters -- 16 vessels losing one in seven publishes
+     * makes every single frame partial -- and a counter pinned at its maximum
+     * cannot tell a working detector from one that returns true
+     * unconditionally. Section V-B describes *some* boats partially updated,
+     * not all of them always. */
+    const unsigned lossy_vessels = 16;
+    const unsigned drop_every    = 61;
+    const unsigned defer_every   = 43;
+
+    const run_t lossy = run_fleet_ex(lossy_vessels, drop_every, defer_every,
+                                     0, FRAMES);
+    bench_say(&r, "  %u vessels, drop 1 in %u, defer 1 in %u, %d frames\n",
+              lossy_vessels, drop_every, defer_every, FRAMES);
     bench_say(&r, "    partial frames : %lu of %d\n", lossy.partial, FRAMES);
     bench_say(&r, "    double updates : %lu\n", lossy.doubles);
     bench_say(&r, "    stale packets  : %lu\n", lossy.stale);
@@ -409,9 +421,23 @@ int main(void)
     snprintf(buf, sizeof buf, "%lu partial, %lu double",
              lossy.partial, lossy.doubles);
     bench_compare(&r, "pathology reproduced", buf,
-                  "partial and doubled frame updates",
-                  (lossy.partial > 0 && lossy.doubles > 0)
-                      ? BENCH_OK : BENCH_DIVERGE);
+                  "some boats, not every frame",
+                  (lossy.partial > 0 && lossy.partial < (unsigned long)FRAMES
+                   && lossy.doubles > 0) ? BENCH_OK : BENCH_DIVERGE);
+
+    /* A bounded count is the evidence. Saturation would mean the run says
+     * nothing about whether the detector discriminates. */
+    assert(lossy.partial > 0 && lossy.partial < (unsigned long)FRAMES);
+    assert(lossy.doubles > 0);
+
+    bench_say(&r,
+        "  Stale packets stay at %lu here, and that is the deferral being\n"
+        "  order-preserving rather than the counter being broken: a held\n"
+        "  packet is delivered at the head of the next poll, so it still\n"
+        "  arrives before the fresher one behind it. It lands in the wrong\n"
+        "  frame, which makes it a double update, not an outdated read. The\n"
+        "  outdated-read path needs reordering, and is covered by\n"
+        "  tests/test_wire.c.\n", lossy.stale);
     bench_say(&r,
         "  Counted, never corrected. Dropping late packets at the receiver is\n"
         "  item D6 of docs/spec/paper-claims.md, which Section VI declares\n"

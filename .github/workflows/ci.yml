@@ -15,8 +15,12 @@ jobs:
         run: make test
       - name: Build examples (BLOCKING)
         run: make examples
+      - name: Type-check the SDK adapters against stubs (BLOCKING)
+        run: make syntax
       - name: Run benchmarks and produce results/ (BLOCKING)
         run: make bench
+      - name: Claim coverage and results assembly (BLOCKING)
+        run: make report
       - name: Upload measurement artefacts
         uses: actions/upload-artifact@v4
         with:
