@@ -165,3 +165,22 @@ rastreável até uma linha do paper.
    rotuladas. Nenhum teste asserta o "< 1%".
 
 Itens 1, 2, 3 e 5 valem como correção para o manuscrito.
+
+## I. Constraints de entrega (definidas pelo autor, 2026-08-17)
+
+Valem para os três planos e sobrescrevem qualquer decisão anterior em contrário.
+
+1. **Implementação em C.** Nenhuma parte do sistema é reimplementada em outra
+   linguagem. Scripts de shell só orquestram; não calculam.
+2. **Todo artefato de código é em inglês** — identificadores, comentários,
+   docstrings, mensagens de saída, nomes de arquivo. Os documentos de
+   planejamento e este spec permanecem em português. Cada símbolo público
+   carrega uma docstring no header dizendo o que faz, o que devolve, e qual
+   linha do paper ele quita.
+3. **Todo benchmark produz artefato visual.** Cada medição escreve três
+   arquivos em `results/`: `<name>.csv` com os dados brutos, `<name>.svg` com o
+   gráfico, e `<name>.txt` com o relatório humano. O plotter é C puro emitindo
+   SVG — sem gnuplot, sem matplotlib, sem dependência externa.
+4. **As saídas são montadas num README.** `tools/report/` varre `results/` e
+   gera a seção de resultados do `README.md`, com os SVGs embutidos e as
+   tabelas de comparação contra os números publicados do §V.
