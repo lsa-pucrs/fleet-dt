@@ -65,7 +65,7 @@ see more than its own state. The second hull therefore has
 
 ![the Jundiá fleet in WeBots](../docs/simulation.jpg)
 
-Captured from a live run at frame 240. Setting `FDT_SHOT` to a path makes the
+Both hulls of the fleet, captured from a live run at frame 240. Setting `FDT_SHOT` to a path makes the
 controller export the 3D view there, and `FDT_SHOT_FRAME` chooses when:
 
     FDT_SHOT=/tmp/view.jpg FDT_SHOT_FRAME=240 \
@@ -78,6 +78,16 @@ the only assertion that covers a rendering.
 `FDT_NO_POSE=1` leaves the hulls wherever the world placed them, which
 separates "the twin wrote a wrong pose" from "the camera is pointed elsewhere"
 in a single run. Both look identical from the console.
+
+The controller also prints the distance between hulls, which is how the fleet
+was found rendering as a single boat: the vessels sat 0.97 m apart with a
+1.2 m hull, one inside the other. Two causes, both now fixed. The spacing in
+`tools/injector/injector.h` was derived from the station-keeping sweep and
+collapsed with it; they are independent quantities. And each vessel anchored
+its local origin on its own first fix, which silently replaced the telemetry's
+fleet geometry with whatever the world file happened to say — a digital twin
+has to show where the vessels are *relative to each other*, so the anchor is
+now one for the fleet.
 
 ## What is checked, and what is not
 

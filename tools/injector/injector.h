@@ -45,6 +45,18 @@
  */
 #define FDT_INJ_SWEEP_DEG 0.00002
 
+/**
+ * Spacing between vessels, in degrees. About 4 m.
+ *
+ * Independent of the sweep, and it has to be: they answer different questions.
+ * The sweep is how far one boat wanders; the spacing is how far two boats
+ * stand apart, and that is bounded below by the hull. Section II gives 1.2 m,
+ * so a spacing tied to the sweep collapsed to under a metre when the sweep
+ * shrank, and the fleet rendered as a single boat with another inside it.
+ * tests/test_geo.c holds this above the hull length.
+ */
+#define FDT_INJ_SPACING_DEG 0.000036
+
 /** One injector driving a whole fleet's worth of synthetic vessels. */
 typedef struct {
     fdt_transport_t *tr;      /**< Where samples are published. */

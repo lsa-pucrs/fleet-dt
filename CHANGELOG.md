@@ -51,9 +51,29 @@ The validation of Section V:
 - two runnable examples: a coordinated fleet frame, and the filtered/raw
   two-path arrangement of Section V-A
 
+The simulation, verified against the real toolchain:
+
+- the WeBots project — world, hull meshes, material and texture — from
+  `lsa-pucrs/boat-digital-twin`, rewired to the model of Section IV
+- three worlds differing only in vessel count, so the CPU claim of Section V-A
+  can be measured as a difference rather than asserted
+- `fdt_geo_offset`, the geodetic-to-local mapping, extracted from the WeBots
+  controller after it placed every vessel 5700 km outside the world
+- `FDT_SHOT` and `FDT_SHOT_FRAME`, which export the 3D view from a running
+  controller, because a rendering cannot be asserted any other way
+- `make syntax`, type-checking the SDK adapters against stub headers on a
+  machine that has neither
+- `make mqtt-test`, a round trip through a real mosquitto broker
+- `make webots`, building the controller against a real WeBots install
+- header dependency tracking, so editing a header rebuilds what included it
+
 Documentation:
 
 - the claim inventory, one row per falsifiable claim with the artefact that
   discharges it, including the seven items Section VI declares future work
 - the paper-to-code map for revision `-10`
-- five recorded ambiguities in the manuscript, four of them worth fixing
+- six recorded ambiguities and findings in the manuscript, five worth fixing,
+  including that the 48-byte state of Section IV quantises position to between
+  0.2 and 0.4 m at the Jundiá coordinates — a third of a hull length
+- a captured frame of the running simulation, since two position bugs left
+  every counter green and were caught only by looking

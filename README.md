@@ -30,6 +30,12 @@ with a notice.
     make test       # every published figure of the paper, checked
     make bench      # the measurement campaign; writes results/
     make report     # claim coverage, and docs/RESULTS.md
+    make syntax     # type-check the SDK adapters against stubs
+
+Two targets need an SDK and skip with a notice without it:
+
+    make webots     # the simulation; needs WEBOTS_HOME
+    make mqtt-test  # a round trip through a real broker; needs libmosquitto
 
 Requires `gcc`, `make`, and glibc: the pacer uses POSIX.1-2008
 `clock_nanosleep` with `TIMER_ABSTIME`, which Apple libc does not provide.

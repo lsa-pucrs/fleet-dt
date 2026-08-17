@@ -231,7 +231,28 @@ rastreável até uma linha do paper.
    absoluta, `fdt_link_increase` a relativa, e o benchmark imprime as duas
    rotuladas. Nenhum teste asserta o "< 1%".
 
-Itens 1, 2, 3 e 5 valem como correção para o manuscrito.
+6. **A precisão simples da eq. (1) quantiza a posição.** O §IV fixa o estado em
+   48 bytes, ou seja 12 floats, então φ e λ **têm** que ser `float`. Nas
+   coordenadas do Jundiá — 30,05° S, 51,17° O — um ULP de `float32` vale:
+
+   | eixo | ULP | em metros |
+   |---|---|---|
+   | longitude | 3,81 × 10⁻⁶ ° | **0,368 m** |
+   | latitude | 1,91 × 10⁻⁶ ° | **0,212 m** |
+
+   O casco do §II tem 1,2 m. A posição do gêmeo é portanto quantizada em cerca
+   de um terço do comprimento do barco, e um espaçamento de 4 m entre vasos
+   chega ao outro lado como 3,31 m. Medido, não inferido: veja `/tmp` não, veja
+   `tests/test_geo.c` e a separação que o controller do WeBots imprime.
+
+   Isso não é corrigível sem quebrar a figura publicada: alargar φ e λ para
+   `double` levaria o estado a 56 bytes e tornaria falso o "48 bytes" do §IV.
+   É uma consequência do modelo como publicado, e vale dizer no manuscrito —
+   para uma frota mantendo formação, um terço de casco de incerteza posicional
+   é material.
+
+Itens 1, 2, 3 e 5 valem como correção para o manuscrito; o 6 vale como
+limitação a declarar.
 
 ## I. Constraints de entrega (definidas pelo autor, 2026-08-17)
 

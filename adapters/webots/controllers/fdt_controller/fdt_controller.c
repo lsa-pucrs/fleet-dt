@@ -124,9 +124,25 @@ static WbFieldRef g_rotation[MAX_VESSELS];
  * converting, for the reason spelled out in render_vessel().
  */
 static double g_origin[MAX_VESSELS][3];
-static double g_ref_lat[MAX_VESSELS];
-static double g_ref_lon[MAX_VESSELS];
-static int    g_anchored[MAX_VESSELS];
+
+/**
+ * One anchor for the whole fleet, not one per vessel.
+ *
+ * Anchoring each hull on its own first fix quietly deletes the fleet geometry:
+ * every vessel then renders as a displacement from wherever the world file
+ * happened to place it, so the separation between hulls is whatever the .wbt
+ * says and the telemetry's own spacing cancels out exactly. Two boats four
+ * metres apart in the data rendered 1.5 m apart, overlapping, because that is
+ * what the world file said.
+ *
+ * A digital twin shows where the vessels are relative to each other. So the
+ * first fix from any vessel fixes the geodetic origin, vessel 0's placement
+ * fixes the world origin, and every hull is drawn as an offset from that one
+ * pair.
+ */
+static double g_ref_lat;
+static double g_ref_lon;
+static int    g_anchored;
 
 /** Fleet context: yaw spread, standing in for inter-vessel distance. */
 typedef struct {
@@ -263,10 +279,10 @@ static void render_vessel(size_t k, const fdt_state_t *b)
      * five thousand kilometres from the origin, and the water in this world is
      * a thousand metres square, so the hulls leave the scene on the first
      * frame and the operator sees an empty lagoon. */
-    if (!g_anchored[k]) {
-        g_ref_lat[k]  = (double)b->lat_deg;
-        g_ref_lon[k]  = (double)b->lon_deg;
-        g_anchored[k] = 1;
+    if (!g_anchored) {
+        g_ref_lat = (double)b->lat_deg;
+        g_ref_lon = (double)b->lon_deg;
+        g_anchored = 1;
     }
 
     /* Displacement on a local tangent plane, which is all the vessels of
@@ -275,7 +291,7 @@ static void render_vessel(size_t k, const fdt_state_t *b)
      * was wrong in the first place. */
     double dx = 0.0;
     double dz = 0.0;
-    fdt_geo_offset(g_ref_lat[k], g_ref_lon[k],
+    fdt_geo_offset(g_ref_lat, g_ref_lon,
                    (double)b->lat_deg, (double)b->lon_deg, &dx, &dz);
 
     /* WeBots R2025a is ENU: index 0 is east, index 1 is north, index 2 is up.
@@ -350,7 +366,6 @@ int main(int argc, char **argv)
             g_origin[k][1] = t[1];
             g_origin[k][2] = t[2];
         }
-        g_anchored[k] = 0;
         g_vessels++;
     }
 
@@ -470,6 +485,14 @@ int main(int argc, char **argv)
              * read as ordinary motion across it. */
             const double *pos0 = (g_translation[0] != NULL)
                 ? wb_supervisor_field_get_sf_vec3f(g_translation[0]) : NULL;
+            if (g_vessels > 1 && g_translation[1] != NULL) {
+                const double *p1 =
+                    wb_supervisor_field_get_sf_vec3f(g_translation[1]);
+                const double dx = p1[0] - (pos0 ? pos0[0] : 0.0);
+                const double dy = p1[1] - (pos0 ? pos0[1] : 0.0);
+                printf("fdt_controller: hull separation %.2f m\n",
+                       sqrt(dx * dx + dy * dy));
+            }
             printf("fdt_controller: frame %zu  yaw %.2f / %.2f deg  "
                    "spread %.2f  worst delta %.1f us  feasible %d  "
                    "partial %llu  double %llu  pos0 E%.1f N%.1f U%.2f\n",

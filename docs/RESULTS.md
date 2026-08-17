@@ -165,19 +165,19 @@ frames per size: 200   window depth: 4   queue capacity: 8
 
 --- per fleet size ---
    vessels   delta worst    delta mean     cpu/DTI     inj/frame   feasible
-         1        0.8 us        0.1 us    20.903 %        0.4 us        yes
-         2        0.4 us        0.2 us     9.997 %        0.6 us        yes
-         4        0.6 us        0.3 us     4.322 %        1.3 us        yes
-         8        7.0 us        0.6 us     2.028 %        2.8 us        yes
-        16        2.0 us        1.4 us     0.836 %        8.6 us        yes
-        25        3.0 us        1.7 us     0.458 %       13.0 us        yes
-        32        3.9 us        2.4 us     0.331 %       20.3 us        yes
-        48        4.3 us        3.0 us     0.188 %       30.0 us        yes
-        64        7.1 us        4.5 us     0.124 %       52.1 us        yes
+         1        0.5 us        0.1 us    18.687 %        0.3 us        yes
+         2        0.3 us        0.1 us     9.060 %        0.5 us        yes
+         4        0.4 us        0.2 us     3.803 %        1.0 us        yes
+         8        2.8 us        0.4 us     1.828 %        2.3 us        yes
+        16        1.0 us        0.8 us     0.740 %        5.8 us        yes
+        25        2.0 us        1.3 us     0.412 %       11.3 us        yes
+        32        2.4 us        1.3 us     0.326 %       11.4 us        yes
+        48       11.2 us        2.5 us     0.190 %       24.4 us        yes
+        64        5.5 us        3.8 us     0.117 %       46.1 us        yes
 
 --- DTI side — what Section V-B calls negligible ---
-  cpu per DTI                0.1238 %               paper: < 1 %                              [OK]
-  worst delta, 64 vessels    7.1 us                 paper: < 125 ms deadline                  [OK]
+  cpu per DTI                0.1175 %               paper: < 1 %                              [OK]
+  worst delta, 64 vessels    5.5 us                 paper: < 125 ms deadline                  [OK]
   DTI ceiling here           >= 64 vessels          paper: not the paper's 25                 [OK]
 
 --- injector side — the ceiling Section V-B actually hit ---
@@ -201,7 +201,7 @@ frames per size: 200   window depth: 4   queue capacity: 8
     partial frames : 106 of 200
     double updates : 72
     stale packets  : 0
-    delta worst    : 10.4 us   feasible: yes
+    delta worst    : 4.6 us   feasible: yes
   pathology reproduced       106 partial, 72 double paper: some boats, not every frame        [OK]
   Stale packets stay at 0 here, and that is the deferral being
   order-preserving rather than the counter being broken: a held
@@ -232,12 +232,12 @@ fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
 transport: in-process loopback   vessels: 4   frames: 400
 
 --- measurement 1 — delta compute time (Section IV) ---
-  p50     0.35 us   p95     0.38 us   p99     0.51 us   worst     2.27 us
-  delta under the deadline   2.27 us worst          paper: delta in less than 125 ms is feasible [OK]
+  p50     0.09 us   p95     0.09 us   p99     0.11 us   worst     0.37 us
+  delta under the deadline   0.37 us worst          paper: delta in less than 125 ms is feasible [OK]
 
 --- measurement 2 — actuation round trip (Section V-A) ---
   I^t published -> A^t delivered
-  p50     4.17 us   p95     4.85 us   p99     7.51 us   worst    77.90 us
+  p50     1.01 us   p95     1.04 us   p99     1.09 us   worst     8.15 us
   round trip over a network  not measured here      paper: actuation is delivered late        [BOUNDARY]
   This run uses the in-process loopback, so the round trip carries
   no network. Section V-A's observation is about a real link, and
@@ -247,8 +247,8 @@ transport: in-process loopback   vessels: 4   frames: 400
   actuation arrives.
 
 --- why they are not one number ---
-  delta worst    :     2.27 us  (compute)
-  round trip p50 :     4.17 us  (compute + transport)
+  delta worst    :     0.37 us  (compute)
+  round trip p50 :     1.01 us  (compute + transport)
   The second contains the first. Adding them would count
   the compute twice.
 
@@ -270,10 +270,10 @@ vessels: 8   frames: 80   period: 125 ms   (about 10 s of wall clock)
 
 --- frame period held under a stepping fleet ---
   mean period      :  125.000 ms
-  |deviation| p50  :    0.045 ms
-  |deviation| p95  :    0.139 ms
-  |deviation| p99  :    0.148 ms
-  |deviation| worst:    0.153 ms
+  |deviation| p50  :    0.035 ms
+  |deviation| p95  :    0.147 ms
+  |deviation| p99  :    0.688 ms
+  |deviation| worst:    0.796 ms
   pacer overruns   :        0
   mean frame period          125.000 ms             paper: 125 ms, 8 Hz (Sec. IV)             [OK]
   deadline misses            0                      paper: delta is a hard real-time task     [OK]

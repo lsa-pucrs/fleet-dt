@@ -130,6 +130,34 @@ static void test_injector_track_fits_the_world(void)
     assert(worst > 1.2);   /* at least a hull length of motion */
 }
 
+/**
+ * Two vessels have to stand further apart than one vessel is long.
+ *
+ * Section II gives the Jundiá hull as 1.2 m. The spacing was once derived from
+ * the sweep, and when the sweep shrank to keep the fleet in frame the spacing
+ * came down with it to under a metre: the hulls overlapped and the fleet
+ * rendered as a single boat. They are independent quantities and this is the
+ * check that keeps them so.
+ */
+static void test_vessels_do_not_overlap(void)
+{
+    const double hull_m = 1.2;
+
+    double east = 0.0;
+    double north = 0.0;
+    fdt_geo_offset(REF_LAT, REF_LON,
+                   REF_LAT + FDT_INJ_SPACING_DEG, REF_LON,
+                   &east, &north);
+
+    const double spacing = sqrt(east * east + north * north);
+    printf("vessel spacing: %.2f m, hull length %.1f m\n", spacing, hull_m);
+
+    assert(spacing > 2.0 * hull_m);
+
+    /* And close enough to read as a fleet rather than as two lone boats. */
+    assert(spacing < 20.0);
+}
+
 /** Every output pointer is optional. */
 static void test_null_outputs(void)
 {
@@ -142,6 +170,7 @@ int main(void)
     test_scales();
     test_directions();
     test_injector_track_fits_the_world();
+    test_vessels_do_not_overlap();
     test_null_outputs();
 
     printf("test_geo: ok\n");

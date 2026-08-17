@@ -4,10 +4,10 @@ vessels: 8   frames: 80   period: 125 ms   (about 10 s of wall clock)
 
 --- frame period held under a stepping fleet ---
   mean period      :  125.000 ms
-  |deviation| p50  :    0.045 ms
-  |deviation| p95  :    0.139 ms
-  |deviation| p99  :    0.148 ms
-  |deviation| worst:    0.153 ms
+  |deviation| p50  :    0.035 ms
+  |deviation| p95  :    0.147 ms
+  |deviation| p99  :    0.688 ms
+  |deviation| worst:    0.796 ms
   pacer overruns   :        0
   mean frame period          125.000 ms             paper: 125 ms, 8 Hz (Sec. IV)             [OK]
   deadline misses            0                      paper: delta is a hard real-time task     [OK]

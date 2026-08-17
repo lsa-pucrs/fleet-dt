@@ -26,15 +26,15 @@
 <line class="grid" x1="72.0" y1="358.0" x2="670.0" y2="358.0"/>
 <text class="tick" x="64.0" y="362.0" text-anchor="end">0</text>
 <line class="grid" x1="72.0" y1="296.8" x2="670.0" y2="296.8"/>
-<text class="tick" x="64.0" y="300.8" text-anchor="end">4.515</text>
+<text class="tick" x="64.0" y="300.8" text-anchor="end">4.036</text>
 <line class="grid" x1="72.0" y1="235.6" x2="670.0" y2="235.6"/>
-<text class="tick" x="64.0" y="239.6" text-anchor="end">9.03</text>
+<text class="tick" x="64.0" y="239.6" text-anchor="end">8.073</text>
 <line class="grid" x1="72.0" y1="174.4" x2="670.0" y2="174.4"/>
-<text class="tick" x="64.0" y="178.4" text-anchor="end">13.54</text>
+<text class="tick" x="64.0" y="178.4" text-anchor="end">12.11</text>
 <line class="grid" x1="72.0" y1="113.2" x2="670.0" y2="113.2"/>
-<text class="tick" x="64.0" y="117.2" text-anchor="end">18.06</text>
+<text class="tick" x="64.0" y="117.2" text-anchor="end">16.15</text>
 <line class="grid" x1="72.0" y1="52.0" x2="670.0" y2="52.0"/>
-<text class="tick" x="64.0" y="56.0" text-anchor="end">22.57</text>
+<text class="tick" x="64.0" y="56.0" text-anchor="end">20.18</text>
 <line class="grid" x1="72.0" y1="52.0" x2="72.0" y2="358.0"/>
 <text class="tick" x="72.0" y="376.0" text-anchor="middle">1</text>
 <line class="grid" x1="171.7" y1="52.0" x2="171.7" y2="358.0"/>
@@ -52,17 +52,17 @@
 <rect class="frame" x="72.0" y="52.0" width="598.0" height="306.0"/>
 <text class="axis" x="371.0" y="402.0" text-anchor="middle">vessels in the fleet</text>
 <text class="axis" x="22.0" y="205.0" text-anchor="middle" transform="rotate(-90 22.0 205.0)">CPU per DTI (%)</text>
-<line class="rule" x1="72.0" y1="344.4" x2="670.0" y2="344.4"/>
-<text class="rulelab" x="678.0" y="348.4">&lt; 1 % per DTI (Sec. V-B)</text>
+<line class="rule" x1="72.0" y1="342.8" x2="670.0" y2="342.8"/>
+<text class="rulelab" x="678.0" y="346.8">&lt; 1 % per DTI (Sec. V-B)</text>
 <rect x="48.08" y="74.67" width="47.84" height="283.33" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="57.57" y="222.50" width="47.84" height="135.50" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="76.56" y="299.41" width="47.84" height="58.59" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="114.52" y="330.50" width="47.84" height="27.50" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="190.46" y="346.67" width="47.84" height="11.33" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="275.89" y="351.80" width="47.84" height="6.20" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="342.33" y="353.51" width="47.84" height="4.49" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="494.21" y="355.45" width="47.84" height="2.55" fill="#2563eb" fill-opacity="0.85"/>
-<rect x="646.08" y="356.32" width="47.84" height="1.68" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="57.57" y="220.63" width="47.84" height="137.37" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="76.56" y="300.33" width="47.84" height="57.67" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="114.52" y="330.29" width="47.84" height="27.71" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="190.46" y="346.78" width="47.84" height="11.22" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="275.89" y="351.75" width="47.84" height="6.25" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="342.33" y="353.05" width="47.84" height="4.95" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="494.21" y="355.12" width="47.84" height="2.88" fill="#2563eb" fill-opacity="0.85"/>
+<rect x="646.08" y="356.22" width="47.84" height="1.78" fill="#2563eb" fill-opacity="0.85"/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
 <text class="legend" x="698.0" y="64.0">measured</text>
 </svg>

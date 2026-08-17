@@ -35,6 +35,7 @@ re-checked.
 | `S` | coordinator, Fig. 4 | `fdt_coord_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 | `Bᵗ` database | the cylinder of Fig. 4 | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 | Δt | frame period, 125 ms | `FDT_TICK_NS` | [`tick.h`](../include/fleet_dt/tick.h) |
+| φ, λ onto metres | local tangent plane | `fdt_geo_offset` | [`geo.h`](../include/fleet_dt/geo.h) |
 
 ## Section III — the architecture
 
