@@ -57,9 +57,13 @@ present, and writes the coverage table of
 
 ## C. The architecture of Section III
 
+The bridge of C9 runs inside the broker. This repository versions the two
+configurations and the client that publishes into them; `make mqtt-test`
+exercises a round trip through one broker, not a bridged pair.
+
 | id | Claim | Where it lives |
 |---|---|---|
-| C9 | brokers "connected in bridge mode to avoid service interruption during temporary connection instability" | `config/mosquitto/`, partition test |
+| C9 | brokers "connected in bridge mode to avoid service interruption during temporary connection instability" | `config/mosquitto/boat.conf` and `ground.conf`, with the QoS 1 publish in `adapters/mqtt/fdt_mqtt.c` that matches their `out 1` |
 | C10 | LSDT: small packets, "e.g., 8 bytes per IMU axis", against 100 Mbps available | the LSDT profile through `linkbudget` |
 | C11 | HSDT: "Separating the camera feed from the MQTT infrastructure reduced latency while improving the DTI's response time" | `adapters/rtsp/`; the wire codec never carries an image |
 | C12 | regulators "overcome this problem by dropping the number of samples in the MQTT client", while "real sensors continue sampling at their own pace" | `regulator.h`, two-path test |
