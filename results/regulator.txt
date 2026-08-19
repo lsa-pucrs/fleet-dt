@@ -17,9 +17,9 @@ DT rate: 8 Hz   samples per sensor: 20000
         1000         8.00         1000      99.2 %  decimated
 
 --- the two halves of the Section III claim ---
-  publication decimated      8.00 Hz from 1000 Hz   paper: drops samples in the MQTT client   [OK]
-  link traffic removed       99.2 % of traffic      paper: maximizing use of shared links     [OK]
-  1 Hz gyroscope             0 dropped              paper: sensors slower than the DT pass    [OK]
+  publication decimated      8.00 Hz from 1000 Hz   paper: drops samples in the MQTT client   [matches paper]
+  link traffic removed       99.2 % of traffic      paper: maximizing use of shared links     [matches paper]
+  1 Hz gyroscope             0 dropped              paper: sensors slower than the DT pass    [matches paper]
   The regulator sits in the publish path, never in the sensor path.
   Sampled counts every reading the sensor produced, including the
   ones the link never carried, so a control loop reading the sensor

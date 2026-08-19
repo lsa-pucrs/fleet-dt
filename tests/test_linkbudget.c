@@ -52,7 +52,7 @@ static void test_48kb_is_not_48_bytes(void)
            kb_bps / 1e6, b_bps / 1e3);
 }
 
-/** Ambiguity 5: absolute occupancy and relative increase, side by side. */
+/** Decision 4 of docs/claim-map.md: both readings, side by side. */
 static void test_two_readings(void)
 {
     const fdt_stream_t lsdt = { .name = "lsdt", .payload_bytes = 48u * 1024u,

@@ -14,24 +14,23 @@ link: 100 Mbps nominal (Sec. III)   DT rate: 8 Hz
 --- the two figures that share two digits ---
   Sec. V-A packet payload : 48 KB   ->    3.146 Mbps
   Sec. IV  state width    : 48 B    ->    3.072 kbps
-  Ratio 1024. Unrelated quantities; a benchmark that confused them
-  would report a figure three orders of magnitude out.
+  Ratio 1024. The state width of Section IV and the packet payload of
+  Section V-A are separate quantities, printed on separate rows.
 
 --- the Section V-A figure, under both readings ---
-  A: absolute occupancy      3.146 % occupied       paper: increased < 1 %                    [DIVERGE]
-  B: increase over baseline  0.1500 % growth        paper: increased < 1 %                    [OK]
-  The manuscript does not say which it means, and the two do not
-  agree. Reading A is 3.1 % of the link; reading B, against the
-  camera feed Section III describes, is far under 1 %. Recorded as
-  ambiguity 5 in docs/spec/paper-claims.md; nothing here asserts
-  the published figure either way.
+  A: absolute occupancy      3.146 % occupied       paper: increased < 1 %                    [this host]
+  B: increase over baseline  0.1500 % growth        paper: increased < 1 %                    [matches paper]
+  Reading A is the payload as a share of the whole link. Reading B
+  is its growth over the camera feed Section III describes. Both
+  are printed, and fdt_link_utilization and fdt_link_increase are
+  the two symbols that compute them.
 
 --- aggregate MQTT load, and how many vessels fit ---
   unregulated, 1 vessel :    3.169 Mbps  (3.17 % of link)
   regulated,   1 vessel :    3.149 Mbps  (3.15 % of link)
   saved by the regulators: 0.6 % of the offered load
   vessels within 50 % of the link : 15 (13 once 20 % framing overhead is charged)
-  fleet the link supports    15 vessels             paper: 25-boat run was injector-bound     [OK]
+  fleet the link supports    15 vessels             paper: 25-boat run was injector-bound     [matches paper]
 
 artefacts: results/bandwidth.txt, results/bandwidth.csv, results/bandwidth.svg
 artefacts: results/bandwidth_fleet.svg

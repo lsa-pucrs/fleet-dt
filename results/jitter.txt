@@ -9,9 +9,9 @@ vessels: 8   frames: 80   period: 125 ms   (about 10 s of wall clock)
   |deviation| p99  :    0.461 ms
   |deviation| worst:    0.488 ms
   pacer overruns   :        0
-  mean frame period          125.000 ms             paper: 125 ms, 8 Hz (Sec. IV)             [OK]
-  deadline misses            0                      paper: delta is a hard real-time task     [OK]
-  WeBots 3D stuttering       not measured here      paper: no stuttering (Sec. V-A)           [BOUNDARY]
+  mean frame period          125.000 ms             paper: 125 ms, 8 Hz (Sec. IV)             [matches paper]
+  deadline misses            0                      paper: delta is a hard real-time task     [matches paper]
+  WeBots 3D stuttering       not measured here      paper: no stuttering (Sec. V-A)           [external system]
   Stuttering is a property of the renderer, so that half of the
   Section V-A claim needs WeBots. What this run establishes is the
   precondition: the frame clock holds while 8 vessels publish,

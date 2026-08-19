@@ -8,7 +8,7 @@
 
 /**
  * @file framesync.h
- * @brief Detects and counts the frame pathology of Section V-B.
+ * @brief Detects and counts the partial and double updates of Section V-B.
  */
 
 /** What ::fdt_fs_accept decided about one packet. */
