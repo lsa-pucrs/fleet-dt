@@ -80,12 +80,17 @@ network namespace fixes both, still on one machine.
     sudo ip netns exec boat ip link set veth-boat mtu 1500 up
     sudo ip netns exec boat ip link set lo up
 
-The boat runs inside the namespace, the station on the host:
+The boat runs inside the namespace, the station on the host. `ip netns exec`
+runs its command as root, and a `pip install --user` puts paho where root does
+not look, so drop back to your own account for the Python:
 
-    sudo ip netns exec boat mosquitto -c mqtt/pi/mosquitto.conf
-    sudo ip netns exec boat python3 mqtt/pi/publisher.py --broker 10.90.0.2 --boat-id b1
+    sudo ip netns exec boat mosquitto -c mqtt/pi/mosquitto.conf -d
+    sudo ip netns exec boat sudo -u "$USER" python3 mqtt/pi/publisher.py \
+         --broker 10.90.0.2 --boat-id b1
 
     python3 mqtt/jmcs/subscriber.py --broker 10.90.0.2 --boat-id b1 --csv load.csv
+
+A system-wide `pip install paho-mqtt` removes the need for the inner `sudo -u`.
 
 Impairment per direction, which is what a radio asks for: the uplink fills with
 video while the downlink carries only `cmd`.
@@ -98,8 +103,13 @@ video while the downlink carries only `cmd`.
     sudo tc qdisc del dev veth-station root
     sudo ip netns del boat
 
-`netem` on the namespace side delays each packet once, so `delay 40ms` in both
-directions produces a round trip near 80 ms.
+`netem` delays each packet once per direction, so `delay 40ms` on both sides
+produces a round trip near 80 ms. Measured on this setup: `probe.py` reported
+p50 83.7 ms, p90 129.2 ms against a 74.0 ms minimum.
+
+`probe.py` measures the echo that `publisher.py` performs. With the publisher
+stopped, every ping is reported lost, which reads the same as a dead link.
+Check that the publisher is running before believing a 100 % loss line.
 
 ## What the numbers mean
 
