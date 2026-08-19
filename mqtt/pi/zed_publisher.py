@@ -4,8 +4,8 @@ Grabs frames (the ZED enumerates as a UVC stereo camera; any V4L2 camera
 works for the software test), JPEG-encodes each one and publishes it on
 ``zed/frame``; ``zed/info`` is published retained so a late subscriber learns
 the stream's shape first. Whole frames, independently decodable: a lost
-message costs exactly one frame. This is the deliberate video-through-the-
-broker design the test measures (RTP-under-MQTT is the paper's ref [18]).
+message costs exactly one frame. Video through the broker is the design under
+test: it measures what the broker adds to a video path.
 
 Requires opencv-python. Run on the Pi:
 

@@ -1,169 +1,126 @@
-# fleet-dt
+# mqtt link test
 
-A C implementation of Fleet-DT, the digital twin model and architecture of
+A software test of one MQTT link between a boat and a station: one broker, one
+topic namespace, sensor telemetry and video through the same broker, and a
+round-trip probe. It runs on a single machine, and `tc netem` supplies the
+impairment.
 
-> A. R. P. Domingues, C. J. D. Silva, F. da R. Lui, J. Maia, R. S. Cenço,
-> C. A. M. Marcon, F. G. Moraes. **A Digital Twin Model and Architecture for
-> Monitoring and Controlling Fleets of Autonomous Unmanned Surface Vehicles.**
-> ICECS 2026.
+The boat is a Raspberry Pi 4 with a Navio2 and a ZED camera. The station is the
+JMCS. Both sides import one topic module and never spell a topic anywhere else.
 
-Built for the Jundiá Project's fleet of autonomous unmanned surface vehicles,
-which collect environmental DNA samples from the lagoons of southern Brazil.
+```
+mqtt/
+├── topics.py         the boat/<id>/<group> tree, imported by BOTH sides
+├── requirements.txt  paho-mqtt, plus opencv-python for the camera
+├── pi/               boat side
+│   ├── mosquitto.conf    the broker the station connects to
+│   ├── publisher.py      sensor groups at their rates, ping echo, cmd log
+│   └── zed_publisher.py  camera -> JPEG -> zed/frame, one frame per message
+└── jmcs/             station side
+    ├── mosquitto.conf    station-local broker
+    ├── subscriber.py     boat/# live table: msg/s and kbps per topic, CSV
+    └── probe.py          RTT through ping/pong, percentiles, CSV
+```
 
-**This repository tracks manuscript revision `-10`**, where the model is
-Section IV and the equations run (1) to (6). The revision is pinned to a symbol
-and checked by the test suite, because that numbering has already shifted once.
+## Topics
 
-## What is here
+```
+boat/<id>/imu        {a_x, a_y, a_z, w_x, w_y, w_z}            8 Hz
+boat/<id>/mag        {m_x, m_y, m_z}                           8 Hz
+boat/<id>/gps        {lat, lon, h, v_n, v_e, v_d}              5 Hz
+boat/<id>/baro       {p_pa, t_c}                               1 Hz
+boat/<id>/power      {v_b, i_b}                                1 Hz
+boat/<id>/state      {lat, lon, h, roll, pitch, yaw,           8 Hz
+                      u, v, w, p, q, r}
+boat/<id>/zed/info   {resolution, fps, quality}                retained JSON
+boat/<id>/zed/frame  raw JPEG bytes, one whole frame/message   ~15 fps
+boat/<id>/cmd        {throttle_pct, cage_angle_rad}            station -> boat
+boat/<id>/ping|pong  opaque probe payloads, the boat echoes
+```
 
-The library implements the model of Section IV and the architecture of
-Section III: the state types of Table I, the bounded state queue, the
-transition and decision functions, the fleet aggregate, the coordinator, the
-125 ms pacer, the wire protocol, the bandwidth regulators, and the link-budget
-model. The application supplies the dynamics.
+Every sensor payload carries `seq` and `t`, so the receiver can tell a dropped
+message from a late one. The JSON payloads cost 38 kbps in total at these
+rates, plus about 4 kbps of MQTT headers across 31 messages per second.
 
-No external dependency. `make lib` and `make test` work on a bare toolchain;
-anything needing an SDK — MQTT, WeBots — sits behind its own target and skips
-with a notice.
+Publishes and subscribes run at QoS 0 throughout. That is deliberate: QoS 1
+would retransmit the losses `netem` injects, and the test would measure the
+protocol's recovery instead of the link.
 
-    make            # library, tests, examples, benchmarks, report
-    make test       # every published figure of the paper, checked
-    make bench      # the measurement campaign; writes results/
-    make report     # claim coverage, and docs/RESULTS.md
-    make syntax     # type-check the SDK adapters against stubs
+## Run it, no impairment
 
-Two targets need an SDK and skip with a notice without it:
+Two terminals on one machine.
 
-    make webots     # the simulation; needs WEBOTS_HOME
-    make mqtt-test  # a round trip through a real broker; needs libmosquitto
+    mosquitto -c mqtt/pi/mosquitto.conf
+    python3 mqtt/pi/publisher.py --broker localhost --boat-id b1
+    python3 mqtt/pi/zed_publisher.py --broker localhost --boat-id b1   # optional
 
-Requires `gcc`, `make`, and glibc: the pacer uses POSIX.1-2008
-`clock_nanosleep` with `TIMER_ABSTIME`, which Apple libc does not provide.
+    python3 mqtt/jmcs/subscriber.py --broker localhost --boat-id b1 --csv load.csv
+    python3 mqtt/jmcs/probe.py --broker localhost --boat-id b1 --csv rtt.csv
 
-## Layout
+The subscriber's table answers which packets and how many kbps per topic. The
+probe's percentiles answer round-trip time. Run the probe with the camera on
+and off under the same conditions: the difference is what video through the
+broker costs the small packets.
 
-| Path | What lives there |
-|---|---|
-| `include/fleet_dt/`, `src/` | the library: model, queue, transition, fleet, coordinator, pacer, feasibility, wire, regulators, link budget, DTE, plotter |
-| `tests/` | one suite per module; every published figure is asserted, not printed |
-| `examples/` | two runnable programs — see [`examples/README.md`](examples/README.md) |
-| `tools/injector/` | the synthetic telemetry injectors of Section V-B |
-| `tools/bench/` | the measurement campaign |
-| `tools/report/` | claim coverage and results assembly |
-| `adapters/` | Ardupilot ingest, the camera boundary, MQTT, and the WeBots project — world, hull meshes and the controller running δ |
-| `config/mosquitto/` | the bridge-mode broker configuration of Section III |
-| `docs/` | the paper-to-code map, the claim inventory, the generated results |
+## Run it under impairment
 
-## The simulation
+`tc netem` shapes an interface. Shaping `lo` reaches every loopback flow on the
+machine, and `lo` carries a 65536-byte MTU, so a 100 KB JPEG travels as two
+segments instead of the seventy a 1500-byte link would use. A veth pair in a
+network namespace fixes both, still on one machine.
 
-`adapters/webots/` is a WeBots project: the world of Section III with its fluid
-node and two hulls, the mesh derived from the DTP, and the controller that runs
-δ at the simulation tick.
+    sudo ip netns add boat
+    sudo ip link add veth-station type veth peer name veth-boat
+    sudo ip link set veth-boat netns boat
 
-    make webots && webots adapters/webots/worlds/jundia_fleet.wbt
+    sudo ip addr add 10.90.0.1/24 dev veth-station
+    sudo ip link set veth-station mtu 1500 up
 
-`tests/test_world.c` checks the world against what the controller assumes of it
-on any machine, with or without the SDK — the DEF names resolve, the meshes
-exist, one node is the coordinator, and the 125 ms frame divides into whole
-physics steps.
+    sudo ip netns exec boat ip addr add 10.90.0.2/24 dev veth-boat
+    sudo ip netns exec boat ip link set veth-boat mtu 1500 up
+    sudo ip netns exec boat ip link set lo up
 
-On a machine with the SDK it does run. Verified on 2026-08-17 against WeBots
-R2025a: 674,360 frames under the coordinator, feasible throughout, worst δ of
-117 µs against the 125 ms budget, and `--mode=realtime` rendering without a
-single GL error.
+The boat runs inside the namespace, the station on the host:
 
-## Paper to code
+    sudo ip netns exec boat mosquitto -c mqtt/pi/mosquitto.conf
+    sudo ip netns exec boat python3 mqtt/pi/publisher.py --broker 10.90.0.2 --boat-id b1
 
-[`docs/paper-to-code.md`](docs/paper-to-code.md) maps every symbol of
-Sections III, IV and V to the file that implements it, and names the three
-things a reader will look for and not find — there is no `fdt_delta`, no frame
-type, and no signature that takes a clock. Each absence follows from something
-the paper does or does not say.
+    python3 mqtt/jmcs/subscriber.py --broker 10.90.0.2 --boat-id b1 --csv load.csv
 
-## What the paper promises, and where each promise is discharged
+Impairment per direction, which is what a radio asks for: the uplink fills with
+video while the downlink carries only `cmd`.
 
-[`docs/spec/paper-claims.md`](docs/spec/paper-claims.md) is the inventory:
-one row per falsifiable claim, with the paper's own words and the artefact
-that discharges it. `make report` walks that list and prints what the table
-should say.
+    sudo ip netns exec boat tc qdisc add dev veth-boat root netem \
+         delay 40ms 10ms distribution normal loss 2% rate 5mbit
+    sudo tc qdisc add dev veth-station root netem delay 40ms rate 1mbit
 
-Four statuses, and the third is not a gap:
+    sudo ip netns exec boat tc qdisc del dev veth-boat root
+    sudo tc qdisc del dev veth-station root
+    sudo ip netns del boat
 
-- **quita** — an artefact exists and `make test` or `make bench` checks it.
-- **fronteira** — the interface is here, or the measurement is, but the answer
-  is not. One claim is in this state: the CPU figures of Section V-A. The
-  benchmark exists and runs three worlds that differ only in vessel count. It
-  reproduces the *shape* of the claim — the first hull costs two to three
-  times the second, because renderer, physics and fluid are paid for once —
-  and it resolves the first-boat increment at 1.24 % against a published 10 %,
-  which is a real disagreement rather than noise. The subsequent-boat
-  increment, 0.56 %, stays under the host's 0.88 % noise floor and is reported
-  as boundary: consistent with the paper's "< 1 %" but not measured.
-- **diferido** — Section VI declares it future work. Building it would
-  contradict the published text, so its absence is the correct state.
-- **pendente** — not built.
+`netem` on the namespace side delays each packet once, so `delay 40ms` in both
+directions produces a round trip near 80 ms.
 
-Seven items are `diferido`, including dropping late packets at the receiver
-and moving the regulators into the firmware. They are listed so their absence
-reads as a decision rather than an oversight.
+## What the numbers mean
 
-## Measurements
+Payload sizes, publish rates and per-topic bandwidth are exact. They follow
+from `topics.py`, not from the network.
 
-[`docs/RESULTS.md`](docs/RESULTS.md) is generated by `make report` from the
-artefacts in `results/`. Every benchmark writes three files — the report, the
-raw series, and an SVG chart with the paper's figure drawn as a dashed rule —
-so a measurement can be re-read, re-plotted, or disagreed with.
+Comparisons hold: video on against video off, 0 against 2 against 5 percent
+loss, 10 against 5 against 1 Mbps. The ratios survive a move to real hardware.
 
-A benchmark measures the machine it runs on, which is not the machine the
-paper measured. Divergence is therefore labelled `[DIVERGE]` and reported, not
-treated as failure. What does fail a run is a structural error: a vessel lost
-from a frame, or a counter that does not balance.
+Absolute latency and throughput do not transfer to a radio. `netem` models a
+pipe with delay, loss and a rate. An 802.11 link retransmits at the MAC layer
+where IP cannot see it, adapts its rate to the signal, loses packets in bursts
+rather than independently, and shares airtime between the two directions. Plot
+against what `netem` sets, and the axis stays truthful.
 
-Three places where a plausible benchmark would pass while reporting nonsense,
-and what is done about each:
+## Requirements
 
-- **48 bytes is not 48 KB.** The state width of Section IV and the packet
-  payload of Section V-A are unrelated quantities that share two digits. Both
-  appear in the bandwidth report, on separate rows.
-- **The ~25-boat ceiling was the injectors'.** Section V-B says so explicitly.
-  The scaling benchmark reports the DTI ceiling and the injector ceiling as two
-  numbers under two headings.
-- **δ compute time is not actuation latency.** Section V-A observes actuation
-  arriving late *while* δ is feasible. They are measured in separate blocks and
-  never summed.
+    pip install -r mqtt/requirements.txt
 
-## One number that does not reconcile
-
-Section V-A reports a 48 KB payload at 8 Hz and a bandwidth usage that
-"increased < 1%". On a 100 Mbps link that payload occupies 3.1%. Either the
-48 KB is per second rather than per update window, or "increased" means growth
-against traffic already flowing rather than absolute occupancy.
-
-The manuscript does not say which. The code therefore computes both —
-`fdt_link_utilization` and `fdt_link_increase` — and the benchmark prints them
-side by side. No test asserts the published figure, because asserting it would
-mean choosing a reading on the authors' behalf. Recorded as ambiguity 5 in the
-claim inventory, along with four others worth fixing in the manuscript.
-
-## Origin
-
-Parts of this repository come from `lsa-pucrs/boat-digital-twin` (MIT), by
-Anderson Domingues and the Jundiá project team:
-
-- `fdt_state_t` derives from `dt-daemon/include/boat.h`;
-- `examples/daemon.c` from `dt-daemon/daemon.c`;
-- the WeBots world, the hull and collision meshes, the material and texture,
-  and the immersion and drag coefficients from `projeto_barco/`.
-
-That repository is private. The assets above are redistributed here under its
-licence, with the changes to the world noted in
-[`adapters/webots/README.md`](adapters/webots/README.md); the repository itself
-remains a credit rather than a link a reader can follow.
-
-## Funding
-
-Partially financed by CNPq under grants 460166/2025-8 and 308182/2023-5, and
-by PUCRS/PROPESQ call 01/2026.
+`paho-mqtt>=2.0` for every script, `opencv-python` for the camera publisher,
+`mosquitto` on PATH for the broker, `iproute2` for the namespace and `netem`.
 
 ## License
 

@@ -4,9 +4,9 @@ One boat (Raspberry Pi + Navio2 + ZED) and one station (JMCS/MCS), everything
 over MQTT -- the ZED included: ``zed/info`` announces the stream (retained
 JSON), ``zed/frame`` carries whole MJPEG frames as raw bytes, one frame per
 message, each independently decodable, so a lost frame costs exactly that
-frame. Sensor groups mirror the Fleet-DT paper's vectors: raw sensors are the
-DTI input (I), ``state`` is ArduPilot's fusion (B), ``cmd`` is the actuation
-(A: throttle tau, cage angle alpha).
+frame. The sensor groups are the Navio2 channels: raw sensors on one side,
+ArduPilot's fused ``state`` on the other, and ``cmd`` carrying the actuation
+the station sends down (throttle and cage angle).
 
 ``ping``/``pong`` are test infrastructure: the Pi publisher echoes every ping
 payload byte-for-byte so the station's probe measures RTT through the broker
@@ -35,7 +35,7 @@ SENSOR_RATES_HZ = {
     "power": 1.0,
     "state": 8.0,
 }
-"""Publish rate per group. 8 Hz is the paper's 125 ms DT pace."""
+"""Publish rate per group. 8 Hz is one message every 125 ms."""
 
 ZED_INFO_FIELDS = ("resolution", "fps", "quality")
 """JSON payload of ``zed/info``, published retained."""

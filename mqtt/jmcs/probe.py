@@ -2,8 +2,8 @@
 
 Publishes opaque payloads on ``boat/<id>/ping``; the Pi publisher echoes them
 on ``boat/<id>/pong``; the round trip crosses the link twice. Every ping
-carries a sequence number, so a late echo is counted late, never miscounted
-(the paper's fleet validation ended on exactly that failure mode).
+carries a sequence number, so a late echo is counted late and never
+miscounted as the echo of a different ping.
 
     python3 mqtt/jmcs/probe.py --broker <pi-address> --boat-id b1 --count 200 --csv rtt.csv
 """
