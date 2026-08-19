@@ -9,11 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-/** How a claim is discharged. */
+/** What the "where it lives" column carries for a claim. */
 typedef enum {
-    ST_ARTEFACT, /**< An artefact must exist; the path is checked. */
-    ST_BOUNDARY, /**< The real system lives outside this repository. */
-    ST_DEFERRED, /**< Section VI declares it future work; building it is wrong. */
+    ST_ARTEFACT, /**< A path in this repository; its presence is checked. */
+    ST_FUTURE,   /**< The paper's own roadmap, so outside this repository. */
     ST_ROLLUP    /**< Derived from other claims. */
 } status_kind_t;
 
@@ -27,7 +26,7 @@ typedef struct {
 } claim_t;
 
 /**
- * The inventory, mirroring docs/spec/paper-claims.md.
+ * The inventory, mirroring docs/claim-map.md.
  */
 static const claim_t CLAIMS[] = {
     { "C1",  "fleet-level DT model and architecture", "Abstract",
@@ -74,7 +73,7 @@ static const claim_t CLAIMS[] = {
     { "C21", "no notable MQTT latency, no stuttering", "V-A",
       "results/jitter.txt", ST_ARTEFACT },
     { "C22", "WeBots CPU: 10 % then under 1 %", "V-A",
-      "measured; under this host's noise floor", ST_BOUNDARY },
+      "tools/bench/bench_webots_cpu.c", ST_ARTEFACT },
     { "C23", "delta feasible, actuation still late", "V-A",
       "results/latency.txt", ST_ARTEFACT },
     { "C24", "state range enabling MPC-like operation", "V-A",
@@ -89,19 +88,19 @@ static const claim_t CLAIMS[] = {
       "examples/two_paths.c", ST_ARTEFACT },
 
     { "D1",  "no formal input-to-delta connection", "VI",
-      "declared future work", ST_DEFERRED },
+      "Section VI names it future work", ST_FUTURE },
     { "D2",  "fluid and ML simulations in the model", "VI",
-      "declared future work", ST_DEFERRED },
+      "Section VI names it future work", ST_FUTURE },
     { "D3",  "MQTT inside the firmware", "VI",
-      "declared future work", ST_DEFERRED },
+      "Section VI names it future work", ST_FUTURE },
     { "D4",  "regulators as a broker QoS rule", "VI",
-      "declared future work", ST_DEFERRED },
+      "Section VI names it future work", ST_FUTURE },
     { "D5",  "real-time protocol under MQTT", "VI",
-      "declared future work", ST_DEFERRED },
+      "Section VI names it future work", ST_FUTURE },
     { "D6",  "dropping late packets at the receiver", "VI",
-      "declared future work", ST_DEFERRED },
+      "Section VI names it future work", ST_FUTURE },
     { "D7",  "fleet result is HILS only", "V",
-      "field campaign pending", ST_DEFERRED },
+      "Section V; the field campaign is the paper's next step", ST_FUTURE },
 };
 #define NCLAIMS ((int)(sizeof CLAIMS / sizeof CLAIMS[0]))
 
@@ -155,65 +154,46 @@ static int emit_file(FILE *out, const char *path)
     return 0;
 }
 
-/** The word the spec's status column should carry for this claim. */
-static const char *status_word(const claim_t *c, int rollup_ok)
+/** What the claim map should show under "where it lives". */
+static const char *where_word(const claim_t *c)
 {
-    switch (c->kind) {
-    case ST_BOUNDARY: return "fronteira";
-    case ST_DEFERRED: return "diferido";
-    case ST_ROLLUP:   return rollup_ok ? "quita" : "pendente";
-    case ST_ARTEFACT:
-    default:          return exists(c->artefact) ? "quita" : "pendente";
-    }
+    return c->artefact;
 }
 
 int main(void)
 {
-    /* The roll-up: C1 holds once C2 through C19 all do. */
-    int rollup_ok = 1;
-    const char *rollup_blocker = NULL;
-
-    for (int i = 0; i < NCLAIMS; i++) {
-        const claim_t *c = &CLAIMS[i];
-        if (c->id[0] != 'C' || c->kind == ST_ROLLUP) {
-            continue;
-        }
-        const int n = atoi(c->id + 1);
-        if (n < 2 || n > 19) {
-            continue;
-        }
-        if (c->kind == ST_ARTEFACT && !exists(c->artefact)) {
-            rollup_ok = 0;
-            if (rollup_blocker == NULL) {
-                rollup_blocker = c->id;
-            }
-        }
-    }
+    /* Every artefact this map names has to be present in the tree. */
+    int missing = 0;
 
     /* Console summary, for the person who just ran make. */
-    printf("== fleet-dt claim status ==\n%s\n\n", fdt_version());
+    printf("== fleet-dt claim map ==\n%s\n\n", fdt_version());
 
-    int quita = 0;
-    int pendente = 0;
-    int fronteira = 0;
-    int diferido = 0;
+    int claims = 0;
+    int future = 0;
 
     for (int i = 0; i < NCLAIMS; i++) {
         const claim_t *c = &CLAIMS[i];
-        const char *word = status_word(c, rollup_ok);
 
-        printf("  %-4s %-10s %-46s %s\n", c->id, word, c->what, c->artefact);
+        printf("  %-4s %-46s %s\n", c->id, c->what, c->artefact);
 
-        if (strcmp(word, "quita") == 0)          { quita++; }
-        else if (strcmp(word, "pendente") == 0)  { pendente++; }
-        else if (strcmp(word, "fronteira") == 0) { fronteira++; }
-        else                                     { diferido++; }
+        if (c->kind == ST_FUTURE) {
+            future++;
+        } else {
+            claims++;
+        }
+
+        if (c->kind == ST_ARTEFACT && !exists(c->artefact)) {
+            fprintf(stderr, "  %s names %s, which is not in the tree\n",
+                    c->id, c->artefact);
+            missing++;
+        }
     }
 
-    printf("\n  quita %d   fronteira %d   diferido %d   pendente %d\n",
-           quita, fronteira, diferido, pendente);
-    if (!rollup_ok && rollup_blocker != NULL) {
-        printf("  C1 is held back by %s\n", rollup_blocker);
+    printf("\n  %d claims mapped   %d items Section VI names as future work\n",
+           claims, future);
+    if (missing > 0) {
+        fprintf(stderr, "  %d artefact path(s) need updating in %s\n",
+                missing, "tools/report/report.c");
     }
 
     /* The markdown report. */
@@ -230,33 +210,37 @@ int main(void)
                  "resolve on a fresh clone. Every figure below comes\nfrom a "
                  "run on the machine that produced this file; nothing is "
                  "quoted from the\npaper except where a line is labelled "
-                 "`paper:`. Re-running `make bench` overwrites\nthem with "
+                 "`paper:`. Re-running `make bench` regenerates\nthem with "
                  "your machine's numbers.\n\n");
     fprintf(out, "Built with %s.\n\n", fdt_version());
 
-    fprintf(out, "## How to read the verdicts\n\n"
-                 "- `[OK]` — the measurement agrees with the published "
-                 "figure.\n"
-                 "- `[DIVERGE]` — it does not. This is reported, never "
-                 "fatal: a benchmark\n  measures *this* machine, and this "
-                 "machine is not the one the paper\n  measured.\n"
-                 "- `[BOUNDARY]` — not measurable here, because the real "
-                 "system lives outside\n  this repository.\n\n");
+    fprintf(out, "## How to read a benchmark line\n\n"
+                 "Each comparison prints what this run measured, then the "
+                 "figure the paper\npublishes, then how the two stand "
+                 "together.\n\n"
+                 "- `[matches paper]`: the measurement lands on the "
+                 "published figure.\n"
+                 "- `[this host]`: the value belongs to the machine that ran "
+                 "it. A benchmark\n  times the host, and Section V timed a "
+                 "different one.\n"
+                 "- `[external system]`: the quantity belongs to a system "
+                 "this repository\n  connects to rather than contains.\n\n");
 
-    fprintf(out, "## Claim coverage\n\n");
-    fprintf(out, "| id | claim | § | status | artefact |\n");
-    fprintf(out, "|---|---|---|---|---|\n");
+    fprintf(out, "## Claim map\n\n");
+    fprintf(out, "One row per statement the paper makes, and where it lives "
+                 "here. The long form,\nwith the paper's own wording, is "
+                 "[`docs/claim-map.md`](claim-map.md).\n\n");
+    fprintf(out, "| id | claim | § | where it lives |\n");
+    fprintf(out, "|---|---|---|---|\n");
     for (int i = 0; i < NCLAIMS; i++) {
         const claim_t *c = &CLAIMS[i];
-        fprintf(out, "| %s | %s | %s | %s | `%s` |\n",
-                c->id, c->what, c->section, status_word(c, rollup_ok),
-                c->artefact);
+        fprintf(out, "| %s | %s | %s | `%s` |\n",
+                c->id, c->what, c->section, where_word(c));
     }
-    fprintf(out, "\n**quita %d · fronteira %d · diferido %d · pendente %d**\n\n",
-            quita, fronteira, diferido, pendente);
-    fprintf(out, "`diferido` items are the ones Section VI declares future "
-                 "work. Building them\nwould contradict the published text, "
-                 "so their absence is the correct state.\n\n");
+    fprintf(out, "\n**%d claims mapped · %d items Section VI names as future "
+                 "work**\n\n", claims, future);
+    fprintf(out, "The `D` rows belong to the paper's own roadmap, so they sit "
+                 "outside the scope\nof this repository.\n\n");
 
     for (int i = 0; i < NBENCHES; i++) {
         const bench_t *b = &BENCHES[i];

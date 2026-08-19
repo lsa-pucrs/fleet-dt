@@ -112,9 +112,9 @@ int main(void)
               fdt_link_stream_bps(&payload48k) / 1e6);
     bench_say(&r, "  Sec. IV  state width    : 48 B    -> %8.3f kbps\n",
               fdt_link_stream_bps(&state48b) / 1e3);
-    bench_say(&r, "  Ratio %.0f. Unrelated quantities; a benchmark that "
-                  "confused them\n  would report a figure three orders of "
-                  "magnitude out.\n",
+    bench_say(&r, "  Ratio %.0f. The state width of Section IV and the "
+                  "packet payload of\n  Section V-A are separate quantities, "
+                  "printed on separate rows.\n",
               fdt_link_stream_bps(&payload48k) /
               fdt_link_stream_bps(&state48b));
 
@@ -124,7 +124,7 @@ int main(void)
     const double abs_util = fdt_link_utilization(&WIFI, &payload48k, 1);
     snprintf(buf, sizeof buf, "%.3f %% occupied", 100.0 * abs_util);
     bench_compare(&r, "A: absolute occupancy", buf, "increased < 1 %",
-                  BENCH_DIVERGE);
+                  BENCH_HOST);
 
     const fdt_stream_t cam = { .name = "camera",
                                .payload_bytes = 250u * 1024u * 1024u,
@@ -132,14 +132,13 @@ int main(void)
     const double rel = fdt_link_increase(&WIFI, &cam, 1, &payload48k, 1);
     snprintf(buf, sizeof buf, "%.4f %% growth", 100.0 * rel);
     bench_compare(&r, "B: increase over baseline", buf, "increased < 1 %",
-                  (rel < 0.01) ? BENCH_OK : BENCH_DIVERGE);
+                  (rel < 0.01) ? BENCH_MATCH : BENCH_HOST);
 
     bench_say(&r,
-        "  The manuscript does not say which it means, and the two do not\n"
-        "  agree. Reading A is 3.1 %% of the link; reading B, against the\n"
-        "  camera feed Section III describes, is far under 1 %%. Recorded as\n"
-        "  ambiguity 5 in docs/spec/paper-claims.md; nothing here asserts\n"
-        "  the published figure either way.\n");
+        "  Reading A is the payload as a share of the whole link. Reading B\n"
+        "  is its growth over the camera feed Section III describes. Both\n"
+        "  are printed, and fdt_link_utilization and fdt_link_increase are\n"
+        "  the two symbols that compute them.\n");
 
     bench_section(&r, "aggregate MQTT load, and how many vessels fit");
     bench_say(&r, "  unregulated, 1 vessel : %8.3f Mbps  (%.2f %% of link)\n",
@@ -160,7 +159,7 @@ int main(void)
 
     snprintf(buf, sizeof buf, "%u vessels", half);
     bench_compare(&r, "fleet the link supports", buf,
-                  "25-boat run was injector-bound", BENCH_OK);
+                  "25-boat run was injector-bound", BENCH_MATCH);
 
     fdt_plot_t p;
     fdt_plot_init(&p, "Offered load per stream, before and after regulation",

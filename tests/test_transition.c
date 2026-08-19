@@ -40,7 +40,7 @@ static void probe_delta_e(const fdt_queue_t *q, size_t n,
 
 /**
  * A probe pi. It reads fleet_ctx as a throttle ceiling; test_fleet.c reads the
- * same argument as a different struct, which is intentional — c^t is opaque to
+ * same argument as a different struct, which is intentional, c^t is opaque to
  * the library and each application picks its own type.
  */
 static void probe_pi(const fdt_state_t *b, const fdt_goal_t *g_now,

@@ -7,14 +7,20 @@ A C implementation of Fleet-DT, the digital twin model and architecture of
 > Monitoring and Controlling Fleets of Autonomous Unmanned Surface Vehicles.**
 > ICECS 2026.
 
-Built for the Jundiá Project's fleet of autonomous unmanned surface vehicles,
-which collect environmental DNA samples from the lagoons of southern Brazil.
+The Jundiá Project operates the fleet of autonomous unmanned surface vehicles
+this code models. The vessels collect environmental DNA samples from the
+lagoons of southern Brazil.
 
-**This repository tracks manuscript revision `-10`**, where the model is
-Section IV and the equations run (1) to (6). The revision is pinned to a symbol
-and checked by the test suite, because that numbering has already shifted once.
+This repository is the companion artefact of the paper. A reader can trace any
+statement in the text to the code that carries it, compile that code, and
+measure it on their own machine.
 
-## What is here
+The manuscript tracked here is revision `-10`. The model is Section IV and the
+equations run (1) to (6). `FDT_PAPER_REVISION` in
+[`include/fleet_dt/version.h`](include/fleet_dt/version.h) records the
+revision, and `make test` checks it.
+
+## Scope
 
 The library implements the model of Section IV and the architecture of
 Section III: the state types of Table I, the bounded state queue, the
@@ -22,128 +28,78 @@ transition and decision functions, the fleet aggregate, the coordinator, the
 125 ms pacer, the wire protocol, the bandwidth regulators, and the link-budget
 model. The application supplies the dynamics.
 
-No external dependency. `make lib` and `make test` work on a bare toolchain;
-anything needing an SDK — MQTT, WeBots — sits behind its own target and skips
-with a notice.
+The library has no external dependency. `make lib` and `make test` run on a
+bare toolchain. The MQTT and WeBots adapters need an SDK, so each one sits
+behind its own target and prints a notice when the SDK is absent.
 
     make            # library, tests, examples, benchmarks, report
     make test       # every published figure of the paper, checked
     make bench      # the measurement campaign; writes results/
-    make report     # claim coverage, and docs/RESULTS.md
+    make report     # the claim map, and docs/RESULTS.md
     make syntax     # type-check the SDK adapters against stubs
-
-Two targets need an SDK and skip with a notice without it:
 
     make webots     # the simulation; needs WEBOTS_HOME
     make mqtt-test  # a round trip through a real broker; needs libmosquitto
 
-Requires `gcc`, `make`, and glibc: the pacer uses POSIX.1-2008
+Requires `gcc`, `make`, and glibc. The pacer calls POSIX.1-2008
 `clock_nanosleep` with `TIMER_ABSTIME`, which Apple libc does not provide.
 
 ## Layout
 
-| Path | What lives there |
+| Path | Contents |
 |---|---|
 | `include/fleet_dt/`, `src/` | the library: model, queue, transition, fleet, coordinator, pacer, feasibility, wire, regulators, link budget, DTE, plotter |
-| `tests/` | one suite per module; every published figure is asserted, not printed |
-| `examples/` | two runnable programs — see [`examples/README.md`](examples/README.md) |
+| `tests/` | one suite per module; each published figure is asserted rather than printed |
+| `examples/` | two runnable programs, described in [`examples/README.md`](examples/README.md) |
 | `tools/injector/` | the synthetic telemetry injectors of Section V-B |
 | `tools/bench/` | the measurement campaign |
-| `tools/report/` | claim coverage and results assembly |
-| `adapters/` | Ardupilot ingest, the camera boundary, MQTT, and the WeBots project — world, hull meshes and the controller running δ |
+| `tools/report/` | the claim map and the results assembly |
+| `adapters/` | Ardupilot ingest, the camera boundary, MQTT, and the WeBots project: world, hull meshes, and the controller running δ |
 | `config/mosquitto/` | the bridge-mode broker configuration of Section III |
-| `docs/` | the paper-to-code map, the claim inventory, the generated results |
+| `docs/` | the paper-to-code map, the claim map, the generated results |
+
+## Reading the paper alongside the code
+
+[`docs/paper-to-code.md`](docs/paper-to-code.md) maps each symbol of
+Sections III, IV and V to the file that implements it. `Bᵢᵗ` resolves to
+`fdt_state_t`, δᵉ to `fdt_twin_step`, and the coordinator `S` of Figure 4 to
+`fdt_coord_t`. The same document states where the API takes a different shape
+from the equations, and why.
+
+[`docs/claim-map.md`](docs/claim-map.md) does the same at the level of
+statements. It holds one row per claim the paper makes, quoted, with the file
+that carries it. It also states the reading the code takes wherever the text
+leaves a design choice open, so a decision here traces back to a line there.
+`make report` walks that map and checks that each artefact it names exists.
 
 ## The simulation
 
-`adapters/webots/` is a WeBots project: the world of Section III with its fluid
-node and two hulls, the mesh derived from the DTP, and the controller that runs
-δ at the simulation tick.
+`adapters/webots/` is a WeBots project. It contains the world of Section III
+with its fluid node and two hulls, the mesh derived from the DTP, and the
+controller that runs δ at the simulation tick.
 
     make webots && webots adapters/webots/worlds/jundia_fleet.wbt
 
-`tests/test_world.c` checks the world against what the controller assumes of it
-on any machine, with or without the SDK — the DEF names resolve, the meshes
-exist, one node is the coordinator, and the 125 ms frame divides into whole
-physics steps.
+`tests/test_world.c` checks the world against what the controller assumes of
+it, with or without the SDK: the DEF names resolve, the meshes exist, one node
+is the coordinator, and the 125 ms frame divides into whole physics steps.
 
-On a machine with the SDK it does run. Verified on 2026-08-17 against WeBots
-R2025a: 674,360 frames under the coordinator, feasible throughout, worst δ of
-117 µs against the 125 ms budget, and `--mode=realtime` rendering without a
-single GL error.
+A run against WeBots R2025a on 2026-08-17 stepped 674,360 frames under the
+coordinator, stayed feasible throughout, reached a worst δ of 117 µs against
+the 125 ms budget, and rendered `--mode=realtime` without a GL error.
 
-## Paper to code
-
-[`docs/paper-to-code.md`](docs/paper-to-code.md) maps every symbol of
-Sections III, IV and V to the file that implements it, and names the three
-things a reader will look for and not find — there is no `fdt_delta`, no frame
-type, and no signature that takes a clock. Each absence follows from something
-the paper does or does not say.
-
-## What the paper promises, and where each promise is discharged
-
-[`docs/spec/paper-claims.md`](docs/spec/paper-claims.md) is the inventory:
-one row per falsifiable claim, with the paper's own words and the artefact
-that discharges it. `make report` walks that list and prints what the table
-should say.
-
-Four statuses, and the third is not a gap:
-
-- **quita** — an artefact exists and `make test` or `make bench` checks it.
-- **fronteira** — the interface is here, or the measurement is, but the answer
-  is not. One claim is in this state: the CPU figures of Section V-A. The
-  benchmark exists and runs three worlds that differ only in vessel count. It
-  reproduces the *shape* of the claim — the first hull costs two to three
-  times the second, because renderer, physics and fluid are paid for once —
-  and it resolves the first-boat increment at 1.24 % against a published 10 %,
-  which is a real disagreement rather than noise. The subsequent-boat
-  increment, 0.56 %, stays under the host's 0.88 % noise floor and is reported
-  as boundary: consistent with the paper's "< 1 %" but not measured.
-- **diferido** — Section VI declares it future work. Building it would
-  contradict the published text, so its absence is the correct state.
-- **pendente** — not built.
-
-Seven items are `diferido`, including dropping late packets at the receiver
-and moving the regulators into the firmware. They are listed so their absence
-reads as a decision rather than an oversight.
+![the Jundiá fleet in WeBots](docs/simulation.jpg)
 
 ## Measurements
 
-[`docs/RESULTS.md`](docs/RESULTS.md) is generated by `make report` from the
-artefacts in `results/`. Every benchmark writes three files — the report, the
-raw series, and an SVG chart with the paper's figure drawn as a dashed rule —
-so a measurement can be re-read, re-plotted, or disagreed with.
+`make report` generates [`docs/RESULTS.md`](docs/RESULTS.md) from the artefacts
+in `results/`. Each benchmark writes three files: the report, the raw series,
+and an SVG chart carrying the paper's figure as a dashed rule. A reader can
+re-read a measurement, re-plot it, or reproduce it.
 
-A benchmark measures the machine it runs on, which is not the machine the
-paper measured. Divergence is therefore labelled `[DIVERGE]` and reported, not
-treated as failure. What does fail a run is a structural error: a vessel lost
-from a frame, or a counter that does not balance.
-
-Three places where a plausible benchmark would pass while reporting nonsense,
-and what is done about each:
-
-- **48 bytes is not 48 KB.** The state width of Section IV and the packet
-  payload of Section V-A are unrelated quantities that share two digits. Both
-  appear in the bandwidth report, on separate rows.
-- **The ~25-boat ceiling was the injectors'.** Section V-B says so explicitly.
-  The scaling benchmark reports the DTI ceiling and the injector ceiling as two
-  numbers under two headings.
-- **δ compute time is not actuation latency.** Section V-A observes actuation
-  arriving late *while* δ is feasible. They are measured in separate blocks and
-  never summed.
-
-## One number that does not reconcile
-
-Section V-A reports a 48 KB payload at 8 Hz and a bandwidth usage that
-"increased < 1%". On a 100 Mbps link that payload occupies 3.1%. Either the
-48 KB is per second rather than per update window, or "increased" means growth
-against traffic already flowing rather than absolute occupancy.
-
-The manuscript does not say which. The code therefore computes both —
-`fdt_link_utilization` and `fdt_link_increase` — and the benchmark prints them
-side by side. No test asserts the published figure, because asserting it would
-mean choosing a reading on the authors' behalf. Recorded as ambiguity 5 in the
-claim inventory, along with four others worth fixing in the manuscript.
+A benchmark times the machine that runs it, and Section V timed a different
+machine. Each comparison therefore prints three fields: the value measured
+here, the figure the paper publishes, and which of the two the line reports.
 
 ## Origin
 
@@ -155,15 +111,15 @@ Anderson Domingues and the Jundiá project team:
 - the WeBots world, the hull and collision meshes, the material and texture,
   and the immersion and drag coefficients from `projeto_barco/`.
 
-That repository is private. The assets above are redistributed here under its
-licence, with the changes to the world noted in
-[`adapters/webots/README.md`](adapters/webots/README.md); the repository itself
-remains a credit rather than a link a reader can follow.
+That repository is private. This repository redistributes the assets above
+under its licence and records the changes to the world in
+[`adapters/webots/README.md`](adapters/webots/README.md). The credit stands in
+place of a link a reader can follow.
 
 ## Funding
 
-Partially financed by CNPq under grants 460166/2025-8 and 308182/2023-5, and
-by PUCRS/PROPESQ call 01/2026.
+CNPq grants 460166/2025-8 and 308182/2023-5, and PUCRS/PROPESQ call 01/2026,
+partially financed this work.
 
 ## License
 

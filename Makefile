@@ -1,4 +1,4 @@
-# fleet-dt — build of the model, the tests, the examples and the benchmarks.
+# fleet-dt, build of the model, the tests, the examples and the benchmarks.
 #
 #   make lib       the static library, no external dependency
 #   make test      the unit suite; every published figure is checked here

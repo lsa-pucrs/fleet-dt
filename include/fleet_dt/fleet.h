@@ -7,7 +7,7 @@
 
 /**
  * @file fleet.h
- * @brief F^t, Delta and Delta^e — equations (4), (5) and (6).
+ * @brief F^t, Delta and Delta^e, equations (4), (5) and (6).
  */
 
 /**
@@ -34,7 +34,7 @@ int fdt_fleet_init(fdt_fleet_t *f, fdt_twin_t *twins, size_t n, void *ctx);
  *
  * @param ins         Array of @p n inputs, I^{t-1}. May be NULL when no
  *                    vessel has fresh input, in which case every twin sees
- *                    NULL — the all-vessels-starved case.
+ *                    NULL, the all-vessels-starved case.
  * @param goals_prev  Array of @p n goals g^{t-1}_i, consumed by equation (3).
  * @param goals_now   Array of @p n goals g^t_i, consumed by equation (2).
  *                    Pass the same array twice when the mission does not
