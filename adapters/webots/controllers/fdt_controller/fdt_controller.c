@@ -2,8 +2,8 @@
  * @file fdt_webots_controller.c
  * @brief The custom WeBots module that runs delta, Section IV.
  *
- * @note The CPU figures of Section V-A — "running WeBots adds 10% CPU usage
- *       for the first boat and less than 1% for subsequent boats" — are
+ * @note The CPU figures of Section V-A, "running WeBots adds 10% CPU usage
+ *       for the first boat and less than 1% for subsequent boats", are
  *       measured by tools/bench/bench_webots_cpu.c, which opens the
  *       zero-, one- and two-vessel worlds in turn and subtracts. The vessel
  *       count is discovered from the world rather than compiled in, which is

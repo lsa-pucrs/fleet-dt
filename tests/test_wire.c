@@ -1,6 +1,6 @@
 /**
  * @file test_wire.c
- * @brief Codec, envelope, and the frame pathology detector.
+ * @brief Codec, envelope, and the partial/double update detector.
  */
 #include <fleet_dt/codec.h>
 #include <fleet_dt/envelope.h>

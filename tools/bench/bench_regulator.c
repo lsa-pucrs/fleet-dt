@@ -85,12 +85,12 @@ int main(void)
                   "drops samples in the MQTT client",
                   (fdt_reg_effective_hz(&fast) > 7.5 &&
                    fdt_reg_effective_hz(&fast) < 8.5)
-                      ? BENCH_OK : BENCH_DIVERGE);
+                      ? BENCH_MATCH : BENCH_HOST);
 
     snprintf(buf, sizeof buf, "%.1f %% of traffic",
              100.0 * fdt_reg_saved_ratio(&fast));
     bench_compare(&r, "link traffic removed", buf,
-                  "maximizing use of shared links", BENCH_OK);
+                  "maximizing use of shared links", BENCH_MATCH);
 
     /* Slow sensor: nothing is dropped, because there is nothing to drop. */
     fdt_reg_t slow;
@@ -101,7 +101,7 @@ int main(void)
     snprintf(buf, sizeof buf, "%llu dropped",
              (unsigned long long)fdt_reg_dropped(&slow));
     bench_compare(&r, "1 Hz gyroscope", buf,
-                  "sensors slower than the DT pass", BENCH_OK);
+                  "sensors slower than the DT pass", BENCH_MATCH);
 
     bench_say(&r,
         "  The regulator sits in the publish path, never in the sensor path.\n"

@@ -55,7 +55,7 @@ double fdt_link_utilization(const fdt_link_t *link,
  * @param added     Traffic the digital twin adds.
  * @param na        Added stream count.
  * @return added / baseline as a fraction, or -1.0 when the baseline carries
- *         no traffic — a relative increase over nothing is not a number.
+ *         no traffic, a relative increase over nothing is not a number.
  */
 double fdt_link_increase(const fdt_link_t *link,
                          const fdt_stream_t *baseline, size_t nb,

@@ -8,7 +8,7 @@
 
 /**
  * @file transition.h
- * @brief delta, delta^e and pi — equations (2) and (3) — and the DTI they form.
+ * @brief delta, delta^e and pi, equations (2) and (3), and the DTI they form.
  */
 
 /**
@@ -61,8 +61,8 @@ typedef void (*fdt_pi_fn)(const fdt_state_t *b, const fdt_goal_t *g_now,
  *
  * @note The ordering is deliberately the reverse of fdt_queue_at(). The queue
  *       is indexed by absolute age; the window is indexed by distance to the
- *       present, which is how equation (3) writes it. Mixing them up is the
- *       likeliest bug in any delta^e, so the two accessors are named apart.
+ *       present, which is how equation (3) writes it. The two accessors are
+ *       named apart so that a delta^e states which order it wants.
  */
 const fdt_state_t *fdt_window_at(const fdt_queue_t *q, size_t n, size_t k);
 

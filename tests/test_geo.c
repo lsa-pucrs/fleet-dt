@@ -1,6 +1,6 @@
 /**
  * @file test_geo.c
- * @brief The geodetic-to-local mapping, and the bug it was extracted from.
+ * @brief The geodetic-to-local mapping of Section IV.
  */
 #include "injector/injector.h"
 
@@ -30,13 +30,16 @@ static void test_reference_is_the_origin(void)
     assert(fabs(east) < 1e-9);
     assert(fabs(north) < 1e-9);
 
-    const double wrong_x = REF_LON * FDT_M_PER_DEG_LAT;
-    const double wrong_z = REF_LAT * FDT_M_PER_DEG_LAT;
-    assert(fabs(wrong_x) > 5.0e6);   /* 5696 km west  */
-    assert(fabs(wrong_z) > 3.0e6);   /* 3345 km south */
+    /* Why the mapping is relative: scaling the absolute coordinates instead
+       puts the Jundiá reference thousands of kilometres from any world
+       origin, which is what fdt_geo_offset exists to avoid. */
+    const double absolute_x = REF_LON * FDT_M_PER_DEG_LAT;
+    const double absolute_z = REF_LAT * FDT_M_PER_DEG_LAT;
+    assert(fabs(absolute_x) > 5.0e6);   /* 5696 km west  */
+    assert(fabs(absolute_z) > 3.0e6);   /* 3345 km south */
 
     printf("absolute scaling would place the origin at %.0f, %.0f km\n",
-           wrong_x / 1000.0, wrong_z / 1000.0);
+           absolute_x / 1000.0, absolute_z / 1000.0);
 }
 
 /** Both axes scale the way the ellipsoid does. */

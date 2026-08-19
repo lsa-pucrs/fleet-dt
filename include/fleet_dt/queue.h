@@ -71,7 +71,7 @@ const fdt_state_t *fdt_queue_newest(const fdt_queue_t *q);
 /**
  * @brief Bytes a queue of the given capacity occupies.
  * @param cap  Capacity in states.
- * @return @p cap times the size of one state — the 48d of Section IV, which
+ * @return @p cap times the size of one state, the 48d of Section IV, which
  *         is how the paper bounds queue growth per vessel.
  */
 size_t fdt_queue_bytes(size_t cap);
