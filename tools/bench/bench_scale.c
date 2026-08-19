@@ -314,24 +314,24 @@ int main(void)
         assert(run.doubles == 0);
     }
 
-    bench_section(&r, "DTI side — what Section V-B calls negligible");
+    bench_section(&r, "DTI side, what Section V-B calls negligible");
     char buf[64];
     snprintf(buf, sizeof buf, "%.4f %%", cpu_pct[SWEEP_N - 1]);
     bench_compare(&r, "cpu per DTI", buf, "< 1 %",
-                  (cpu_pct[SWEEP_N - 1] < 1.0) ? BENCH_OK : BENCH_DIVERGE);
+                  (cpu_pct[SWEEP_N - 1] < 1.0) ? BENCH_MATCH : BENCH_HOST);
 
     snprintf(buf, sizeof buf, "%.1f us", worst_ms[SWEEP_N - 1] * 1e3);
     bench_compare(&r, "worst delta, 64 vessels", buf, "< 125 ms deadline",
-                  (worst_ms[SWEEP_N - 1] < 125.0) ? BENCH_OK : BENCH_DIVERGE);
+                  (worst_ms[SWEEP_N - 1] < 125.0) ? BENCH_MATCH : BENCH_HOST);
 
     snprintf(buf, sizeof buf, ">= %u vessels", dti_ceiling);
     bench_compare(&r, "DTI ceiling here", buf, "not the paper's 25",
-                  BENCH_OK);
+                  BENCH_MATCH);
 
-    bench_section(&r, "injector side — the ceiling Section V-B actually hit");
+    bench_section(&r, "injector side, the ceiling Section V-B reached");
     snprintf(buf, sizeof buf, ">= %u vessels", inj_ceiling);
     bench_compare(&r, "publish+step fits period", buf,
-                  "budget check, not a pace observation", BENCH_OK);
+                  "budget check, not a pace observation", BENCH_MATCH);
 
     const int paced_frames = 40;
     const run_t paced = run_fleet_ex(SWEEP[SWEEP_N - 1], 0, 0, 1,
@@ -340,22 +340,23 @@ int main(void)
              paced_frames);
     bench_compare(&r, "missed deadlines, 64 paced", buf,
                   "injectors could not keep pace",
-                  (paced.inj_missed == 0) ? BENCH_OK : BENCH_DIVERGE);
+                  (paced.inj_missed == 0) ? BENCH_MATCH : BENCH_HOST);
     bench_say(&r,
         "  Section V-B attributes its ceiling to the injectors, not to the\n"
         "  DTIs: \"hard-programming injectors to inject packets periodically\n"
         "  could not keep the simulation pace for larger fleets (> 25 boats,\n"
-        "  same computer model)\". The two ceilings are reported apart so the\n"
-        "  DTI is not credited with a limit it does not have. This machine\n"
-        "  reaches neither ceiling at 64 vessels; the paper's hardware and\n"
-        "  its real broker are not this loopback.\n");
+        "  same computer model)\". The two ceilings are therefore reported\n"
+        "  apart, each against its own subject. This machine reaches neither\n"
+        "  at 64 vessels, over a loopback rather than the paper's hardware\n"
+        "  and its real broker.\n");
 
     bench_section(&r, "frame integrity under a lossy link (Section V-B)");
     bench_say(&r,
-        "  A lossless transport can never show the pathology, so the clean\n"
+        "  A lossless transport shows neither update pattern, so the clean\n"
         "  sweep above reports zeros by construction. This row injects the\n"
-        "  two faults Section V-B describes: a packet that never arrives, and\n"
-        "  a packet the network stack holds into the following frame.\n\n");
+        "  two link conditions Section V-B describes: a packet that never\n"
+        "  arrives, and a packet the network stack holds into the following\n"
+        "  frame.\n\n");
 
     const unsigned lossy_vessels = 16;
     const unsigned drop_every    = 61;
@@ -373,25 +374,24 @@ int main(void)
 
     snprintf(buf, sizeof buf, "%lu partial, %lu double",
              lossy.partial, lossy.doubles);
-    bench_compare(&r, "pathology reproduced", buf,
+    bench_compare(&r, "partial and double updates", buf,
                   "some boats, not every frame",
                   (lossy.partial > 0 && lossy.partial < (unsigned long)FRAMES
-                   && lossy.doubles > 0) ? BENCH_OK : BENCH_DIVERGE);
+                   && lossy.doubles > 0) ? BENCH_MATCH : BENCH_HOST);
 
     assert(lossy.partial > 0 && lossy.partial < (unsigned long)FRAMES);
     assert(lossy.doubles > 0);
 
     bench_say(&r,
-        "  Stale packets stay at %lu here, and that is the deferral being\n"
-        "  order-preserving rather than the counter being broken: a held\n"
-        "  packet is delivered at the head of the next poll, so it still\n"
-        "  arrives before the fresher one behind it. It lands in the wrong\n"
-        "  frame, which makes it a double update, not an outdated read. The\n"
-        "  outdated-read path needs reordering, and is covered by\n"
-        "  tests/test_wire.c.\n", lossy.stale);
+        "  Stale packets stay at %lu here, because the deferral preserves\n"
+        "  order: a held packet is delivered at the head of the next poll,\n"
+        "  so it still arrives before the fresher one behind it. It lands in\n"
+        "  a later frame, which counts as a double update rather than an\n"
+        "  outdated read. The outdated-read path needs reordering and is\n"
+        "  covered by tests/test_wire.c.\n", lossy.stale);
     bench_say(&r,
         "  Counted, never corrected. Dropping late packets at the receiver is\n"
-        "  item D6 of docs/spec/paper-claims.md, which Section VI declares\n"
+        "  item D6 of docs/claim-map.md, which Section VI names as\n"
         "  future work; the DTI keeps stepping and the monitor keeps score.\n"
         "  Note that delta stays feasible throughout: a degraded link starves\n"
         "  the model, it does not slow it.\n");

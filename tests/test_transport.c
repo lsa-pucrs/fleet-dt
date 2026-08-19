@@ -41,7 +41,7 @@ static void test_topic_layout(void)
     assert(fdt_topic(t, sizeof t, FDT_TOPIC_GOAL, 3) == 0);
     assert(strcmp(t, "fleet/3/goal") == 0);
 
-    /* A truncated topic would silently address the wrong vessel. */
+    /* A truncated topic would address a different vessel, so it is rejected. */
     assert(fdt_topic(t, 4, FDT_TOPIC_STATE, 0) == -1);
     assert(fdt_topic(NULL, sizeof t, FDT_TOPIC_STATE, 0) == -1);
     assert(fdt_topic(t, sizeof t, NULL, 0) == -1);
@@ -136,7 +136,7 @@ static void test_null_safety(void)
 
 /**
  * The lossy modes, without which no benchmark can see the Section V-B
- * pathology: a lossless link never produces a partial or a doubled frame.
+ * A lossless link never produces a partial or a doubled frame.
  */
 static void test_loss_injection(void)
 {
@@ -169,7 +169,7 @@ static void test_loss_injection(void)
     assert(sd.hits == 1);
     assert(fdt_loop_deferred(&d) == 1);
 
-    /* Second poll: the late one arrives, in the wrong frame. */
+    /* Second poll: the deferred packet arrives, one frame late. */
     assert(td.poll(td.self, 0) == 1);
     assert(sd.hits == 2);
 

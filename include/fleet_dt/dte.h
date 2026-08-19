@@ -13,9 +13,8 @@
  *       other simulations (mainly fluid and ML) in the model, at least to
  *       synchronize them with the DTI pace (simulation tick)." The DTE
  *       therefore synchronises those simulations; the formal model of
- *       Section IV does not describe them. Implementing the latter would
- *       contradict the paper's own account of what it has not done — see
- *       item D2 in docs/spec/paper-claims.md.
+ *       Section IV does not describe them. That model belongs to the paper's
+ *       roadmap, item D2 in docs/claim-map.md.
  */
 
 /**

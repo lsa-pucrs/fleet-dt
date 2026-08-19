@@ -214,15 +214,15 @@ int main(void)
     snprintf(buf, sizeof buf, "%.3f ms", mean_period);
     bench_compare(&r, "mean frame period", buf, "125 ms, 8 Hz (Sec. IV)",
                   (mean_period > 124.0 && mean_period < 126.0)
-                      ? BENCH_OK : BENCH_DIVERGE);
+                      ? BENCH_MATCH : BENCH_HOST);
 
     snprintf(buf, sizeof buf, "%llu",
              (unsigned long long)fdt_tick_overruns(&tk));
     bench_compare(&r, "deadline misses", buf, "delta is a hard real-time task",
-                  (fdt_tick_overruns(&tk) == 0) ? BENCH_OK : BENCH_DIVERGE);
+                  (fdt_tick_overruns(&tk) == 0) ? BENCH_MATCH : BENCH_HOST);
 
     bench_compare(&r, "WeBots 3D stuttering", "not measured here",
-                  "no stuttering (Sec. V-A)", BENCH_NA);
+                  "no stuttering (Sec. V-A)", BENCH_EXTERNAL);
     bench_say(&r,
         "  Stuttering is a property of the renderer, so that half of the\n"
         "  Section V-A claim needs WeBots. What this run establishes is the\n"

@@ -119,11 +119,11 @@ typedef struct {
 fdt_transport_t fdt_loop_transport(fdt_loop_t *lo);
 
 /**
- * @brief Makes the loopback lossy, so the Section V-B pathology can be seen.
+ * @brief Makes the loopback lossy, so the Section V-B updates can be seen.
  *
  * @param drop_every   Discard every Nth publish, producing a partial frame.
  *                     The publisher is told the send succeeded, because on a
- *                     real link it did — the loss happened downstream.
+ *                     real link it did, the loss happened downstream.
  * @param defer_every  Hold every Nth publish back one poll, so it lands in
  *                     the following frame beside that frame's own message and
  *                     produces the double update.

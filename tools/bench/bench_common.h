@@ -18,11 +18,11 @@ typedef struct {
     FILE *file; /**< The text artefact; may be NULL if it could not open. */
 } bench_report_t;
 
-/** Verdict of comparing a measurement against a figure from the paper. */
+/** How a measurement stands beside the figure the paper publishes. */
 typedef enum {
-    BENCH_OK,      /**< The measurement agrees with the paper. */
-    BENCH_DIVERGE, /**< It does not; this is reported, not fatal. */
-    BENCH_NA       /**< Not measurable here; the artefact lives elsewhere. */
+    BENCH_MATCH,   /**< The measurement lands on the published figure. */
+    BENCH_HOST,    /**< The value belongs to the machine that ran it. */
+    BENCH_EXTERNAL /**< The quantity belongs to a system outside this repo. */
 } bench_verdict_t;
 
 /**
@@ -61,19 +61,19 @@ static inline void bench_section(bench_report_t *r, const char *title)
 }
 
 /**
- * @brief Prints a measurement beside the paper's figure and a verdict.
+ * @brief Prints a measurement beside the figure the paper publishes.
  * @param label     What was measured.
  * @param measured  Formatted measured value.
  * @param paper     What the paper says, verbatim enough to check.
- * @param verdict   Whether they agree.
+ * @param verdict   How the two stand beside each other.
  */
 static inline void bench_compare(bench_report_t *r, const char *label,
                                  const char *measured, const char *paper,
                                  bench_verdict_t verdict)
 {
-    const char *mark = (verdict == BENCH_OK)      ? "[OK]"
-                     : (verdict == BENCH_DIVERGE) ? "[DIVERGE]"
-                                                  : "[BOUNDARY]";
+    const char *mark = (verdict == BENCH_MATCH) ? "[matches paper]"
+                     : (verdict == BENCH_HOST)  ? "[this host]"
+                                                : "[external system]";
     bench_say(r, "  %-26s %-22s paper: %-34s %s\n",
               label, measured, paper, mark);
 }

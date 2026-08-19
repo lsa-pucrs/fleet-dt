@@ -2,14 +2,14 @@
 fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
 transport: in-process loopback   vessels: 4   frames: 400
 
---- measurement 1 — delta compute time (Section IV) ---
+--- measurement 1, delta compute time (Section IV) ---
   p50     0.09 us   p95     0.09 us   p99     0.11 us   worst     0.43 us
-  delta under the deadline   0.43 us worst          paper: delta in less than 125 ms is feasible [OK]
+  delta under the deadline   0.43 us worst          paper: delta in less than 125 ms is feasible [matches paper]
 
---- measurement 2 — actuation round trip (Section V-A) ---
+--- measurement 2, actuation round trip (Section V-A) ---
   I^t published -> A^t delivered
   p50     1.21 us   p95     1.29 us   p99     1.44 us   worst    10.42 us
-  round trip over a network  not measured here      paper: actuation is delivered late        [BOUNDARY]
+  round trip over a network  not measured here      paper: actuation is delivered late        [external system]
   This run uses the in-process loopback, so the round trip carries
   no network. Section V-A's observation is about a real link, and
   reproducing it needs the MQTT transport against a broker. What

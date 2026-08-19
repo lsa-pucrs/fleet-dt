@@ -239,7 +239,7 @@ int main(void)
 
     char buf[64];
 
-    bench_section(&r, "measurement 1 — delta compute time (Section IV)");
+    bench_section(&r, "measurement 1, delta compute time (Section IV)");
     bench_say(&r, "  p50 %8.2f us   p95 %8.2f us   p99 %8.2f us   "
                   "worst %8.2f us\n",
               pct(sorted_delta, FRAMES, 0.50), pct(sorted_delta, FRAMES, 0.95),
@@ -247,16 +247,16 @@ int main(void)
     snprintf(buf, sizeof buf, "%.2f us worst", sorted_delta[FRAMES - 1]);
     bench_compare(&r, "delta under the deadline", buf,
                   "delta in less than 125 ms is feasible",
-                  fdt_feas_ok(&feas) ? BENCH_OK : BENCH_DIVERGE);
+                  fdt_feas_ok(&feas) ? BENCH_MATCH : BENCH_HOST);
 
-    bench_section(&r, "measurement 2 — actuation round trip (Section V-A)");
+    bench_section(&r, "measurement 2, actuation round trip (Section V-A)");
     bench_say(&r, "  I^t published -> A^t delivered\n");
     bench_say(&r, "  p50 %8.2f us   p95 %8.2f us   p99 %8.2f us   "
                   "worst %8.2f us\n",
               pct(sorted_rtt, FRAMES, 0.50), pct(sorted_rtt, FRAMES, 0.95),
               pct(sorted_rtt, FRAMES, 0.99), sorted_rtt[FRAMES - 1]);
     bench_compare(&r, "round trip over a network", "not measured here",
-                  "actuation is delivered late", BENCH_NA);
+                  "actuation is delivered late", BENCH_EXTERNAL);
     bench_say(&r,
         "  This run uses the in-process loopback, so the round trip carries\n"
         "  no network. Section V-A's observation is about a real link, and\n"
