@@ -28,8 +28,8 @@ The architecture of Section III:
   from delivery
 - a fixed-width little-endian wire codec for `Iᵗ`, `Bᵗ` and `Aᵗ`
 - a wire envelope carrying the per-vessel sequence number Table I does not
-- detection and counting of the partial and double frame updates Section V-B
-  reports and leaves open
+- detection and counting of the partial and double frame updates reported in
+  Section V-B
 - the bandwidth regulators, decimating publication to the DT rate while the
   sensor path keeps its own
 - the link-budget model, with both readings of the Section V-A figure
@@ -43,7 +43,7 @@ The architecture of Section III:
 The validation of Section V:
 
 - deterministic synthetic telemetry injectors
-- five benchmarks — regulator, link budget, scaling, latency, jitter — each
+- five benchmarks (regulator, link budget, scaling, latency, jitter), each
   writing a text report, a CSV series and an SVG chart
 - a dependency-free SVG plotter, so a measurement can be regenerated on a bare
   toolchain
@@ -53,14 +53,14 @@ The validation of Section V:
 
 The simulation, verified against the real toolchain:
 
-- the WeBots project — world, hull meshes, material and texture — from
+- the WeBots project (world, hull meshes, material and texture) from
   `lsa-pucrs/boat-digital-twin`, rewired to the model of Section IV
 - three worlds differing only in vessel count, so the CPU claim of Section V-A
-  can be measured as a difference rather than asserted
-- `fdt_geo_offset`, the geodetic-to-local mapping, extracted from the WeBots
-  controller after it placed every vessel 5700 km outside the world
+  can be measured as a difference
+- `fdt_geo_offset`, the geodetic-to-local mapping, anchored once for the fleet
+  so that the twins hold the geometry the telemetry reports
 - `FDT_SHOT` and `FDT_SHOT_FRAME`, which export the 3D view from a running
-  controller, because a rendering cannot be asserted any other way
+  controller, so the visual reference of Section I(iii) can be shown
 - `make syntax`, type-checking the SDK adapters against stub headers on a
   machine that has neither
 - `make mqtt-test`, a round trip through a real mosquitto broker
@@ -69,11 +69,12 @@ The simulation, verified against the real toolchain:
 
 Documentation:
 
-- the claim inventory, one row per falsifiable claim with the artefact that
-  discharges it, including the seven items Section VI declares future work
+- the claim map, one row per statement the paper makes with the file that
+  carries it, including the seven items Section VI names as future work
 - the paper-to-code map for revision `-10`
-- six recorded ambiguities and findings in the manuscript, five worth fixing,
-  including that the 48-byte state of Section IV quantises position to between
-  0.2 and 0.4 m at the Jundiá coordinates — a third of a hull length
-- a captured frame of the running simulation, since two position bugs left
-  every counter green and were caught only by looking
+- the readings the implementation takes where the text leaves a design choice
+  open, and the position resolution that follows from the 48-byte state of
+  Section IV: 0.37 m in longitude and 0.21 m in latitude at the Jundiá
+  coordinates
+- a captured frame of the running simulation, as the visual reference of
+  Section I(iii)

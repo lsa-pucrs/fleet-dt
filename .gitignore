@@ -21,3 +21,7 @@ adapters/webots/controllers/*/[!.]*
 !adapters/webots/controllers/*/*.h
 adapters/webots/worlds/.*.wbproj
 *.d
+
+# Editor and agent scratch
+.claude/
+.idea/

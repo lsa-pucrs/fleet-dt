@@ -21,7 +21,7 @@ it:
 | Setting | Why |
 |---|---|
 | `persistence true` | Without it the queue lives in memory only, and the outage takes it. |
-| `cleansession false` | A clean session drops the queue on reconnect — the exact moment it matters. |
+| `cleansession false` | A clean session drops the queue on reconnect, which is when the queue matters. |
 | `topic fleet/# out 1` | QoS 1 outbound: at-least-once, so a message survives a reconnect mid-flight. |
 
 At-least-once permits duplicates, which is why the wire envelope carries a

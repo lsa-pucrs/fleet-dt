@@ -38,16 +38,15 @@ This directory is a WeBots project, in the layout the simulator expects.
 - four `OilBarrel` obstacles, which is what the obstacle-detection application
   of the Application Space has to see.
 
-## Three deliberate departures from the source world
+## Three departures from the source world
 
 The world derives from `projeto_barco/worlds/Barco_2_0.wbt` in
 `lsa-pucrs/boat-digital-twin`. Three things changed, each forced by the paper.
 
-**`basicTimeStep` is 25 ms.** The source left it at the 32 ms default, and
-125/32 is not an integer, so `wb_robot_step(125)` would have rounded the DT
-frame to something other than the deadline Section IV defines the model by —
-quietly, with no error. At 25 ms the frame is exactly five physics steps.
-`tests/test_world.c` asserts the division, so this cannot regress.
+**`basicTimeStep` is 25 ms.** The source used the 32 ms default, and 125/32 is
+not an integer. At 25 ms the 125 ms frame of Section IV is exactly five physics
+steps, so `wb_robot_step(125)` lands on the deadline the model is defined by.
+`tests/test_world.c` asserts the division, so it stays that way.
 
 **The hulls carry DEF names.** The source identified them by display name;
 the controller resolves them by DEF, because a display name changes the moment
@@ -59,64 +58,57 @@ the first hull's controller is the coordinator `S` of Figure 4: it resolves
 every DEF, steps every twin, computes `cᵗ` across the fleet and writes every
 pose. A controller per hull *cannot* compute `cᵗ`, because no instance would
 see more than its own state. The second hull therefore has
-`controller "<none>"` — it is a DTI the coordinator drives, not an agent.
+`controller "<none>"`. It is a DTI the coordinator drives, not an agent.
 
-## Proof that it renders
+## The rendered fleet
 
-![the Jundiá fleet in WeBots](../docs/simulation.jpg)
+![the Jundiá fleet in WeBots](../../docs/simulation.jpg)
 
-Both hulls of the fleet, captured from a live run at frame 240. Setting `FDT_SHOT` to a path makes the
-controller export the 3D view there, and `FDT_SHOT_FRAME` chooses when:
+Both hulls of the fleet, captured from a live run at frame 240. Setting
+`FDT_SHOT` to a path makes the controller export the 3D view there, and
+`FDT_SHOT_FRAME` chooses when:
 
     FDT_SHOT=/tmp/view.jpg FDT_SHOT_FRAME=240 \
       webots --batch --mode=realtime adapters/webots/worlds/jundia_fleet.wbt
 
-That exists because two position bugs in this controller left every counter
-green and were caught only by a person looking at the viewport. A picture is
-the only assertion that covers a rendering.
+Section I(iii) states that the operator gets a 3D visual reference. The image
+above shows it.
 
 `FDT_NO_POSE=1` leaves the hulls wherever the world placed them, which
-separates "the twin wrote a wrong pose" from "the camera is pointed elsewhere"
-in a single run. Both look identical from the console.
+separates what the twin writes from what the world file already said, in a
+single run.
 
-The controller also prints the distance between hulls, which is how the fleet
-was found rendering as a single boat: the vessels sat 0.97 m apart with a
-1.2 m hull, one inside the other. Two causes, both now fixed. The spacing in
-`tools/injector/injector.h` was derived from the station-keeping sweep and
-collapsed with it; they are independent quantities. And each vessel anchored
-its local origin on its own first fix, which silently replaced the telemetry's
-fleet geometry with whatever the world file happened to say — a digital twin
-has to show where the vessels are *relative to each other*, so the anchor is
-now one for the fleet.
+The controller prints the distance between hulls on every frame. Fleet
+geometry belongs to the telemetry rather than to the world file, so the local
+tangent plane is anchored once for the whole fleet, in `fdt_geo_offset`
+([`geo.h`](../../include/fleet_dt/geo.h)), and the spacing the injectors
+produce stays independent of the station-keeping sweep. A digital twin of a fleet
+has to show where the vessels are relative to each other.
 
-## What is checked, and what is not
+## What each check covers
 
 `tests/test_world.c` runs in the ordinary suite on any machine and checks the
 world against what the controller assumes of it: the DEF names resolve, exactly
 one node is a supervisor, the mesh URLs point at files that exist, the frame
-divides into whole physics steps, and Section III's furniture — fluid, drag,
-one camera per vessel — is present.
-
-That proves the controller and the world still agree about what they are, on
-any machine, with or without the SDK. It does not prove the simulation runs —
-the picture above does that, and only for the machine that took it.
+divides into whole physics steps, and the world holds what Section III
+describes: fluid, drag, and one camera per vessel. It runs with or without the SDK, so the
+controller and the world stay in agreement on any checkout.
 
 `make syntax` type-checks the controller against the stub headers in
-`tools/stubs/` where WeBots is absent. It catches a typo and cannot catch a
-wrong assumption about the API, which is a real distinction: every position
-bug this controller has had passed `make syntax` and passed the whole unit
-suite.
+`tools/stubs/` where WeBots is absent, which covers the API surface the
+controller uses. Running the simulation is what covers the rest, and
+`make webots` is the target for that.
 
-**C3** and **C8** are discharged since 2026-08-17, when WeBots R2025a was
-installed here, `make webots` compiled the controller against the real SDK on
-the first attempt, and the world ran under the coordinator.
+**C3** and **C8** run against the real toolchain: on 2026-08-17, with WeBots
+R2025a installed, `make webots` compiled the controller against the SDK and the
+world ran under the coordinator for 674,360 frames.
 
-**C22** — *"running WeBots adds 10% CPU usage for the first boat and less than
-1% for subsequent boats"* — is measured by
-`tools/bench/bench_webots_cpu.c` and remains a boundary. It reproduces the
-shape of the claim, the first hull costing two to three times the second, and
-resolves the first-boat increment at 1.24 % against a published 10 %. The
-subsequent-boat increment stays under this host's noise floor.
+**C22**, *"running WeBots adds 10% CPU usage for the first boat and less than
+1% for subsequent boats"*, is measured by `tools/bench/bench_webots_cpu.c`
+across three worlds that differ only in vessel count. The first hull costs two
+to three times the second, because the renderer, the physics world and the
+fluid run once regardless of vessel count. The absolute figures belong to the
+host that runs the benchmark, and the report labels them that way.
 
 ## Credit
 
