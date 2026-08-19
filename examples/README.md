@@ -3,7 +3,7 @@
 Two runnable programs. Both build with `make examples` and need nothing
 installed.
 
-## `daemon.c` — a fleet frame, end to end
+## `daemon.c`, a fleet frame end to end
 
     ./examples/daemon
 
@@ -12,26 +12,26 @@ Two boats stepping at 125 ms for 40 frames under a coordinator that computes
 tick. The dynamics are a placeholder; the file exists to show the loop and the
 wiring.
 
-Expect `overruns=0` and `feasible=1`. A non-zero overrun count in a loop this
-small points at the machine, not the code.
+Expect `overruns=0` and `feasible=1`. An overrun in a loop this small reports
+scheduling on the host.
 
-The window is **4 deep, not 1**. Section V-A justifies the window by saying it
-enables proactive operation, "as in model predictive control (MPC)"; at depth 1
-that promise never shows up in the demonstration. The `trend` column is the
-term the depth buys — mean yaw change per frame across the window — and it is
-zero at depth 1 by construction. Each twin is therefore seeded four times
+The window is **4 deep, not 1**. Section V-A ties the window to proactive
+operation, "as in model predictive control (MPC)", and depth 1 produces no
+such term. The `trend` column is the
+term the depth adds, the mean yaw change per frame across the window, and it
+reads zero at depth 1 by construction. Each twin is therefore seeded four times
 before the first step, because equation (3) needs the queue to already hold `n`
 states.
 
 `queue bytes per vessel=768` is `48 × 16`: the `48d` bound of Section IV at
 this example's capacity.
 
-`worst_delta` is the feasibility predicate of Section IV — the time to compute
+`worst_delta` is the feasibility predicate of Section IV, the time to compute
 δ. It is **not** the actuation latency. Section V-A observes actuation arriving
 late even when δ is feasible, because it travels back through the network;
 `tools/bench/bench_latency.c` measures the two apart.
 
-## `two_paths.c` — the filtered state and the raw actuation path
+## `two_paths.c`, the filtered state and the raw actuation path
 
     ./examples/two_paths
 

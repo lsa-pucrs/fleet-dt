@@ -5,13 +5,11 @@ Manuscript tracked: revision **`-10`**, pinned in
 `FDT_PAPER_REVISION` and checked by `make test`. The model is **Section IV**
 and the equations run **(1)** through **(6)**.
 
-That pin is not decoration. An earlier revision had δ and π as separate
-equations, which shifted every reference from (3) onward; a map that did not
-say which revision it tracked went stale without anyone noticing. When the
-manuscript moves, the constant moves, the test fails, and this table gets
-re-checked.
+Equation numbering has moved between revisions of the manuscript. When the
+text moves, `FDT_PAPER_REVISION` moves with it, `make test` reports the
+mismatch, and this table gets re-checked.
 
-## Section IV — the model
+## Section IV, the model
 
 | Paper | Meaning | Type or function | File |
 |---|---|---|---|
@@ -37,7 +35,7 @@ re-checked.
 | Δt | frame period, 125 ms | `FDT_TICK_NS` | [`tick.h`](../include/fleet_dt/tick.h) |
 | φ, λ onto metres | local tangent plane | `fdt_geo_offset` | [`geo.h`](../include/fleet_dt/geo.h) |
 
-## Section III — the architecture
+## Section III, the architecture
 
 | Paper | Meaning | Type or function | File |
 |---|---|---|---|
@@ -53,18 +51,21 @@ re-checked.
 | DTE with parallel simulations | one tick, many simulations | `fdt_dte_t` | [`dte.h`](../include/fleet_dt/dte.h) |
 | MCS | out of scope, per Section IV | goal source in `fdt_plan_fn` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 
-## Section V — the validation
+## Section V, the validation
 
 | Paper | Meaning | Artefact |
 |---|---|---|
 | injectors publishing synthetic telemetry | the fleet campaign | [`tools/injector/`](../tools/injector/) |
-| partial and double frame updates | the open pathology | [`framesync.h`](../include/fleet_dt/framesync.h) |
+| partial and double frame updates | the two Section V-B observations | [`framesync.h`](../include/fleet_dt/framesync.h) |
 | under 1 % CPU per DTI | scaling | [`bench_scale.c`](../tools/bench/bench_scale.c) |
 | bandwidth increase | link budget | [`bench_bandwidth.c`](../tools/bench/bench_bandwidth.c) |
 | δ feasible, actuation late | two measurements | [`bench_latency.c`](../tools/bench/bench_latency.c) |
 | Kalman for `Bᵢᵗ`, raw `Iᵢᵗ` for actuation | two paths | [`examples/two_paths.c`](../examples/two_paths.c) |
 
-## Three things a reader will look for and not find
+## Where the API differs in shape from the equations
+
+Three symbols a reader may look for by name resolve to something else. Each
+follows from what the paper states.
 
 **There is no `fdt_delta`.** `fdt_twin_step` runs δᵉ over the window on every
 call, and equation (2) is what that call does when `n == 1`. A separate δ would
@@ -74,8 +75,8 @@ be the same code with a constant baked in.
 field, so a queued entry *is* a state. That is what makes `fdt_queue_bytes(d)`
 exactly `48d`; a wrapper carrying a timestamp would make the paper's bound
 false. Sequencing lives in the wire envelope
-([`envelope.h`](../include/fleet_dt/envelope.h)), where Section V-B's open
-question actually is.
+([`envelope.h`](../include/fleet_dt/envelope.h)), which is what makes the
+partial and double updates of Section V-B observable.
 
 **No signature takes a clock.** `fdt_twin_seed`, `fdt_twin_step` and
 `fdt_fleet_step` take no time argument, and `fdt_input_t` has no timestamp
@@ -83,22 +84,14 @@ field, because Table I lists none among its 21 entries. The 125 ms pacer in
 [`tick.h`](../include/fleet_dt/tick.h) is the runtime that drives frames; it is
 not part of the model.
 
-## Where the manuscript is ambiguous
+## The readings the code takes
 
-Five places where the code had to choose, each recorded with its reasoning in
-[`docs/spec/paper-claims.md`](spec/paper-claims.md), section H:
-
-1. the δᵉ window — the bracket says the `n` most recent states, the trailing
-   `i ≤ j ≤ t−1` uses indices that appear nowhere in the equation;
-2. equation (3) opens with subscript `i` and switches to `k` mid-line;
-3. Table I gives attitude angles as "rad or deg" without choosing, while the
-   rates beside them are rad/s;
-4. `Bᵢ¹` is called the initial state, but the recurrence needs a `t−1` before
-   the first step;
-5. "the bandwidth usage increased < 1%" does not reconcile with absolute
-   occupancy for the payload and rate the same sentence gives.
-
-Items 1, 2, 3 and 5 are worth fixing in the manuscript.
+Section H of [`docs/claim-map.md`](claim-map.md) records the five places where
+the manuscript leaves a design choice open and states the reading this
+implementation takes: the δᵉ window takes `n`, angles are degrees beside rates
+in rad/s, `Bᵢ¹` is seeded as a boundary condition, the link budget prints both
+readings of the Section V-A figure, and `cᵗ` is an input and an output of the
+same frame.
 
 ## Origin
 
