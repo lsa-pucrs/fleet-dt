@@ -1,0 +1,16 @@
+[Unit]
+Description=fleet-dt boat sensor publisher (ArduPilot MAVLink groups over MQTT)
+Documentation=file:/home/pi/fleet-dt/mqtt/RUNBOOK.md
+After=fleet-mqtt-broker.service mavproxy.service
+Wants=fleet-mqtt-broker.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/fleet-dt
+ExecStart=/usr/bin/python3 -u mqtt/pi/mav_publisher.py --broker localhost --boat-id b1
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

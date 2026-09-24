@@ -130,3 +130,41 @@ Sem `notes.md` dois dias de medida não se comparam.
 | RTT pior na bancada que em campo | potência TX alta a curta distância (saturação) |
 | frames zed não chegam | `max_packet_size` do broker (conf desta pasta já traz 1 MB) |
 | RTT com cauda longa sob vídeo | fila do broker; anotar e reportar — é o dado do experimento |
+
+## 7. Pilha implantada (2026-09-24)
+
+Sobrepõe as seções 1, 2 e 4 onde divergem. Enlace ponto a ponto em OpenWrt
+22.03.7, uma sub-rede `192.168.1.0/24`, sem DHCP nem RA nos rádios:
+
+| Nó | Endereço | Papel |
+|---|---|---|
+| Pi `eth0` | 192.168.1.99 (estático, `dhcpcd.conf`) | broker do barco, RTSP |
+| Bullet M2 `TILAPIA_UPLINK` | 192.168.1.1 | estação WDS (`sta`, `wds=1`) |
+| AirGrid M2 HP `GROUND_AP` | 192.168.1.2 | AP WDS |
+| Estação (cassio-server, USB `00:e0:4c:68:03:da`) | 192.168.1.199 | broker com bridge, NTP |
+
+Rádio: SSID `FLEETDT_B1`, WPA2-PSK CCMP, canal 11 (2462 MHz), HT20, país BR,
+5 dBm nos dois lados (bancada). A chave fica fora do repositório.
+
+Units no Pi (`mqtt/pi/systemd/`):
+
+| Unit | Programa | Saída |
+|---|---|---|
+| `fleet-mqtt-broker` | mosquitto 1.5.7 | 127.0.0.1 e 192.168.1.99 :1883 |
+| `fleet-mqtt-sensors` | `mav_publisher.py` | `boat/b1/<grupo>`, QoS 0, a partir do MAVLink |
+| `fleet-rtsp-video` | `rtsp_server.py` | `rtsp://192.168.1.99:8554/zed`, H.264 1344x376@15, 2 Mbit/s |
+
+`fleet-mqtt-video` (MJPEG pelo broker) fica desabilitado: a ZED só atende um
+processo, e o vídeo vai por RTSP. `publisher.py` continua como gerador de carga
+sintética para o teste de enlace.
+
+Estação: `mqtt/jmcs/mosquitto.conf` em `/etc/mosquitto/mosquitto.conf`, bridge
+`boat-b1` de saída para 192.168.1.99 (`boat/b1/#` in QoS 0, `cmd` out QoS 1).
+Relógio: chrony na estação serve `192.168.1.0/24`; o Pi usa
+`server 192.168.1.199 iburst prefer` e mantém o pool como reserva.
+
+Verificar:
+
+    mosquitto_sub -h 127.0.0.1 -t 'boat/b1/+' -v          # na estação
+    ffmpeg -rtsp_transport udp -i rtsp://192.168.1.99:8554/zed -t 10 -c copy x.mkv
+    chronyc sources                                       # no Pi: ^* 192.168.1.199

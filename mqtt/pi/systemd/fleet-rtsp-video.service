@@ -1,0 +1,18 @@
+[Unit]
+Description=fleet-dt boat ZED over RTSP (H.264, hardware encoder)
+Documentation=file:/home/pi/fleet-dt/mqtt/RUNBOOK.md
+After=network-online.target
+Wants=network-online.target
+Conflicts=fleet-mqtt-video.service server_zed.service
+
+[Service]
+Type=simple
+User=pi
+SupplementaryGroups=video
+WorkingDirectory=/home/pi/fleet-dt
+ExecStart=/usr/bin/python3 -u mqtt/pi/rtsp_server.py --bind 192.168.1.99
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
