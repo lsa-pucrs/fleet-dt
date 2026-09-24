@@ -8,7 +8,7 @@ Wants=fleet-mqtt-broker.service
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/fleet-dt
-ExecStart=/usr/bin/python3 -u mqtt/pi/mav_publisher.py --broker localhost --boat-id b1
+ExecStart=/usr/bin/python3 -u mqtt/pi/mav_publisher.py --broker localhost --boat-id b1 --mavlink udpin:127.0.0.1:14552
 Restart=always
 RestartSec=5
 

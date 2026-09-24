@@ -1,8 +1,8 @@
 """Boat-side publisher: the Navio2 sensor groups over MQTT, from ArduPilot.
 
-Reads MAVLink from MAVProxy (``udpout:127.0.0.1:14551``; that port never
-speaks first, so the heartbeat below is what makes MAVProxy start forwarding),
-keeps the latest sample of each source message, and publishes every group of
+Reads MAVLink from MAVProxy's dedicated ``--out udpout:127.0.0.1:14552``
+(see ~/mavproxy.sh; the shared udpin 14551 never forgets a client, so a
+restarting local service there leaks one stale client per restart), keeps the latest sample of each source message, and publishes every group of
 ``topics.py`` at its own rate. Same topics and ping/pong echo as the synthetic
 ``publisher.py``, which stays as the link-test load generator.
 
@@ -165,7 +165,7 @@ def main() -> None:
     parser.add_argument("--broker", default="localhost")
     parser.add_argument("--port", type=int, default=1883)
     parser.add_argument("--boat-id", default="b1")
-    parser.add_argument("--mavlink", default="udpout:127.0.0.1:14551")
+    parser.add_argument("--mavlink", default="udpin:127.0.0.1:14552")
     parser.add_argument("--rate", action="append", default=[], metavar="GROUP=HZ",
                         help="override a group's publish rate; repeatable")
     args = parser.parse_args()
