@@ -27,6 +27,9 @@ IEEE Access paper and replaces the C library of the ICECS 2026 model.
 
 - `tests/armhf/run.sh`: end-to-end test with the vessel programs on an emulated Raspbian 10 (armhf)
 - `radio/channel_monitor/openwrt/build-sdk.sh`: `.ipk` of the channel monitor from the OpenWrt SDK
+- `tests/hwsim/`: full-software run of the stack over a simulated Wi-Fi channel (mac80211_hwsim with
+  airtime in the survey, wmediumd with the real rate per frame, one network namespace per node,
+  injector of broadcast frames in place of TX99), in a Debian 13 VM
 - VE: forwarded and withheld messages of the vessel regulator in the hover of each edge
 - video publisher: warning when the offered messages per second exceed the DTP rate of video
 

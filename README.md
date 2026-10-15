@@ -49,6 +49,7 @@ sudo make install          # /opt/fleet-dt/{lib,bin}
 pip install -r requirements.txt
 tests/armhf/run.sh <dir with the tarballs>             # vessel programs on an emulated Raspbian 10 (armhf)
 radio/channel_monitor/openwrt/build-sdk.sh             # fdt-chmon .ipk for the Bullet M2 (OpenWrt SDK)
+tests/hwsim/vm.sh up && ...                            # full-software run over a simulated Wi-Fi channel (tests/hwsim/README.md)
 ```
 
 The end-to-end test (`tests/test_integration.py`) runs on one host: two vessel brokers with the
