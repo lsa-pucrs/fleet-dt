@@ -33,7 +33,16 @@ IEEE Access paper and replaces the C library of the ICECS 2026 model.
 - VE: forwarded and withheld messages of the vessel regulator in the hover of each edge
 - video publisher: warning when the offered messages per second exceed the DTP rate of video
 
+- `tests/hil/`: hardware-in-the-loop run with the RP4 of a vessel (autopilot telemetry, vessel
+  regulator and DTI program on the vessel; GS broker, AS and VE collector on the GS PC)
+- VE: new page (stat tiles, capacity and prediction chart with admitted and received bytes,
+  priority level of each topic over time, vessel x topic matrix, grant per vessel against b(t),
+  fidelity and delivery per topic, table view, light and dark themes)
+
 ### Fixed
+
+- telemetry publisher: sends its own HEARTBEAT at 1 Hz; an output udpin of MAVProxy learns the
+  client address from its first packet, and the publisher waited for the autopilot heartbeat forever
 
 - channel monitor: `sys/time.h` for musl (OpenWrt)
 - vessel: paho-mqtt 2.x on Python 3.7 needs `typing_extensions`, which it does not declare

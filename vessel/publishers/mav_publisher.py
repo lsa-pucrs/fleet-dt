@@ -381,6 +381,17 @@ class MavPublisher:
             # next step; a late wake-up (overload, clock slew) skips the steps whose instant passed
             t = max(t + 1, math.floor((time.time() - self.clock.epoch - off) / Ts) + 1)
 
+    def _heartbeat_loop(self) -> None:
+        """HEARTBEAT of this onboard computer at 1 Hz. An output udpin of MAVProxy learns the address of
+        a udpout client from its first packet, so without this the program would wait for the
+        autopilot heartbeat forever."""
+        while not self.stop.is_set():
+            with self.send_lock:
+                self.mav.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
+                                            mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0,
+                                            mavutil.mavlink.MAV_STATE_ACTIVE)
+            self.stop.wait(1.0)
+
     def _stats_loop(self) -> None:
         last = dict(self.counts)
         while not self.stop.wait(self.a.stats_period):
@@ -391,7 +402,7 @@ class MavPublisher:
 
     def run(self) -> None:
         threads = [threading.Thread(target=f, name=f.__name__, daemon=True)
-                   for f in (self._rx_loop, self._state_loop, self._goal_worker)]
+                   for f in (self._rx_loop, self._state_loop, self._goal_worker, self._heartbeat_loop)]
         if self.a.stats_period > 0:
             threads.append(threading.Thread(target=self._stats_loop, daemon=True))
         for th in threads:
@@ -415,7 +426,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     ap.add_argument("--host", default="127.0.0.1", help="vessel MQTT broker")
     ap.add_argument("--port", type=int, default=1883)
     ap.add_argument("--epoch", type=float, default=None,
-                    help="Unix time of the start of step 0 (default: epoch of the DTP file; 0 when null)")
+                    help="Unix time of the start of step 0 (default: epoch of the DTP file; 2026-01-01T00:00:00Z when null)")
     ap.add_argument("--state-offset", type=float, default=0.005,
                     help="phase of the state publication after start(t), seconds (default 0.005)")
     ap.add_argument("--state-max-age", type=float, default=1.0,

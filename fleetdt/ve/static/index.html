@@ -6,347 +6,597 @@
 <title>Fleet-DT VE</title>
 <style>
 :root {
-  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #6b7280; --line: #d9dde3;
-  --gs: #f2c94c; --vessel: #3d85c6; --out: #c4c9d1;
-  --l2: #c0504d; --l1: #3f8f3a; --l0: #9aa0a6; --y: #2f6fd0; --chat: #d9822b; --bad: #fde2e1;
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
+  --lv2: #1c5cab; --lv1: #86b6ef; --lv0: #e1e0d9;
+  --good: #0ca30c; --critical: #d03b3b; --good-ink: #006300;
+  --wash: rgba(42,120,214,0.10); --crit-wash: rgba(208,59,59,0.10);
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #12151b; --panel: #1b2029; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2c3340;
-    --out: #4a5160; --l0: #6b7280; --bad: #3a2224; }
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+    --lv2: #86b6ef; --lv1: #256abf; --lv0: #2c2c2a;
+    --good-ink: #0ca30c; --wash: rgba(57,135,229,0.12); --crit-wash: rgba(208,59,59,0.16);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70;
+  --lv2: #86b6ef; --lv1: #256abf; --lv0: #2c2c2a;
+  --good-ink: #0ca30c; --wash: rgba(57,135,229,0.12); --crit-wash: rgba(208,59,59,0.16);
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
-header { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
-header h1 { font-size: 15px; margin: 0 8px 0 0; }
-.kv { color: var(--muted); } .kv b { color: var(--ink); font-variant-numeric: tabular-nums; }
-.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--l0); margin-right: 4px; }
-.dot.on { background: var(--l1); }
-main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: minmax(360px, 58vh) auto; gap: 12px; padding: 12px 16px; }
-section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
-section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
-#graphBox { position: relative; }
-#graph { width: 100%; height: calc(100% - 22px); display: block; }
-#side { grid-row: span 2; overflow: auto; }
-#series { min-height: 230px; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px; border-bottom: 1px solid var(--grid); background: var(--surface); position: sticky; top: 0; z-index: 5; }
+header h1 { font-size: 15px; font-weight: 600; margin: 0; }
+.badge { font-size: 11px; color: var(--ink-2); border: 1px solid var(--ring); border-radius: 10px; padding: 1px 8px; }
+.badge .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--good); margin-right: 5px; }
+.clock { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.controls { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.scroll { overflow-x: auto; }
+button, select { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+button:hover, select:hover { background: var(--page); }
+button[aria-pressed="true"] { border-color: var(--s1); }
+input[type=range] { width: 220px; accent-color: var(--s1); }
+main { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 12px; padding: 12px 16px 24px; align-items: start; }
+.card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 12px 14px; min-width: 0; }
+.card h2 { font-size: 13px; font-weight: 600; margin: 0; }
+.card .sub { color: var(--muted); font-size: 12px; margin: 2px 0 8px; }
+.tiles { grid-column: span 12; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 12px; }
+.tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 10px 14px; }
+.tile .label { color: var(--ink-2); font-size: 12px; }
+.tile .value { font-size: 22px; font-weight: 600; margin-top: 2px; }
+.tile .unit { font-size: 12px; color: var(--muted); font-weight: 400; margin-left: 3px; }
+.tile .foot { color: var(--muted); font-size: 11px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.tile canvas { width: 100%; height: 26px; display: block; margin-top: 4px; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.status svg { flex: none; }
+.span8 { grid-column: span 8; } .span4 { grid-column: span 4; } .span6 { grid-column: span 6; } .span12 { grid-column: span 12; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 14px; color: var(--ink-2); font-size: 12px; margin-top: 6px; }
+.legend i { display: inline-block; width: 14px; height: 2px; vertical-align: middle; margin-right: 5px; border-radius: 1px; }
+.legend i.box { height: 10px; width: 10px; border-radius: 2px; }
+.plot { position: relative; }
+.plot canvas { display: block; width: 100%; }
+svg text { fill: var(--ink-2); font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
-td, th { padding: 3px 4px; border-bottom: 1px solid var(--line); text-align: right; }
-td:first-child, th:first-child { text-align: left; }
-.legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
-.sw { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
-#tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; display: none; box-shadow: 0 2px 8px rgba(0,0,0,.15); z-index: 5; }
-#controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
-#controls input[type=range] { flex: 1 1 200px; }
-button, select { font: inherit; padding: 3px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 5px; cursor: pointer; }
-.metrics { display: flex; flex-wrap: wrap; gap: 16px; margin: 4px 0 6px; }
-.bad { background: var(--bad); }
-@media (max-width: 900px) { main { grid-template-columns: 1fr; } #side { grid-row: auto; } }
+th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; }
+td .bar { display: inline-block; height: 6px; border-radius: 0 3px 3px 0; background: var(--s1); vertical-align: middle; margin-right: 6px; }
+.fid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; }
+.fid div { border-left: 2px solid var(--grid); padding-left: 8px; }
+.fid b { display: block; font-size: 17px; font-weight: 600; }
+.fid span { color: var(--muted); font-size: 11px; }
+#tip { position: fixed; pointer-events: none; z-index: 10; background: var(--surface); color: var(--ink); border: 1px solid var(--ring); border-radius: 8px; padding: 7px 9px; box-shadow: 0 4px 16px rgba(0,0,0,0.12); font-size: 12px; display: none; max-width: 300px; }
+#tip .row { display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+#tip .row b { min-width: 64px; text-align: right; }
+#tip .k { display: inline-block; width: 12px; height: 2px; }
+#tip .h { color: var(--muted); margin-bottom: 3px; }
+.empty { color: var(--muted); padding: 40px 0; text-align: center; }
+.hidden { display: none !important; }
+@media (max-width: 1100px) { .span8, .span4, .span6 { grid-column: span 12; } .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } input[type=range] { width: 120px; } .fid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 </style>
 </head>
 <body>
 <header>
-  <h1>Fleet-DT &middot; VE</h1>
-  <span class="kv"><span id="conn" class="dot"></span><span id="mode">-</span></span>
-  <span class="kv">step <b id="hT">-</b></span>
-  <span class="kv">m(t) <b id="hM">-</b></span>
-  <span class="kv">y(t) <b id="hY">-</b></span>
-  <span class="kv">&Ccirc;(t) <b id="hC">-</b></span>
-  <span class="kv">b(t) <b id="hB">-</b></span>
-  <span class="kv">y &ge; U&Ccirc; <b id="hCov">-</b></span>
+  <h1>Fleet-DT · Virtual environment</h1>
+  <span class="badge" id="mode"><span class="dot"></span>connecting</span>
+  <span class="clock" id="clock">step –</span>
+  <div class="controls">
+    <button id="play" aria-pressed="true" title="Play or pause (space)">Pause</button>
+    <button id="prev" title="Previous step (←)">‹</button>
+    <button id="next" title="Next step (→)">›</button>
+    <input type="range" id="scrub" min="0" max="0" value="0" aria-label="Step">
+    <select id="speed" aria-label="Replay speed"><option value="1">1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+    <button id="follow" aria-pressed="true" title="Follow the last step">Live</button>
+    <button id="view" aria-pressed="false" title="Show the values as tables">Table view</button>
+    <button id="theme" title="Light or dark">Theme</button>
+  </div>
 </header>
 <main>
-  <section id="graphBox">
-    <h2>G(t): edges (i, &#8467;) from each vessel to vertex 0</h2>
-    <svg id="graph" role="img" aria-label="Graph of the network in step t"></svg>
+  <section class="tiles" aria-label="Step summary">
+    <div class="tile"><div class="label">Measured throughput y(t)</div><div class="value" id="v-y">–</div><canvas id="sp-y"></canvas></div>
+    <div class="tile"><div class="label">Prediction Ĉ(t)</div><div class="value" id="v-c">–</div><canvas id="sp-c"></canvas></div>
+    <div class="tile"><div class="label">Grant limit b(t)</div><div class="value" id="v-b">–</div><div class="foot" id="f-b">–</div></div>
+    <div class="tile"><div class="label">Vessels in M(t)</div><div class="value" id="v-m">–</div><div class="foot" id="f-m">–</div></div>
+    <div class="tile"><div class="label">Coverage y(t) ≥ U·Ĉ(t)</div><div class="value" id="v-cov">–</div><div class="foot" id="f-cov">–</div></div>
+    <div class="tile"><div class="label">Topics admitted</div><div class="value" id="v-adm">–</div><div class="foot" id="f-adm">–</div></div>
   </section>
-  <section id="side">
-    <h2>Vertex 0 (GS)</h2>
-    <table id="v0"></table>
-    <h2 style="margin-top:12px">Grant per vessel (a<sub>i</sub> versus b(t))</h2>
-    <svg id="bars" width="100%" height="180"></svg>
-    <h2 style="margin-top:12px">Priority table p(t)</h2>
-    <table id="levels"></table>
-    <div class="legend" style="margin-top:8px">
-      <span><span class="sw" style="background:var(--l2)"></span>level 2 (QoS 2)</span>
-      <span><span class="sw" style="background:var(--l1)"></span>level 1 (QoS 1)</span>
-      <span><span class="sw" style="background:var(--l0)"></span>level 0 (withheld)</span>
-    </div>
-    <p class="kv" style="margin-top:8px">Edge width grows with the demand d<sub>i,&#8467;</sub>(t). The opaque part of each edge is the fraction r<sub>i,&#8467;</sub>(t)/d<sub>i,&#8467;</sub>(t) that the GS received within step t.</p>
+
+  <section class="card span8">
+    <h2>Capacity, prediction and admitted demand</h2>
+    <div class="sub">Bytes per step over the last <span class="win">400</span> steps. The strip under the axis marks the steps with y(t) &lt; U·Ĉ(t).</div>
+    <div class="plot"><canvas id="ch-cap" height="260"></canvas></div>
+    <div class="legend"><span><i style="background:var(--s1)"></i>y(t), measured</span><span><i style="background:var(--s2)"></i>Ĉ(t), predicted</span><span><i style="background:var(--s2);opacity:.45"></i>U·Ĉ(t)</span><span><i class="box" style="background:var(--s3);opacity:.35"></i>admitted demand Σ aᵢ</span><span><i style="background:var(--s3)"></i>received Σ r</span><span><i class="box" style="background:var(--critical)"></i>y(t) &lt; U·Ĉ(t)</span></div>
   </section>
-  <section id="series">
-    <h2>Prediction and fidelity (window of <span id="wlen">400</span> steps)</h2>
-    <div class="metrics kv">
-      <span>MAPE <b id="mMape">-</b></span>
-      <span>&gamma; <b id="mGamma">-</b></span>
-      <span>&delta; <b id="mDelta">-</b></span>
-      <span>&eta;(N) <b id="mEta">-</b></span>
-    </div>
-    <svg id="chart" width="100%" height="150"></svg>
-    <div class="legend">
-      <span><span class="sw" style="background:var(--y)"></span>y(t)</span>
-      <span><span class="sw" style="background:var(--chat)"></span>&Ccirc;(t)</span>
-      <span><span class="sw" style="background:repeating-linear-gradient(90deg,var(--chat) 0 4px,transparent 4px 7px)"></span>U&Ccirc;(t)</span>
-      <span><span class="sw bad" style="height:10px"></span>y(t) &lt; U&Ccirc;(t)</span>
-    </div>
-    <div id="controls">
-      <button id="bPlay">Pause</button>
-      <button id="bPrev">&lsaquo;</button>
-      <button id="bNext">&rsaquo;</button>
-      <input id="slider" type="range" min="0" max="0" value="0">
-      <select id="speed"><option value="0.25">0.25&times;</option><option value="1" selected>1&times;</option><option value="4">4&times;</option><option value="16">16&times;</option></select>
-      <button id="bLive">Follow last step</button>
-    </div>
+
+  <section class="card span4">
+    <h2>G(t) at step <span class="tnow">–</span></h2>
+    <div class="sub">One edge per vessel to the GS. The track is the demand of the vessel; the filled part is what the GS received within the step.</div>
+    <svg id="topo" viewBox="0 0 360 250" width="100%" role="img" aria-label="Graph G(t)"></svg>
+  </section>
+
+  <section class="card span8">
+    <h2>Priority level of each topic over time</h2>
+    <div class="sub">Rows in the order σ of the last step; ● marks the topics of N(t). A gap in a row is a step without p(t).</div>
+    <div class="plot"><canvas id="ch-lv" height="170"></canvas></div>
+    <div class="legend"><span><i class="box" style="background:var(--lv2)"></i>level 2, QoS 2</span><span><i class="box" style="background:var(--lv1)"></i>level 1, QoS 1</span><span><i class="box" style="background:var(--lv0)"></i>level 0, withheld</span></div>
+  </section>
+
+  <section class="card span4">
+    <h2>Vessel × topic at step <span class="tnow">–</span></h2>
+    <div class="sub">Cell color is the level; the bar inside is r/d. ⚠ marks late or repeated messages.</div>
+    <svg id="mat" width="100%" role="img" aria-label="Edges of G(t)"></svg>
+  </section>
+
+  <section class="card span6">
+    <h2>Grant per vessel at step <span class="tnow">–</span></h2>
+    <div class="sub">Admitted topics stacked in the order σ (the sum aᵢ of Algorithm 1) against b(t); the gray part is the demand of the withheld topics.</div>
+    <svg id="grant" width="100%" role="img" aria-label="Grant per vessel"></svg>
+  </section>
+
+  <section class="card span6">
+    <h2>Fidelity and delivery, last <span class="win">400</span> steps</h2>
+    <div class="sub">Definition 15 and the Section VI metrics over the window that ends at the shown step.</div>
+    <div class="fid" id="fid"></div>
+    <div class="scroll"><table id="deliv" style="margin-top:10px"><thead><tr><th>Topic</th><th>Admitted</th><th>Received</th><th>Withheld</th><th>Late</th><th>Repeated</th></tr></thead><tbody></tbody></table></div>
+  </section>
+
+  <section class="card span12 hidden" id="tables">
+    <h2>Values of G(t) at step <span class="tnow">–</span></h2>
+    <div class="sub">The same values as the charts, one row per edge.</div>
+    <div class="scroll"><table id="edges"><thead><tr><th>Edge (i, ℓ)</th><th>Topic</th><th>p</th><th>d</th><th>r</th><th>r/d</th><th>Messages</th><th>Forwarded</th><th>Withheld</th><th>Late</th><th>Repeated</th></tr></thead><tbody></tbody></table></div>
   </section>
 </main>
-<div id="tip"></div>
+<div id="tip" role="tooltip"></div>
 <script>
 "use strict";
-const NS = "http://www.w3.org/2000/svg";
+const WIN = 400;
+const S = { hist: [], idx: -1, playing: true, follow: true, speed: 1, topics: [], mode: "", table: false };
 const $ = (id) => document.getElementById(id);
 const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
-const fmtB = (v) => v == null ? "-" : (v >= 1e6 ? (v / 1e6).toFixed(2) + " MB" : v >= 1e3 ? (v / 1e3).toFixed(1) + " kB" : Math.round(v) + " B");
-const W = 400;                 // window of the series and of the fidelity metrics
-const state = { steps: [], idx: -1, follow: true, playing: true, mode: "", U: null, timer: null, speed: 1, Ts: 0.125 };
-
-function el(tag, attrs, parent) {
-  const e = document.createElementNS(NS, tag);
+const kB = (v) => v == null || !isFinite(v) ? "–" : (Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(2) + " MB" : (v / 1e3).toFixed(1) + " kB");
+const kBc = (v) => v >= 1e6 ? (v / 1e6).toFixed(1) + " MB" : Math.round(v / 1e3) + " kB";
+const pct = (v) => v == null || !isFinite(v) ? "–" : (100 * v).toFixed(1) + "%";
+const fix3 = (v) => v == null || !isFinite(v) ? "–" : v.toFixed(3);
+const el = (tag, attrs, parent) => {
+  const e = document.createElementNS("http://www.w3.org/2000/svg", tag);
   for (const k in attrs) e.setAttribute(k, attrs[k]);
   if (parent) parent.appendChild(e);
   return e;
-}
-const levelColor = (p) => p === 2 ? css("--l2") : p === 1 ? css("--l1") : css("--l0");
+};
+const txt = (s, x, y, attrs, parent) => { const t = el("text", Object.assign({ x, y }, attrs || {}), parent); t.textContent = s; return t; };
 
-// ---------------------------------------------------------------- graph G(t)
-function drawGraph(g) {
-  const svg = $("graph");
-  svg.innerHTML = "";
-  const w = svg.clientWidth || 800, h = svg.clientHeight || 400;
-  const vessels = [...new Set(g.edges.map((e) => e.i).concat(g.vessels))].sort((a, b) => a - b);
-  const inM = new Set(g.vessels);
-  const gs = { x: w * 0.84, y: h / 2 };
-  const pos = {};
-  vessels.forEach((i, k) => { pos[i] = { x: w * 0.1, y: h * (k + 1) / (vessels.length + 1) }; });
-  const bmax = g.b || Math.max(1, ...g.edges.map((e) => e.d));
-  const L = g.L;
-  for (const e of g.edges) {
-    const a = pos[e.i]; if (!a) continue;
-    const off = (e.l - (L + 1) / 2) * Math.min(26, h / (vessels.length + 1) / L * 1.6);
-    const mx = (a.x + gs.x) / 2, my = (a.y + gs.y) / 2 + off * 2.2;
-    const d = `M${a.x},${a.y} Q${mx},${my} ${gs.x},${gs.y}`;
-    const out = !inM.has(e.i);
-    const col = out ? css("--out") : levelColor(e.p);
-    const width = 1.2 + 7 * Math.sqrt(Math.min(1, e.d / bmax));
-    const withheld = e.p === 0 || out;
-    const base = el("path", { d, fill: "none", stroke: col, "stroke-width": width, "stroke-opacity": withheld ? 0.6 : 0.28, "stroke-linecap": "butt" }, svg);
-    if (withheld) base.setAttribute("stroke-dasharray", "6 5");
-    const frac = e.d > 0 ? Math.min(1, e.r / e.d) : 0;
-    if (frac > 0 && !out) {
-      const top = el("path", { d, fill: "none", stroke: col, "stroke-width": width, "stroke-linecap": "butt" }, svg);
-      const len = top.getTotalLength();
-      top.setAttribute("stroke-dasharray", `${frac * len} ${len}`);
+/* ---------------------------------------------------------------- tooltip */
+const tip = $("tip");
+function showTip(ev, head, rows) {
+  tip.replaceChildren();
+  if (head) { const h = document.createElement("div"); h.className = "h"; h.textContent = head; tip.appendChild(h); }
+  for (const [color, value, label] of rows) {
+    const r = document.createElement("div"); r.className = "row";
+    const k = document.createElement("span"); k.className = "k"; k.style.background = color || "transparent";
+    const b = document.createElement("b"); b.textContent = value;
+    const s = document.createElement("span"); s.textContent = label;
+    r.append(k, b, s); tip.appendChild(r);
+  }
+  tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  let x = ev.clientX + 14, y = ev.clientY + 14;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - 14;
+  if (y + h > innerHeight - 8) y = ev.clientY - h - 14;
+  tip.style.left = x + "px"; tip.style.top = y + "px";
+}
+const hideTip = () => { tip.style.display = "none"; };
+
+/* ---------------------------------------------------------------- per-step quantities */
+function edgesOf(g, i) { return g.edges.filter((e) => e.i === i); }
+function admitted(g, i) { return edgesOf(g, i).reduce((s, e) => s + ((e.p || 0) > 0 ? e.d : 0), 0); }
+function received(g) { return g.edges.reduce((s, e) => s + (e.r || 0), 0); }
+function levels(g) {
+  const p = new Array(g.L).fill(null);
+  for (const e of g.edges) if (g.vessels.includes(e.i) && e.p != null) p[e.l - 1] = e.p;
+  return p;
+}
+function cover(g) { return g.y != null && g.C_hat != null ? g.y >= (g.U ?? 0.8) * g.C_hat : null; }
+function windowOf(k) { return S.hist.slice(Math.max(0, k - WIN + 1), k + 1); }
+
+function fidelity(win) {
+  let ape = 0, na = 0, cov = 0, nc = 0, dOk = 0, dN = 0, phiOk = 0, phiN = 0, late = 0, got = 0, num = 0, den = 0;
+  const state = S.topics.indexOf("state") + 1;
+  for (const g of win) {
+    if (g.y != null && g.C_hat != null && g.y > 0) { ape += Math.abs(g.y - g.C_hat) / g.y; na++; }
+    const c = cover(g); if (c != null) { cov += c ? 1 : 0; nc++; }
+    const inM = g.edges.filter((e) => g.vessels.includes(e.i));
+    const adm = inM.filter((e) => (e.p || 0) > 0);
+    if (g.vessels.length) {
+      phiN++;
+      phiOk += adm.every((e) => (e.fwd != null ? e.n >= e.fwd : e.r >= e.d - 1)) ? 1 : 0;
     }
-    const hit = el("path", { d, fill: "none", stroke: "transparent", "stroke-width": Math.max(10, width + 6) }, svg);
-    hit.addEventListener("mousemove", (ev) => tip(ev, edgeTip(g, e, out)));
-    hit.addEventListener("mouseleave", () => ($("tip").style.display = "none"));
+    if (state && (g.needed || []).includes(state))
+      for (const e of adm) if (e.l === state) { dN++; dOk += e.n === 1 && !e.dup ? 1 : 0; }
+    for (const e of g.edges) { late += e.late || 0; got += e.n || 0; }
+    for (const e of inM) if ((g.needed || []).includes(e.l)) { num += e.r || 0; den += e.d || 0; }
   }
-  for (const i of vessels) {
-    const p = pos[i];
-    const c = el("circle", { cx: p.x, cy: p.y, r: 15, fill: inM.has(i) ? css("--vessel") : css("--out") }, svg);
-    const tx = el("text", { x: p.x, y: p.y + 4, "text-anchor": "middle", fill: "#fff", "font-size": 11, "font-weight": 600 }, svg);
-    tx.textContent = "b" + i;
-    if (!inM.has(i)) { const t2 = el("text", { x: p.x + 20, y: p.y + 4, fill: css("--muted"), "font-size": 11 }, svg); t2.textContent = "outside M(t)"; }
-    c.addEventListener("mousemove", (ev) => tip(ev, vesselTip(g, i, inM.has(i))));
-    c.addEventListener("mouseleave", () => ($("tip").style.display = "none"));
+  return { mape: na ? ape / na : null, gamma: nc ? cov / nc : null, delta: dN ? dOk / dN : null,
+           phi: phiN ? phiOk / phiN : null, mu: got + late ? late / (got + late) : null, eta: den ? num / den : null };
+}
+
+/* ---------------------------------------------------------------- canvas helpers */
+function canvas(id) {
+  const c = $(id), r = c.getBoundingClientRect(), dpr = devicePixelRatio || 1;
+  const h = +c.getAttribute("height");
+  c.style.height = h + "px";
+  if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(r.width * dpr); c.height = Math.round(h * dpr); }
+  const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, r.width, h);
+  return { ctx, w: r.width, h };
+}
+function onFill(hex) {
+  const h = hex.replace("#", ""), c = [0, 2, 4].map((k) => parseInt(h.substr(k, 2), 16) / 255).map((v) => v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4));
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] > 0.35 ? "#0b0b0b" : "#ffffff";
+}
+function niceMax(v) { if (!(v > 0)) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p; return 10 * p; }
+function spark(id, vals, color) {
+  const { ctx, w, h } = canvas(id);
+  const v = vals.filter((x) => x != null);
+  if (v.length < 2) return;
+  const lo = Math.min(...v), hi = Math.max(...v), span = hi - lo || 1;
+  ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.lineJoin = "round"; ctx.beginPath();
+  let first = true;
+  vals.forEach((x, k) => { if (x == null) { first = true; return; } const px = k / (vals.length - 1) * (w - 4) + 2, py = h - 3 - (x - lo) / span * (h - 6); first ? ctx.moveTo(px, py) : ctx.lineTo(px, py); first = false; });
+  ctx.stroke();
+}
+
+/* ---------------------------------------------------------------- capacity chart */
+const CAP = { pad: { l: 60, r: 12, t: 10, b: 30 }, win: [] };
+function drawCap(win) {
+  CAP.win = win;
+  const { ctx, w, h } = canvas("ch-cap"), p = CAP.pad;
+  const pw = w - p.l - p.r, ph = h - p.t - p.b;
+  const n = Math.max(win.length, 2);
+  let ymax = 0;
+  for (const g of win) for (const v of [g.y, g.C_hat, sumAdm(g)]) if (v != null) ymax = Math.max(ymax, v);
+  ymax = niceMax(ymax * 1.05);
+  const X = (k) => p.l + k / (n - 1) * pw, Y = (v) => p.t + ph - v / ymax * ph;
+  ctx.font = "11px system-ui, sans-serif"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for (let q = 0; q <= 4; q++) {
+    const v = ymax * q / 4, y = Y(v);
+    ctx.strokeStyle = q === 0 ? css("--axis") : css("--grid"); ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(p.l, Math.round(y) + 0.5); ctx.lineTo(w - p.r, Math.round(y) + 0.5); ctx.stroke();
+    ctx.fillStyle = css("--muted"); ctx.fillText(kBc(v), p.l - 6, y);
   }
-  el("circle", { cx: gs.x, cy: gs.y, r: 22, fill: css("--gs"), stroke: "#8a6d00", "stroke-width": 1 }, svg);
-  const t0 = el("text", { x: gs.x, y: gs.y + 4, "text-anchor": "middle", "font-size": 12, "font-weight": 700, fill: "#3a2f00" }, svg);
-  t0.textContent = "0";
-  const lab = el("text", { x: gs.x, y: gs.y + 40, "text-anchor": "middle", "font-size": 12, fill: css("--ink") }, svg);
-  lab.textContent = "GS";
-  // topic legend along the right border, in the order of the edges
-  g.topics.forEach((name, k) => {
-    const y = 14 + k * 15;
-    const tt = el("text", { x: w - 6, y, "text-anchor": "end", "font-size": 11, fill: css("--muted") }, svg);
-    tt.textContent = `${k + 1}: ${name}`;
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  axisTime(ctx, win, X(0), X(win.length - 1), p.t + ph + 14);
+  // coverage strip
+  win.forEach((g, k) => { if (cover(g) === false) { ctx.fillStyle = css("--critical"); ctx.fillRect(X(k) - pw / n / 2, p.t + ph + 3, Math.max(1, pw / n), 6); } });
+  // admitted area
+  ctx.fillStyle = css("--s3"); ctx.globalAlpha = 0.18; ctx.beginPath(); ctx.moveTo(X(0), Y(0));
+  win.forEach((g, k) => ctx.lineTo(X(k), Y(sumAdm(g))));
+  ctx.lineTo(X(win.length - 1), Y(0)); ctx.closePath(); ctx.fill(); ctx.globalAlpha = 1;
+  const line = (get, color, alpha, width) => {
+    ctx.strokeStyle = color; ctx.globalAlpha = alpha; ctx.lineWidth = width; ctx.lineJoin = "round"; ctx.lineCap = "round"; ctx.beginPath();
+    let first = true;
+    win.forEach((g, k) => { const v = get(g); if (v == null) { first = true; return; } first ? ctx.moveTo(X(k), Y(v)) : ctx.lineTo(X(k), Y(v)); first = false; });
+    ctx.stroke(); ctx.globalAlpha = 1;
+  };
+  line((g) => received(g), css("--s3"), 1, 1.5);
+  line((g) => g.C_hat != null ? (g.U ?? 0.8) * g.C_hat : null, css("--s2"), 0.45, 2);
+  line((g) => g.C_hat, css("--s2"), 1, 2);
+  line((g) => g.y, css("--s1"), 1, 2);
+  // shown step and crosshair
+  const k = win.length - 1;
+  if (CAP.hover != null && CAP.hover < win.length) {
+    ctx.strokeStyle = css("--axis"); ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(Math.round(X(CAP.hover)) + 0.5, p.t); ctx.lineTo(Math.round(X(CAP.hover)) + 0.5, p.t + ph); ctx.stroke();
+  }
+  const g = win[k];
+  if (g && g.y != null) { ctx.fillStyle = css("--s1"); ctx.strokeStyle = css("--surface"); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(X(k), Y(g.y), 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke(); }
+  CAP.X = X; CAP.n = n; CAP.pw = pw;
+}
+function axisTime(ctx, win, x0, x1, y) {
+  if (!win.length) return;
+  const Ts = S.Ts || 0.125, span = (win[win.length - 1].t - win[0].t) * Ts;
+  ctx.fillStyle = css("--muted"); ctx.textBaseline = "top";
+  ctx.textAlign = "left"; ctx.fillText("−" + span.toFixed(1) + " s", x0, y);
+  ctx.textAlign = "center"; ctx.fillText("−" + (span / 2).toFixed(1) + " s", (x0 + x1) / 2, y);
+  ctx.textAlign = "right"; ctx.fillText("step " + win[win.length - 1].t, x1, y);
+}
+function sumAdm(g) { return g.vessels.reduce((s, i) => s + admitted(g, i), 0); }
+$("ch-cap").addEventListener("pointermove", (ev) => {
+  const r = ev.currentTarget.getBoundingClientRect(), x = ev.clientX - r.left, win = CAP.win;
+  if (!win.length) return;
+  const k = Math.max(0, Math.min(win.length - 1, Math.round((x - CAP.pad.l) / CAP.pw * (CAP.n - 1))));
+  CAP.hover = k; drawCap(win);
+  const g = win[k];
+  showTip(ev, "step " + g.t, [
+    [css("--s1"), kB(g.y), "y(t), measured"], [css("--s2"), kB(g.C_hat), "Ĉ(t), predicted"],
+    [css("--s2"), kB(g.C_hat != null ? (g.U ?? 0.8) * g.C_hat : null), "U·Ĉ(t)"],
+    [css("--s3"), kB(sumAdm(g)), "admitted Σ aᵢ"], [css("--s3"), kB(received(g)), "received Σ r"],
+    [null, cover(g) == null ? "–" : cover(g) ? "yes" : "no", "y(t) ≥ U·Ĉ(t)"]]);
+});
+$("ch-cap").addEventListener("pointerleave", () => { CAP.hover = null; hideTip(); drawCap(CAP.win); });
+
+/* ---------------------------------------------------------------- level raster */
+const LV = { pad: { l: 64, r: 12, t: 4, b: 18 }, win: [], order: [] };
+function drawLevels(win, g) {
+  LV.win = win;
+  const order = g && g.order && g.order.length ? g.order : S.topics.map((_, k) => k + 1);
+  LV.order = order;
+  const { ctx, w, h } = canvas("ch-lv"), p = LV.pad;
+  const pw = w - p.l - p.r, rows = order.length, rh = (h - p.t - p.b) / Math.max(rows, 1);
+  const n = Math.max(win.length, 1), cw = pw / n;
+  const col = [css("--lv0"), css("--lv1"), css("--lv2")];
+  ctx.font = "11px system-ui, sans-serif"; ctx.textBaseline = "middle"; ctx.textAlign = "right";
+  order.forEach((l, r) => {
+    const y = p.t + r * rh;
+    ctx.fillStyle = css("--ink-2");
+    const name = S.topics[l - 1] || String(l);
+    ctx.fillText(name + ((g && (g.needed || []).includes(l)) ? " ●" : "  "), p.l - 8, y + rh / 2);
+    win.forEach((s, k) => {
+      const lv = levels(s)[l - 1];
+      if (lv == null) return;
+      ctx.fillStyle = col[lv];
+      const x0 = Math.floor(p.l + k * cw), x1 = Math.max(x0 + 1, Math.floor(p.l + (k + 1) * cw));
+      ctx.fillRect(x0, Math.round(y + 1), x1 - x0, Math.round(rh - 2));
+    });
+  });
+  if (LV.hover != null) { ctx.strokeStyle = css("--ink"); ctx.globalAlpha = 0.5; ctx.lineWidth = 1; const x = Math.round(p.l + (LV.hover + 0.5) * cw) + 0.5; ctx.beginPath(); ctx.moveTo(x, p.t); ctx.lineTo(x, h - p.b); ctx.stroke(); ctx.globalAlpha = 1; }
+  ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = css("--muted");
+  axisTime(ctx, win, p.l, w - p.r, h - p.b + 4);
+  LV.cw = cw; LV.rh = rh;
+}
+$("ch-lv").addEventListener("pointermove", (ev) => {
+  const r = ev.currentTarget.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top, p = LV.pad;
+  if (!LV.win.length) return;
+  const k = Math.max(0, Math.min(LV.win.length - 1, Math.floor((x - p.l) / LV.cw)));
+  LV.hover = k; drawLevels(LV.win, S.hist[S.idx]);
+  const g = LV.win[k], lv = levels(g);
+  const names = ["withheld", "level 1", "level 2"], col = [css("--lv0"), css("--lv1"), css("--lv2")];
+  const row = Math.floor((y - p.t) / LV.rh);
+  const rows = LV.order.map((l) => [lv[l - 1] == null ? null : col[lv[l - 1]], lv[l - 1] == null ? "–" : names[lv[l - 1]], S.topics[l - 1]]);
+  if (row >= 0 && row < rows.length) rows[row][2] = "▸ " + rows[row][2];
+  showTip(ev, "step " + g.t + " · b(t) " + kB(g.b), rows);
+});
+$("ch-lv").addEventListener("pointerleave", () => { LV.hover = null; hideTip(); drawLevels(LV.win, S.hist[S.idx]); });
+
+/* ---------------------------------------------------------------- topology */
+function drawTopo(g) {
+  const svg = $("topo"); svg.replaceChildren();
+  const W = 360, H = 250, gx = 300, gy = H / 2;
+  const fleet = Array.from(new Set(g.edges.map((e) => e.i).concat(g.vessels))).sort((a, b) => a - b);
+  const dmax = Math.max(1, ...fleet.map((i) => edgesOf(g, i).reduce((s, e) => s + e.d, 0)));
+  fleet.forEach((i, k) => {
+    const y = fleet.length === 1 ? gy : 30 + k * (H - 60) / (fleet.length - 1), x = 54;
+    const inM = g.vessels.includes(i);
+    const dem = edgesOf(g, i).reduce((s, e) => s + e.d, 0), adm = admitted(g, i);
+    const rec = edgesOf(g, i).reduce((s, e) => s + (e.r || 0), 0);
+    const wd = 4 + 10 * dem / dmax;
+    const path = `M ${x + 14} ${y} C ${x + 120} ${y}, ${gx - 100} ${gy}, ${gx - 18} ${gy}`;
+    el("path", { d: path, fill: "none", stroke: css("--lv0"), "stroke-width": wd, "stroke-linecap": "round" }, svg);
+    if (inM && dem > 0) {
+      const pth = el("path", { d: path, fill: "none", stroke: css("--s1"), "stroke-width": wd, "stroke-linecap": "round" }, svg);
+      const len = pth.getTotalLength();
+      pth.setAttribute("stroke-dasharray", `${len * Math.min(1, rec / dem)} ${len}`);
+    }
+    const hit = el("path", { d: path, fill: "none", stroke: "transparent", "stroke-width": Math.max(24, wd + 12) }, svg);
+    hit.addEventListener("pointermove", (ev) => showTip(ev, "edge to vessel b" + i + (inM ? "" : " · outside M(t)"),
+      [[css("--lv0"), kB(dem), "demand Σ d"], [css("--lv2"), kB(adm), "admitted a" + i], [css("--s1"), kB(rec), "received Σ r"], [null, kB(g.b), "grant limit b(t)"]]));
+    hit.addEventListener("pointerleave", hideTip);
+    el("circle", { cx: x, cy: y, r: 14, fill: inM ? css("--s1") : css("--surface"), stroke: inM ? css("--surface") : css("--axis"), "stroke-width": 2 }, svg);
+    const t = txt("b" + i, x, y + 4, { "text-anchor": "middle" }, svg); t.style.fill = inM ? "#fff" : css("--muted"); t.style.fontWeight = 600;
+    txt(inM ? kB(rec) + " / " + kB(dem) : "outside M(t)", x, y + 28, { "text-anchor": "middle" }, svg);
+  });
+  el("circle", { cx: gx, cy: gy, r: 18, fill: css("--ink"), stroke: css("--surface"), "stroke-width": 2 }, svg);
+  const t0 = txt("GS", gx, gy + 4, { "text-anchor": "middle" }, svg); t0.style.fill = css("--surface"); t0.style.fontWeight = 600;
+  txt("vertex 0", gx, gy + 34, { "text-anchor": "middle" }, svg);
+}
+
+/* ---------------------------------------------------------------- vessel x topic matrix */
+function drawMatrix(g) {
+  const svg = $("mat"); svg.replaceChildren();
+  const order = g.order && g.order.length ? g.order : S.topics.map((_, k) => k + 1);
+  const fleet = Array.from(new Set(g.edges.map((e) => e.i))).sort((a, b) => a - b);
+  const W = svg.getBoundingClientRect().width || 360, lw = 34, th = 54, cw = Math.min(46, (W - lw) / order.length), ch = 30;
+  const H = th + fleet.length * (ch + 4) + 4;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H);
+  order.forEach((l, c) => {
+    const x = lw + c * cw + cw / 2;
+    const t = txt(S.topics[l - 1], 0, 0, { transform: `translate(${x + 3},${th - 6}) rotate(-40)` }, svg);
+    if ((g.needed || []).includes(l)) t.style.fontWeight = 600;
+  });
+  const col = [css("--lv0"), css("--lv1"), css("--lv2")];
+  fleet.forEach((i, r) => {
+    const y = th + r * (ch + 4);
+    txt("b" + i, 0, y + ch / 2 + 4, {}, svg);
+    order.forEach((l, c) => {
+      const e = g.edges.find((q) => q.i === i && q.l === l); if (!e) return;
+      const x = lw + c * cw;
+      const lv = g.vessels.includes(i) && e.p != null ? e.p : 0;
+      el("rect", { x: x + 1, y, width: cw - 2, height: ch, rx: 4, fill: col[lv] }, svg);
+      const frac = e.d > 0 ? Math.min(1, (e.r || 0) / e.d) : 0;
+      if (lv > 0) {
+        const ink = onFill(col[lv]);
+        el("rect", { x: x + 5, y: y + ch - 9, width: cw - 10, height: 5, rx: 2.5, fill: ink, opacity: 0.25 }, svg);
+        el("rect", { x: x + 5, y: y + ch - 9, width: Math.max(0, (cw - 10) * frac), height: 5, rx: 2.5, fill: ink }, svg);
+      }
+      if ((e.late || 0) + (e.dup || 0) > 0) { const w = txt("⚠", x + cw - 12, y + 13, {}, svg); w.style.fill = css("--critical"); }
+      const hit = el("rect", { x, y: y - 2, width: cw, height: ch + 4, fill: "transparent" }, svg);
+      hit.addEventListener("pointermove", (ev) => showTip(ev, `edge (${i}, ${l}) · ${S.topics[l - 1]}`, [
+        [col[lv], ["withheld", "level 1", "level 2"][lv], "p"], [null, kB(e.d), "demand d"], [null, kB(e.r), "received r"],
+        [null, e.d ? pct((e.r || 0) / e.d) : "–", "r/d"], [null, String(e.n ?? 0), "messages"],
+        [null, e.fwd == null ? "–" : String(e.fwd), "forwarded by the regulator"], [null, e.held == null ? "–" : String(e.held), "withheld by the regulator"],
+        [null, String(e.late || 0), "late"], [null, String(e.dup || 0), "repeated"]]));
+      hit.addEventListener("pointerleave", hideTip);
+    });
   });
 }
 
-function edgeTip(g, e, out) {
-  const name = g.topics[e.l - 1];
-  const need = g.needed.includes(e.l) ? "yes" : "no";
-  return `<b>edge (${e.i}, ${e.l})</b> b${e.i} &middot; ${name}<br>` +
-    (out ? "vessel outside M(t), forwards nothing<br>" : "") +
-    `d = ${fmtB(e.d)} &middot; p = ${e.p ?? "-"} &middot; in N(t): ${need}<br>` +
-    `r = ${fmtB(e.r)} (${e.d ? (100 * e.r / e.d).toFixed(0) : 0}% of d)<br>` +
-    `messages ${e.n}, repeated ${e.dup}, late ${e.late}` +
-    (e.fwd != null ? `<br>vessel regulator: forwarded ${e.fwd}, withheld ${e.held}` : "");
-}
-function vesselTip(g, i, inM) {
-  const a = g.edges.filter((e) => e.i === i && e.p > 0).reduce((s, e) => s + e.d, 0);
-  const r = g.edges.filter((e) => e.i === i).reduce((s, e) => s + e.r, 0);
-  return `<b>vessel ${i}</b> ${inM ? "in M(t)" : "outside M(t)"}<br>a<sub>i</sub> = ${fmtB(a)} &middot; b(t) = ${fmtB(g.b)}<br>received ${fmtB(r)}`;
-}
-function tip(ev, html) {
-  const t = $("tip"); t.innerHTML = html; t.style.display = "block";
-  t.style.left = Math.min(ev.clientX + 14, innerWidth - t.offsetWidth - 8) + "px";
-  t.style.top = Math.min(ev.clientY + 14, innerHeight - t.offsetHeight - 8) + "px";
-}
-
-// ---------------------------------------------------------------- side panel
-function drawSide(g) {
-  const cov = g.y != null && g.U != null && g.C_hat != null ? g.y >= g.U * g.C_hat : null;
-  $("v0").innerHTML =
-    row("y(t), measured", fmtB(g.y)) + row("Ĉ(t), predicted", fmtB(g.C_hat)) +
-    row("U · Ĉ(t)", g.U != null && g.C_hat != null ? fmtB(g.U * g.C_hat) : "-") +
-    row("K̂(t), phase 3", fmtB(g.K_hat)) + row("b(t), grant limit", fmtB(g.b)) +
-    row("m(t)", g.vessels.length) + row("U, α", `${g.U ?? "-"}, ${g.alpha ?? "-"}`) +
-    `<tr class="${cov === false ? "bad" : ""}"><td>y(t) ≥ U Ĉ(t)</td><td>${cov == null ? "-" : cov ? "yes" : "no"}</td></tr>`;
-  const ord = g.order.length ? g.order : g.topics.map((_, k) => k + 1);
-  const p0 = {};
-  for (const e of g.edges) if (e.p != null) p0[e.l] = e.p;
-  $("levels").innerHTML = "<tr><th>σ</th><th>topic</th><th>N(t)</th><th>p</th></tr>" +
-    ord.map((l, k) => `<tr><td>${k + 1}</td><td>${g.topics[l - 1]}</td><td>${g.needed.includes(l) ? "✓" : ""}</td>` +
-      `<td style="color:${levelColor(p0[l])};font-weight:600">${p0[l] ?? "-"}</td></tr>`).join("");
-  drawBars(g, ord);
-}
-const row = (k, v) => `<tr><td>${k}</td><td>${v}</td></tr>`;
-
-function drawBars(g, ord) {
-  const svg = $("bars"); svg.innerHTML = "";
-  const w = svg.clientWidth || 320, h = 180, pad = 22;
-  const vs = g.vessels;
-  if (!vs.length || !g.b) return;
-  const tot = vs.map((i) => g.edges.filter((e) => e.i === i).reduce((s, e) => s + e.d, 0));
-  const ymax = Math.max(g.b * 1.15, ...tot);
-  const sy = (v) => h - pad - (h - 2 * pad) * v / ymax;
-  const bw = Math.min(36, (w - 40) / vs.length * 0.6);
-  vs.forEach((i, k) => {
-    const x = 30 + k * (w - 40) / vs.length;
+/* ---------------------------------------------------------------- grant per vessel */
+function drawGrant(g) {
+  const svg = $("grant"); svg.replaceChildren();
+  const order = g.order && g.order.length ? g.order : S.topics.map((_, k) => k + 1);
+  const fleet = Array.from(new Set(g.edges.map((e) => e.i))).sort((a, b) => a - b);
+  const W = svg.getBoundingClientRect().width || 500, lw = 34, rw = 70, bh = 18, gap = 14, top = 18;
+  const H = top + fleet.length * (bh + gap) + 6;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H);
+  const dmax = Math.max(g.b || 0, ...fleet.map((i) => edgesOf(g, i).reduce((s, e) => s + e.d, 0)), 1);
+  const X = (v) => lw + v / dmax * (W - lw - rw);
+  fleet.forEach((i, r) => {
+    const y = top + r * (bh + gap);
+    txt("b" + i, 0, y + bh / 2 + 4, {}, svg);
+    const inM = g.vessels.includes(i);
+    const segs = order.map((l) => g.edges.find((q) => q.i === i && q.l === l)).filter(Boolean);
+    const total = segs.reduce((s, e) => s + e.d, 0);
+    el("rect", { x: X(0), y, width: Math.max(0, X(total) - X(0)), height: bh, rx: 4, fill: css("--lv0") }, svg);
+    // admitted topics first, in the order sigma (the sum a_i of Algorithm 1), then the withheld ones
+    const adm = segs.filter((e) => inM && (e.p || 0) > 0), out = segs.filter((e) => !(inM && (e.p || 0) > 0));
     let acc = 0;
-    // admitted topics in the order sigma_t, then the rejected topics above them in light color
-    for (const pass of [true, false]) for (const l of ord) {
-      const e = g.edges.find((q) => q.i === i && q.l === l); if (!e || !e.d) continue;
-      const adm = e.p > 0;
-      if (adm !== pass) continue;
-      const r = el("rect", { x, y: sy(acc + e.d), width: bw, height: Math.max(0.5, sy(acc) - sy(acc + e.d)),
-        fill: levelColor(e.p), "fill-opacity": adm ? 0.85 : 0.25, stroke: css("--panel"), "stroke-width": 0.6 }, svg);
-      r.addEventListener("mousemove", (ev) => tip(ev, edgeTip(g, e, false)));
-      r.addEventListener("mouseleave", () => ($("tip").style.display = "none"));
+    for (const e of adm.concat(out)) {
+      const lv = inM && e.p != null ? e.p : 0, x0 = X(acc), x1 = X(acc + e.d);
+      if (lv > 0 && x1 - x0 > 0) el("rect", { x: x0, y, width: Math.max(0.5, x1 - x0 - 2), height: bh, rx: 2, fill: lv === 2 ? css("--lv2") : css("--lv1") }, svg);
+      const hit = el("rect", { x: x0, y: y - 3, width: Math.max(4, x1 - x0), height: bh + 6, fill: "transparent" }, svg);
+      const upto = acc + e.d;
+      hit.addEventListener("pointermove", (ev) => showTip(ev, `b${i} · ${S.topics[e.l - 1]}`, [[lv ? (lv === 2 ? css("--lv2") : css("--lv1")) : css("--lv0"), kB(e.d), lv ? "demand, admitted at level " + lv : "demand, withheld"], [null, kB(upto), lv ? "aᵢ up to this topic" : "with the withheld demand"]]));
+      hit.addEventListener("pointerleave", hideTip);
       acc += e.d;
     }
-    const t = el("text", { x: x + bw / 2, y: h - 6, "text-anchor": "middle", "font-size": 11, fill: css("--muted") }, svg);
-    t.textContent = "b" + i;
+    txt(kB(admitted(g, i)), W - rw + 6, y + bh / 2 + 4, {}, svg);
   });
-  el("line", { x1: 24, x2: w - 4, y1: sy(g.b), y2: sy(g.b), stroke: css("--ink"), "stroke-dasharray": "5 3" }, svg);
-  const lb = el("text", { x: w - 4, y: sy(g.b) - 4, "text-anchor": "end", "font-size": 11, fill: css("--ink") }, svg);
-  lb.textContent = "b(t) = " + fmtB(g.b);
-}
-
-// ---------------------------------------------------------------- series and fidelity
-function drawSeries() {
-  const svg = $("chart"); svg.innerHTML = "";
-  const w = svg.clientWidth || 800, h = 150, pl = 60, pr = 6, pt = 6, pb = 18;
-  const hi = state.idx + 1, lo = Math.max(0, hi - W);
-  const S = state.steps.slice(lo, hi);
-  if (!S.length) return;
-  const vals = S.flatMap((g) => [g.y, g.C_hat]).filter((v) => v != null);
-  const ymax = Math.max(1, ...vals) * 1.08;
-  const sx = (k) => pl + (w - pl - pr) * k / Math.max(1, W - 1);
-  const sy = (v) => pt + (h - pt - pb) * (1 - v / ymax);
-  S.forEach((g, k) => {
-    if (g.y != null && g.U != null && g.C_hat != null && g.y < g.U * g.C_hat)
-      el("rect", { x: sx(k) - 0.5, y: pt, width: Math.max(1, (w - pl - pr) / W), height: h - pt - pb, fill: css("--bad") }, svg);
-  });
-  const line = (f, color, dash) => {
-    let d = "", pen = false;
-    S.forEach((g, k) => { const v = f(g); if (v == null) { pen = false; return; } d += (pen ? "L" : "M") + sx(k).toFixed(1) + "," + sy(v).toFixed(1); pen = true; });
-    el("path", { d, fill: "none", stroke: color, "stroke-width": 1.4, "stroke-dasharray": dash || "" }, svg);
-  };
-  line((g) => g.y, css("--y"));
-  line((g) => g.C_hat, css("--chat"));
-  line((g) => (g.U != null && g.C_hat != null ? g.U * g.C_hat : null), css("--chat"), "4 3");
-  for (const f of [0, 0.5, 1]) {
-    const v = ymax * f;
-    el("line", { x1: pl, x2: w - pr, y1: sy(v), y2: sy(v), stroke: css("--line") }, svg);
-    const t = el("text", { x: pl - 4, y: sy(v) + 4, "text-anchor": "end", "font-size": 10, fill: css("--muted") }, svg);
-    t.textContent = fmtB(v);
+  if (g.b != null) {
+    const x = Math.round(X(g.b)) + 0.5;
+    el("line", { x1: x, x2: x, y1: top - 6, y2: H - 4, stroke: css("--ink"), "stroke-width": 1 }, svg);
+    txt("b(t) " + kB(g.b), x + 4, top - 8, {}, svg);
   }
-  const t1 = el("text", { x: pl, y: h - 4, "font-size": 10, fill: css("--muted") }, svg); t1.textContent = "t = " + S[0].t;
-  const t2 = el("text", { x: sx(S.length - 1), y: h - 4, "text-anchor": "end", "font-size": 10, fill: css("--muted") }, svg); t2.textContent = "t = " + S[S.length - 1].t;
-  fidelity(S);
 }
 
-// Definition 15: MAPE, coverage gamma, message delivery ratio delta; eta over the topics of N(t)
-function fidelity(S) {
-  let ape = 0, na = 0, cov = 0, nc = 0, ok = 0, nd = 0, rN = 0, dN = 0;
-  for (const g of S) {
-    if (g.y > 0 && g.C_hat != null) { ape += Math.abs(g.y - g.C_hat) / g.y; na++;
-      if (g.U != null) { nc++; if (g.y >= g.U * g.C_hat) cov++; } }
-    const ls = g.topics.indexOf("state") + 1;
-    const inM = new Set(g.vessels);
-    for (const e of g.edges) {
-      if (!inM.has(e.i)) continue;
-      if (e.l === ls && e.p > 0 && g.needed.includes(ls)) { nd++; if (e.n === 1) ok++; }
-      if (g.needed.includes(e.l)) { rN += e.r; dN += e.d; }
+/* ---------------------------------------------------------------- fidelity and delivery */
+function drawFidelity(win) {
+  const f = fidelity(win);
+  const items = [["MAPE", pct(f.mape), "of Ĉ(t) against y(t)"], ["γ", fix3(f.gamma), "coverage"], ["δ", fix3(f.delta), "state delivery"],
+                 ["φ", fix3(f.phi), "full delivery"], ["η", fix3(f.eta), "needed bytes"], ["μ", pct(f.mu), "late messages"]];
+  const box = $("fid"); box.replaceChildren();
+  for (const [k, v, s] of items) { const d = document.createElement("div"); const b = document.createElement("b"); b.textContent = v; const sp = document.createElement("span"); sp.textContent = k + " · " + s; d.append(b, sp); box.appendChild(d); }
+  const rows = S.topics.map((name, k) => ({ name, l: k + 1, adm: 0, steps: 0, n: 0, held: 0, late: 0, dup: 0 }));
+  for (const g of win) {
+    const lv = levels(g);
+    rows.forEach((r) => { if (lv[r.l - 1] != null) { r.steps++; if (lv[r.l - 1] > 0) r.adm++; } });
+    for (const e of g.edges) { const r = rows[e.l - 1]; if (!r) continue; r.n += e.n || 0; r.held += e.held || 0; r.late += e.late || 0; r.dup += e.dup || 0; }
+  }
+  const nmax = Math.max(1, ...rows.map((r) => r.n));
+  const tb = $("deliv").tBodies[0]; tb.replaceChildren();
+  for (const r of rows) {
+    const tr = document.createElement("tr");
+    const cells = [r.name, r.steps ? pct(r.adm / r.steps) : "–", null, String(r.held), r.late ? String(r.late) : "0", String(r.dup)];
+    cells.forEach((c, k) => {
+      const td = document.createElement("td");
+      if (k === 2) { const b = document.createElement("span"); b.className = "bar"; b.style.width = Math.round(60 * r.n / nmax) + "px"; td.append(b, document.createTextNode(String(r.n))); }
+      else td.textContent = c;
+      if (k === 4 && r.late) td.style.color = css("--critical");
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  }
+}
+
+/* ---------------------------------------------------------------- tiles and table view */
+const ICON_OK = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="var(--good)"/><path d="M4 7.2l2 2 4-4.4" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round"/></svg>';
+const ICON_NO = '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="7" fill="var(--critical)"/><path d="M4.5 4.5l5 5M9.5 4.5l-5 5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/></svg>';
+function drawTiles(g, win) {
+  $("v-y").textContent = kB(g.y); $("v-c").textContent = kB(g.C_hat); $("v-b").textContent = kB(g.b);
+  $("f-b").textContent = "K̂(t) " + kB(g.K_hat) + " · U " + (g.U ?? "–") + " · α " + (g.alpha ?? "–");
+  const fleet = Array.from(new Set(g.edges.map((e) => e.i)));
+  $("v-m").textContent = g.vessels.length + " of " + fleet.length;
+  $("f-m").textContent = fleet.filter((i) => !g.vessels.includes(i)).map((i) => "b" + i + " missed phase 1").join(" · ") || "every vessel met phase 1";
+  const c = cover(g);
+  $("v-cov").innerHTML = c == null ? "–" : `<span class="status">${c ? ICON_OK : ICON_NO}${c ? "met" : "violated"}</span>`;
+  const f = fidelity(win); $("f-cov").textContent = "γ over the window " + fix3(f.gamma);
+  const lv = levels(g), n = lv.filter((x) => x > 0).length;
+  $("v-adm").textContent = n + " of " + g.L;
+  $("f-adm").textContent = lv.map((x, k) => x === 0 ? S.topics[k] : null).filter(Boolean).join(", ").replace(/^(.+)$/, "withheld: $1") || "no topic withheld";
+  spark("sp-y", win.slice(-120).map((s) => s.y), css("--s1"));
+  spark("sp-c", win.slice(-120).map((s) => s.C_hat), css("--s2"));
+}
+function drawTable(g) {
+  const tb = $("edges").tBodies[0]; tb.replaceChildren();
+  for (const e of g.edges) {
+    const tr = document.createElement("tr");
+    for (const c of [`(${e.i}, ${e.l})`, S.topics[e.l - 1], e.p ?? "–", kB(e.d), kB(e.r), e.d ? pct((e.r || 0) / e.d) : "–", e.n ?? 0, e.fwd ?? "–", e.held ?? "–", e.late || 0, e.dup || 0]) {
+      const td = document.createElement("td"); td.textContent = String(c); tr.appendChild(td);
     }
+    tb.appendChild(tr);
   }
-  $("mMape").textContent = na ? (100 * ape / na).toFixed(1) + "%" : "-";
-  $("mGamma").textContent = nc ? (cov / nc).toFixed(3) : "-";
-  $("mDelta").textContent = nd ? (ok / nd).toFixed(3) : "-";
-  $("mEta").textContent = dN ? (rN / dN).toFixed(3) : "-";
 }
 
-// ---------------------------------------------------------------- navigation
-function show(idx) {
-  if (!state.steps.length) return;
-  state.idx = Math.max(0, Math.min(state.steps.length - 1, idx));
-  const g = state.steps[state.idx];
-  $("slider").max = state.steps.length - 1; $("slider").value = state.idx;
-  $("hT").textContent = g.t; $("hM").textContent = g.vessels.length;
-  $("hY").textContent = fmtB(g.y); $("hC").textContent = fmtB(g.C_hat); $("hB").textContent = fmtB(g.b);
-  const cov = g.y != null && g.U != null && g.C_hat != null ? g.y >= g.U * g.C_hat : null;
-  $("hCov").textContent = cov == null ? "-" : cov ? "yes" : "no";
-  drawGraph(g); drawSide(g); drawSeries();
+/* ---------------------------------------------------------------- render loop */
+function render() {
+  if (S.idx < 0 || !S.hist.length) return;
+  const g = S.hist[S.idx], win = windowOf(S.idx);
+  document.querySelectorAll(".tnow").forEach((e) => (e.textContent = g.t));
+  document.querySelectorAll(".win").forEach((e) => (e.textContent = win.length));
+  $("clock").textContent = "step " + g.t + " · " + (S.idx + 1) + " of " + S.hist.length;
+  $("scrub").max = S.hist.length - 1; $("scrub").value = S.idx;
+  drawTiles(g, win); drawCap(win); drawLevels(win, g); drawTopo(g); drawMatrix(g); drawGrant(g); drawFidelity(win);
+  if (S.table) drawTable(g);
 }
-function push(g) {
-  state.steps.push(g);
-  if (state.steps.length > 20000) { state.steps.splice(0, 5000); state.idx -= 5000; }
-  if (state.follow && state.playing) show(state.steps.length - 1);
-  else $("slider").max = state.steps.length - 1;
-}
-function setPlaying(on) { state.playing = on; $("bPlay").textContent = on ? "Pause" : "Play"; schedule(); }
-function schedule() {
-  clearTimeout(state.timer);
-  if (!state.playing || state.follow) return;
-  state.timer = setTimeout(() => {
-    if (state.idx < state.steps.length - 1) { show(state.idx + 1); schedule(); }
-    else if (state.mode !== "replay") { state.follow = true; }
-    else setPlaying(false);
-  }, 1000 * state.Ts / state.speed);
-}
-$("bPlay").onclick = () => setPlaying(!state.playing);
-$("bPrev").onclick = () => { state.follow = false; setPlaying(false); show(state.idx - 1); };
-$("bNext").onclick = () => { state.follow = false; setPlaying(false); show(state.idx + 1); };
-$("slider").oninput = (e) => { state.follow = false; show(+e.target.value); schedule(); };
-$("speed").onchange = (e) => { state.speed = +e.target.value; schedule(); };
-$("bLive").onclick = () => { state.follow = true; setPlaying(true); show(state.steps.length - 1); };
-addEventListener("resize", () => show(state.idx));
+let raf = 0;
+const schedule = () => { if (!raf) raf = requestAnimationFrame(() => { raf = 0; render(); }); };
+function setPlaying(v) { S.playing = v; $("play").textContent = v ? "Pause" : "Play"; $("play").setAttribute("aria-pressed", String(v)); }
+function setFollow(v) { S.follow = v; $("follow").setAttribute("aria-pressed", String(v)); if (v) { S.idx = S.hist.length - 1; schedule(); } }
+function show(k) { S.idx = Math.max(0, Math.min(S.hist.length - 1, k)); schedule(); }
+window.setPlaying = setPlaying; window.show = show; window.state = S;
+
+$("play").onclick = () => setPlaying(!S.playing);
+$("prev").onclick = () => { setPlaying(false); setFollow(false); show(S.idx - 1); };
+$("next").onclick = () => { setPlaying(false); setFollow(false); show(S.idx + 1); };
+$("scrub").oninput = (e) => { setFollow(false); show(+e.target.value); };
+$("speed").onchange = (e) => (S.speed = +e.target.value);
+$("follow").onclick = () => setFollow(!S.follow);
+$("view").onclick = () => { S.table = !S.table; $("view").setAttribute("aria-pressed", String(S.table)); $("tables").classList.toggle("hidden", !S.table); schedule(); };
+$("theme").onclick = () => {
+  const r = document.documentElement, dark = r.dataset.theme ? r.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  r.dataset.theme = dark ? "light" : "dark"; try { localStorage.setItem("fdt-ve-theme", r.dataset.theme); } catch (e) {}
+  schedule();
+};
+try { const t = localStorage.getItem("fdt-ve-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+addEventListener("keydown", (e) => {
+  if (e.target.tagName === "SELECT" || e.target.tagName === "INPUT") return;
+  if (e.key === " ") { e.preventDefault(); setPlaying(!S.playing); }
+  if (e.key === "ArrowLeft") $("prev").click();
+  if (e.key === "ArrowRight") $("next").click();
+});
+addEventListener("resize", schedule);
 
 async function start() {
   const meta = await (await fetch("api/meta")).json();
-  state.mode = meta.mode; state.Ts = meta.Ts || 0.125;
-  $("mode").textContent = meta.mode + (meta.file ? " · " + meta.file.split("/").pop() : "");
-  $("wlen").textContent = W;
+  S.mode = meta.mode || "";
+  S.topics = meta.topics || [];
+  S.Ts = meta.Ts || 0.125;
+  const badge = $("mode"); badge.lastChild.textContent = S.mode;
   const hist = await (await fetch("api/dta")).json();
-  hist.forEach((g) => state.steps.push(g));
-  if (meta.mode === "replay") {
-    state.follow = false; $("bLive").style.display = "none"; $("conn").classList.add("on");
-    show(0); setPlaying(true); return;
+  S.hist = hist;
+  if (!S.topics.length && hist.length) S.topics = hist[0].topics;
+  if (S.mode === "replay") { setFollow(false); S.idx = 0; setPlaying(true); } else S.idx = hist.length - 1;
+  schedule();
+  if (S.mode !== "replay") {
+    const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + location.pathname.replace(/[^/]*$/, "") + "ws");
+    ws.onmessage = (m) => {
+      const o = JSON.parse(m.data); if (o.type !== "graph") return;
+      if (!S.topics.length) S.topics = o.g.topics;
+      S.hist.push(o.g); if (S.hist.length > 4000) { S.hist.shift(); if (!S.follow) S.idx = Math.max(0, S.idx - 1); }
+      if (S.follow && S.playing) S.idx = S.hist.length - 1;
+      schedule();
+    };
+    ws.onclose = () => { badge.lastChild.textContent = S.mode + " · disconnected"; badge.firstChild.style.background = css("--critical"); };
+  } else {
+    setInterval(() => { if (S.playing && S.idx < S.hist.length - 1) { S.idx = Math.min(S.hist.length - 1, S.idx + S.speed); schedule(); } }, 125);
   }
-  show(state.steps.length - 1);
-  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + location.pathname.replace(/[^/]*$/, "") + "ws");
-  ws.onopen = () => $("conn").classList.add("on");
-  ws.onclose = () => { $("conn").classList.remove("on"); setTimeout(() => location.reload(), 3000); };
-  ws.onmessage = (m) => { const o = JSON.parse(m.data); if (o.type === "graph") push(o.g); };
+  if (!S.hist.length) $("clock").textContent = "waiting for the first G(t)";
 }
 start();
 </script>
