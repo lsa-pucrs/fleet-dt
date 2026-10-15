@@ -1,7 +1,7 @@
 \documentclass[journal]{IEEEtran}
 \usepackage[utf8]{inputenc}\usepackage[T1]{fontenc}
 \usepackage{amsmath,amssymb,amsthm,booktabs,tabularx,algorithm,algpseudocode,graphicx,cite,url}
-\usepackage{tikz}\usetikzlibrary{arrows.meta,positioning,fit,calc,decorations.pathreplacing}
+\usepackage{tikz}\usetikzlibrary{arrows.meta,positioning,fit,calc,backgrounds,decorations.pathreplacing,decorations.pathmorphing}
 \newtheorem{definition}{Definition}\newtheorem{assumption}{Assumption}\newtheorem{lemma}{Lemma}\newtheorem{theorem}{Theorem}\newtheorem{corollary}{Corollary}\newtheorem{problem}{Problem}
 \begin{document}
 \title{Fleet-DT: A Network Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Vehicles}
@@ -12,17 +12,17 @@
 \input{sec2_background}
 \input{sec3_problem}
 \input{tables_v2}
-\begin{figure}[t]\centering\resizebox{\columnwidth}{!}{\input{fig_step}}\caption{Step $t$ of Fleet-DT on the clock of the GS.}\label{fig:step}\end{figure}
+\begin{figure}[t]\centering\resizebox{\columnwidth}{!}{\input{fig_step}}\caption{Step $t$ of Fleet-DT on the clock of the GS: the phases of the GS and of vessel $i$, the demands of the vessels at their offsets in phase~1, the tables of phase~2, the quiet interval $Q(t)$, the data window $W(t)$, and the end $e(t)$ of the busy period of the fleet.}\label{fig:step}\end{figure}
 \input{sec4_model}
-\begin{figure}[t]\centering\footnotesize\resizebox{\columnwidth}{!}{\input{fig_admission}}\caption{Example of Algorithm~\ref{alg:admission}.}\label{fig:alg}\end{figure}
+\begin{figure}[t]\centering\footnotesize\resizebox{\columnwidth}{!}{\input{fig_admission}}\caption{Example of Algorithm~\ref{alg:admission} with $M = 2$, $\mathcal{R} = \{\texttt{state}\}$, $\mathcal{N}_1(t) = \{\texttt{state}, \texttt{imu}\}$, $\mathcal{N}_2(t) = \{\texttt{state}, \texttt{imu}, \texttt{video}\}$, $\sigma_t = (\texttt{state}, \texttt{imu}, \texttt{gps}, \texttt{video}, \texttt{baro})$, and $K(t) = 40$~ms.}\label{fig:alg}\end{figure}
 \begin{figure*}[t]\centering\resizebox{0.85\textwidth}{!}{\input{fig_loop}}\caption{Closed loop of the DBA and the constructs of the DT of the network.}\label{fig:loop}\end{figure*}
 \input{sec5_platform}
-\begin{figure}[t]\centering\fbox{deployment diagram (v1 Fig. 4, to update)}\caption{Deployment.}\label{fig:deploy}\end{figure}
+\begin{figure*}[t]\centering\resizebox{0.8\textwidth}{!}{\input{fig_deploy}}\caption{Programs and devices of a platform of Fleet-DT. The data bridge (magenta) and the control bridge (red) of each vessel cross the radios and the IEEE~802.11 channel; the labels PR1 to PR9 refer to Table~\ref{tab:req}.}\label{fig:deploy}\end{figure*}
 \input{sec6_method}
 \section{Results}\label{sec:results}
 RESULTS (after the campaign). \newpage \mbox{} \newpage \mbox{}
 \section{Discussion}\label{sec:discussion}
 DISCUSSION. \newpage
 \input{back}
-\bibliographystyle{IEEEtran}\bibliography{refs_v2}
+\bibliographystyle{IEEEtran}\bibliography{refs_v2,refs_v1sel}
 \end{document}

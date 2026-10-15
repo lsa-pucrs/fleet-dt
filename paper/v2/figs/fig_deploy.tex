@@ -1,0 +1,32 @@
+% Fig. 4 (v2): programs and devices of a platform of Fleet-DT (UML deployment view, simplified).
+\begin{tikzpicture}[font=\scriptsize,
+  dev/.style={draw,thick,fill=#1,rounded corners=1pt,inner xsep=2.5mm,inner ysep=2.5mm},
+  cmp/.style={draw,fill=white,align=center,minimum height=6mm,inner sep=1.5pt,text width=#1},
+  cmp/.default=24mm,
+  ar/.style={-{Latex[length=1.5mm]},semithick},
+  dat/.style={line width=1.1pt,magenta!75!black}, ctl/.style={line width=1.1pt,red!70!black}]
+% vessel computer
+\node[cmp=27mm] (src) at (0,3.2) {Sources of the topics $\ell = 1, \dots, L$\\(\texttt{boat/b$i$/raw/$\ell$})};
+\node[cmp=30mm] (vb) at (0,1.6) {Vessel MQTT broker\\[1pt]\fbox{\parbox{27mm}{\centering vessel regulator and DTI program (plugin): PR1, PR3}}};
+\node[cmp] (sta) at (0,-0.6) {Radio: station};
+\begin{scope}[on background layer]
+\coordinate (vtop) at ($(src.north)+(0,5mm)$); \node[dev=blue!6,fit=(src)(vb)(vtop)] (vc) {}; \node[anchor=north west,font=\scriptsize\bfseries] at (vc.north west) {Vessel $i$ computer};
+\end{scope}
+% GS computer
+\node[cmp=30mm] (gsb) at (6.2,1.6) {GS MQTT broker\\(data and control bridges: PR5, PR8, PR9)};
+\node[cmp=30mm] (fdt) at (6.2,3.4) {Fleet-DT program: DTP, DTI, DTA, AS, VE};
+\node[cmp=20mm] (opc) at (9.3,3.4) {Operation control};
+\node[cmp=30mm] (ap) at (6.2,-0.6) {Radio: AP and monitor (PR6, PR7)};
+\begin{scope}[on background layer]
+\coordinate (gtop) at ($(fdt.north)+(0,5mm)$); \node[dev=yellow!10,fit=(gsb)(fdt)(opc)(gtop)] (gc) {}; \node[anchor=north west,font=\scriptsize\bfseries] at (gc.north west) {GS computer};
+\end{scope}
+% links
+\draw[ar] (src) -- (vb) node[midway,right] {raw messages};
+\draw[ar] (fdt) -- (gsb); \draw[ar] (opc) |- ([yshift=1.5mm]gsb.east);
+\draw[thick] (vb) -- (sta) node[midway,right] {Ethernet};
+\draw[thick] (gsb) -- (ap) node[midway,right] {Ethernet};
+\draw[decorate,decoration={zigzag,amplitude=1.2pt,segment length=4pt},thick] (sta) -- (ap) node[midway,below=3pt] {IEEE 802.11 channel (EDCA)};
+\draw[dat] ([yshift=1.2mm]vb.east) -- ([yshift=1.2mm]gsb.west) node[pos=0.5,above=1pt,fill=white,inner sep=1pt] {data bridge (AC\_BE)};
+\draw[ctl] ([yshift=-1.2mm]vb.east) -- ([yshift=-1.2mm]gsb.west) node[pos=0.5,below=1pt,fill=white,inner sep=1pt] {control bridge (UP 6)};
+\draw[ar,dashed] (ap.east) -| (11.0,4.6) -| node[pos=0.25,above] {busy time, frame records} (fdt.north);
+\end{tikzpicture}

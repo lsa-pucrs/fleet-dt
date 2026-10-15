@@ -16,7 +16,7 @@ In every step $t$, the offset $\theta_i(t)$ of the clock of each vessel $i$ to t
 The data window of step $t$ is the interval $W(t) = [w(t),\ t_0 + t\,T_{\mathrm{s}} - g)$ of the clock of the GS, with $w(t) = t_0 + (t-1)\,T_{\mathrm{s}} + T_1 + T_2 + \varepsilon$, $g = \varepsilon + d_{\mathrm{rx}}$, and the duration $T_W = T_3 - 2\varepsilon - d_{\mathrm{rx}}$, where $d_{\mathrm{rx}}$ bounds the time from the end of an exchange at the radio of the GS to the delivery of its message by the broker of the GS.
 \end{definition}
 
-By Assumption~\ref{as:clock}, each vessel starts phase~3 of step $t$ no later than $w(t)$ and ends step $t$ no earlier than the end of $W(t)$ on the clock of the GS. A message of step $t$ reaches its regulator no earlier than the start of phase~3 of step $t-1$ on the clock of its vessel (Section~\ref{subsec:protocol}), so the GS accepts a message of step $t$ within step $t$ at most $T_{\mathrm{s}} + T_3 + \varepsilon$ after its release. The fraction $(T_1 + T_2 + 2\varepsilon + d_{\mathrm{rx}})/T_{\mathrm{s}}$ of each step carries no data of the step, so a shorter step lowers this delay and raises this overhead.
+Fig.~\ref{fig:step} shows the phases, the data window, and the quiet interval $Q(t)$ (Section~\ref{subsec:pred}) of step $t$. By Assumption~\ref{as:clock}, each vessel starts phase~3 of step $t$ no later than $w(t)$ and ends step $t$ no earlier than the end of $W(t)$ on the clock of the GS. A message of step $t$ reaches its regulator no earlier than the start of phase~3 of step $t-1$ on the clock of its vessel (Section~\ref{subsec:protocol}), so the GS accepts a message of step $t$ within step $t$ at most $T_{\mathrm{s}} + T_3 + \varepsilon$ after its release. The fraction $(T_1 + T_2 + 2\varepsilon + d_{\mathrm{rx}})/T_{\mathrm{s}}$ of each step carries no data of the step, so a shorter step lowers this delay and raises this overhead.
 
 The broker of the GS also opens one control bridge to the broker of each vessel over a second TCP connection. The control bridge carries the topic \texttt{demand} (uplink) and the topics \texttt{levels} and \texttt{goals} (downlink). The hosts give the packets of the control bridge the IEEE~802.11 user priority~6 (AC\_VO) and the packets of the data bridge the user priority~0 (AC\_BE), so a table of phase~1 or~2 waits behind no frame of a data bridge in the queues of the radios and contends for the channel with the EDCA parameters of AC\_VO (Section~\ref{subsec:cong}).
 
@@ -105,7 +105,7 @@ The order $\pi_t$ places the units of $\mathcal{R}$ first, then the needed units
 \end{algorithmic}
 \end{algorithm}
 
-The test of line~\ref{alg:test} admits an output only after the previous output of the same topic and vessel, so the admitted outputs of each topic of each vessel form a prefix, and the count $k_{i,\ell}(t)$ identifies them.
+Fig.~\ref{fig:alg} shows an example of Algorithm~\ref{alg:admission}. The test of line~\ref{alg:test} admits an output only after the previous output of the same topic and vessel, so the admitted outputs of each topic of each vessel form a prefix, and the count $k_{i,\ell}(t)$ identifies them.
 
 \begin{lemma}\label{lem:greedy}
 Algorithm~\ref{alg:admission} returns the set $A(t)$ of Problem~\ref{prob:alloc} for the budget $K(t)$, among the sets whose admitted outputs of each topic of each vessel form a prefix.
