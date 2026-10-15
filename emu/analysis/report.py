@@ -94,7 +94,23 @@ def h1(runs):
             e[2] += 1
     pooled = {s: {"missing": e[0], "pairs": e[1], "runs": e[2], "fraction": e[0] / e[1]} for s, e in sorted(by.items())}
     bad_dem = [s for s, v in pooled.items() if v["fraction"] > 1e-3]
+    # Additional analysis (not part of the frozen H1 rule): the same pooling per method and over the methods
+    # that run the request-grant protocol (fleetdt, slotted, b4, b5); B1, B2, B3, and TDMA send data in phase 1.
+    bym, byp = {}, {}
+    for m in runs:
+        miss, pairs = g(m, "h1", "demand_missing"), g(m, "h1", "demand_pairs")
+        if not pairs:
+            continue
+        e = bym.setdefault((m.get("scenario"), m.get("method")), [0, 0, 0])
+        e[0] += miss; e[1] += pairs; e[2] += 1
+        if m.get("method") in ("fleetdt", "slotted", "b4", "b5"):
+            e = byp.setdefault(m.get("scenario"), [0, 0, 0])
+            e[0] += miss; e[1] += pairs; e[2] += 1
+    by_method = {"%s/%s" % k: {"missing": e[0], "pairs": e[1], "runs": e[2], "fraction": e[0] / e[1]} for k, e in sorted(bym.items())}
+    protocol = {s: {"missing": e[0], "pairs": e[1], "runs": e[2], "fraction": e[0] / e[1]} for s, e in sorted(byp.items())}
     return {"runs": len(runs), "clock_violations": bad_clock, "demand_pooled": pooled,
+            "demand_pooled_by_method": by_method, "demand_pooled_protocol_methods": protocol,
+            "demand_violations_protocol_methods": [s for s, v in protocol.items() if v["fraction"] > 1e-3],
             "demand_violations": bad_dem, "holds": bool(runs) and not bad_clock and not bad_dem,
             "max_clock_abs_vessels_s": max([g(m, "h1", "clock_max_abs_vessels") or 0 for m in runs] or [None]),
             "max_demand_miss_run": max([g(m, "h1", "demand_miss") or 0 for m in runs] or [None])}
