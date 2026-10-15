@@ -16,6 +16,7 @@ DIR/tab_*.tex (booktabs) and DIR/fig_*.pdf (matplotlib, one axis per figure).
 | H6 | E4: the what-if evaluation (fleetdt/as2/whatif.py) of the DTA of the E1 run of the same seed (S2, M = 4, Ts = 125 ms) for the measured E4 cells (M = 2; Ts = 62.5 and 250 ms) against the measured Fleet-DT runs: |delta f_bar| <= 0.02 and |delta nu| <= 0.05; M = 8 (--whatif DIR, the DTPs that matrix.py writes) is reported as a prediction without a measured counterpart |
 | H7 | E4 Fleet-DT runs: no state delay above Ts + T3 + eps and no age above 2 Ts + T3 + eps in the steps that meet the hypothesis of Lemma 2 |
 | H8 (addendum) | E3 Fleet-DT runs against the E5 runs (B6, IPACT with limited service) of the same seed, rho in {1.5, 2}, S1, S2, S4, S5: D_N (Fleet-DT larger) and the state miss ratio (Fleet-DT smaller); Wilcoxon two-sided with Holm over the 8 comparisons of each metric; the slotted variant against B6 as additional analysis |
+| H9 (addendum A2) | E6b (simulation), M in {8, 16}, S1 and S2, the sources of the M = 4 runs at rho = 1.5 on every vessel: Fleet-DT against B1, B3, B6, TDMA, paired by seed; D_N larger and state miss ratio smaller; Wilcoxon two-sided with Holm over the 16 comparisons of each metric; f_bar <= beta + 0.02 in every Fleet-DT run with F_R(T) = 0; tested only when emu/experiments/addendum/validate_sim.py passes |
 """
 import argparse
 import csv
@@ -432,6 +433,38 @@ def h8(runs):
     return out
 
 
+def h9(runs):
+    """Addendum A2 (emu/experiments/addendum/ADDENDUM.md): the scale study E6b (simulation), M in {8, 16},
+    S1 and S2, the sources of the M = 4 runs at rho = 1.5 on every vessel: Fleet-DT against B1, B3, B6, TDMA
+    paired by seed; and f_bar <= beta + 0.02 in every Fleet-DT run with F_R(T) = 0. Tested only when the
+    validation (validate_sim.py) passes."""
+    rr = [m for m in runs if m.get("exp") == "E6b"]
+    out = {}
+    for metric, fn, better in (("D_N", lambda m: m.get("D_N"), "larger"),
+                               ("state_miss", lambda m: m.get("state_miss"), "smaller")):
+        comps = []
+        for M in (8, 16):
+            for s in ("S1", "S2"):
+                for b in ("b1", "b3", "b6", "tdma"):
+                    xa, xb = paired(rr, lambda m: m["M"] == M and m["scenario"] == s and m["method"] == "fleetdt",
+                                    lambda m: m["M"] == M and m["scenario"] == s and m["method"] == b,
+                                    lambda m: m["seed"], fn)
+                    comps.append(("M=%d %s fleetdt-%s" % (M, s, b), xa, xb))
+        out[metric] = family(comps, better)
+    bad_f = []
+    for m in rr:
+        if m.get("method") != "fleetdt":
+            continue
+        fb, beta = g(m, "f_bar", "value"), m.get("beta", 0.05)
+        if g(m, "theorem1", "F_R") == 0 and fb is not None and fb > beta + 0.02:
+            bad_f.append({"run": m["name"], "f_bar": fb})
+    out["fbar_violations"] = bad_f
+    out["runs"] = len(rr)
+    out["holds"] = bool(rr) and not bad_f and all(r["n"] > 0 and r["supports"] for k in ("D_N", "state_miss")
+                                                   for r in out[k])
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("results", nargs="+")
@@ -442,7 +475,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     runs = load(a.results)
     hyp = {"H1": h1(runs), "H2": h2(runs), "H3": h3(runs), "H4": h4(runs), "H5": h5(runs), "H6": h6(runs, a.whatif),
-           "H7": h7(runs), "H8": h8(runs)}
+           "H7": h7(runs), "H8": h8(runs), "H9": h9(runs)}
     with open(os.path.join(a.out, "hypotheses.json"), "w") as f:
         json.dump(hyp, f, indent=1, default=float)
     keys = ["name", "exp", "method", "predictor", "scenario", "M", "Ts", "rho", "seed", "n_steps", "lag_discarded"]
