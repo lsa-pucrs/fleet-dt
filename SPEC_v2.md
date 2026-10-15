@@ -102,16 +102,20 @@ arrived before v_i(t−1).
 
 ### 4.2 Vessel log (`regulator`)
 
-`{"t", "have_tab", "late_us", "nsd_max", "outq_p1", "rx":[L], "rel":[L], "disc":[L], "xrel":[L], "tick_us_max"}`.
+`{"t", "have_tab", "late_us", "nsd_max", "outq_p1", "rx":[L], "xrx":[L], "rel":[L], "disc":[L], "xrel":[L], "tick_us_max"}`
+(`xrx`: content bytes of the messages counted in `rx`).
 
 ### 4.3 Monitor batch (PR6)
 
-Published every 5 ms of emulated time (and at the end of each phase by the AS request is not needed):
+Published every 5 ms of emulated time and, in addition, 2.5 ms after the end of Q(t) (start(t) + T1) and
+after the end of W(t) (emulator option `--flush`): a record joins the batch in which its exchange ends, so
+the lag lets the exchanges that cross these instants complete, and the AS (`--monitor-lag 0.0025`) waits
+for the batch that reaches start(t) + T1 + 2.5 ms before it computes b(t):
 
 ```json
 {"from_us": 1767225600123000, "to_us": 1767225600128000,
  "busy": [[start_us, end_us], ...],
- "fr": [[start_us, end_us, sta, dir, ip_len, rate_kbps, ok, kind], ...]}
+ "fr": [[start_us, end_us, sta, dir, ip_len, rate_kbps, ok, kind, ac], ...]}
 ```
 
 Times in µs on the GS clock (the emulator uses the host clock, which the GS VM follows; the offset of
@@ -119,7 +123,12 @@ the GS VM is part of the ground truth). `busy`: CCA-busy or TX intervals of the 
 per frame exchange that the AP sends or receives: `sta` = vessel index (0 = AP broadcast, −1 = outside
 the fleet), `dir` 0 uplink / 1 downlink, `ip_len` bytes of the IP packet (0 for non-IP), `end_us`
 includes the MAC acknowledgment, `ok` 1 when acknowledged, `kind` 0 data, 1 beacon, 2 management or
-control. The AS computes b(t), e(t), κ(t), R_i(t), R_{0,i}(t) (Defs. busy, capacity; Section V-B).
+control, `ac` the access category of a QoS data frame from its TID (ns-3 AcIndex: 0 AC_BE, 1 AC_BK, 2 AC_VI,
+3 AC_VO; −1 for the other frames). The frames of the data bridges are the data frames of a vessel with
+`ip_len` > 0 and `ac` 0 (AC_BE): the control bridges and the clock synchronization go with UP 6 (AC_VO,
+Section 5). T_own of Def. busy: the records with `ok` 1 and `sta` ≥ 0 (the exchanges of the AP with the
+vessels with their ACKs, and the group-addressed frames of the AP and of the vessels: beacons, CF-End).
+The AS computes b(t), e(t), κ(t), R_i(t), R_{0,i}(t) (Defs. busy, capacity; Section V-B).
 
 ### 4.4 AS record (`fleet/as`, DTA line)
 
@@ -127,12 +136,22 @@ control. The AS computes b(t), e(t), κ(t), R_i(t), R_{0,i}(t) (Defs. busy, capa
 "A":[[i, ℓ, k], ...], "cost_A", "p":{"<i>":[L]}, "k":{"<i>":[L]}, "f_prev", "kappa_prev",
 "e_prev", "z_prev", "FR", "mode"}` — `_prev` fields refer to step t−1, which the AS closes in phase 2 of t.
 
+The DTA file of the AS (`--log`) holds, besides the records of `fleet/as` with the extra fields of the
+analysis (type `as`), one line per accepted message of the topics of R (type `acc`: `i, l, t, seq, at`,
+first 16 bytes of the content as hex), one line per vessel log (type `vlog`), and one line per output of
+an output topic (type `out`: `i, l, o` (output index of the source), `n`, `got`, `x`, `t` (smallest step
+header), `first`, `at` (arrival of the last message), `complete`).
+
 ## 5. Bridges (GS broker)
 
 | Bridge | Vessel address | Topics | Notes |
 |---|---|---|---|
 | `b<i>-data` | vessel:1884 (dedicated listener) | `boat/b<i>/tx/# in 2` | cleansession true, set_tcp_nodelay true (patch 0002), max_inflight_messages 0 (no limit) |
 | `b<i>-ctl` | vessel:1883 | `demand in 1`, `regulator in 0`, `levels out 1`, `goals out 1` | priority: both hosts mark the control connection with socket priority 262 (UP 6) via nftables `meta priority` on port 1883 and DSCP EF |
+
+The clock synchronization (NTP, UDP port 123, both directions) gets the same marking as the control bridge
+(socket priority 262, DSCP EF; `system/nftables-fdt.nft`), so that the data bridges are the only AC_BE
+traffic of the fleet.
 
 Vessel and GS brokers: `set_tcp_nodelay true` globally. Routes to the peer: `quickack 1 rto_min 20ms`.
 `net.ipv4.tcp_slow_start_after_idle = 0`.
@@ -142,7 +161,7 @@ Vessel and GS brokers: `set_tcp_nodelay true` globally. Routes to the peer: `qui
 | Event | Action |
 |---|---|
 | raw message of topic ℓ | append to the collection of the current step (stream) or to the open output (by `out`); an output completes when n messages arrived; assign by Section 3 |
-| phase 1 start (vessel clock) | publish `demand` for step t (Section 4.1) and `regulator` for t−1 |
+| phase 1 start (vessel clock) + offset | publish `demand` for step t (Section 4.1) and `regulator` for t−1; vessel i (position i − 1 of `vessels`, i = 1..M) publishes i · (T1 − g1)/(M + 1) after start(t), with the guard g1 = ε + 2·T_tick (plugin options `p1_guard_us` and `p1_spacing_us` override the rule), so that the demands of hidden vessels do not collide; the arrival-curve part of the demand covers the rest T1 + T2 − offset of C_i(t) |
 | `levels` for step t arrives before v_i(t) | store the table |
 | v_i(t) | apply the table or the default table (R only, arrival bound over Ts) |
 | tick (period T_tick) in phase 3 | while admitted messages remain and `SIOCOUTQNSD(data socket) + released_this_tick < L_w`: release the next message in order (level 2 units, then level 1, each by `o` then output index), QoS from the DTP, payload `t, seq` + content |
@@ -150,7 +169,8 @@ Vessel and GS brokers: `set_tcp_nodelay true` globally. Routes to the peer: `qui
 
 Modes (plugin option `mode`): `fleetdt` (default), `b1` (forward everything at once, no table), `b2`
 (forward everything, DSCP per class: state → EF, telemetry → AF41, video → BE), `b3` (strict priority
-by `order`, no table, discard at step end), `b5` (Fleet-DT without policing and without discard),
+in the order σ_t, which the AS of mode b3 sends as field `o` of the table, every unit admitted, no policing,
+discard at step end; without the table the DTP `order`), `b5` (Fleet-DT without policing and without discard),
 `slotted` (release outside R only inside the slot in `levels` field `"slot":[start_us, end_us]`),
 `tdma` (overlay TDMA: fixed equal slots, no admission).
 

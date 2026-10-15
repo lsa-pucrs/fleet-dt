@@ -6,7 +6,11 @@ the designated vessels and rank right after the needed telemetry) and transit mo
 needed; the output topics rank last), switching every `period` steps.
 
   python -m fleetdt.as2.opctl --dtp dtp_v2.json --broker host:port [--period 80] [--survey-vessels all|1,3]
-         [--start survey|transit] [--lead 0.005]
+         [--start survey|transit] [--lead 0.005] [--t0-step S --seed N]
+
+Experiments (paper Section VI-C): --t0-step S counts the periods from step S, and --seed N designates, in
+each survey period k, one vessel drawn from the survey vessels by (N, k) alone, so the runs of one seed
+follow the same schedule.
 """
 from __future__ import annotations
 
@@ -25,10 +29,12 @@ log = logging.getLogger("fleetdt.as2.opctl")
 
 class Schedule:
     def __init__(self, dtp: DTP, period: int = 80, survey_vessels: Optional[Sequence[int]] = None,
-                 start: str = "survey", outputs: Optional[Sequence[str]] = None):
+                 start: str = "survey", outputs: Optional[Sequence[str]] = None, t0: int = 1,
+                 seed: Optional[int] = None):
         if start not in ("survey", "transit"):
             raise ValueError("start must be survey or transit")
         self.dtp, self.period, self.start = dtp, max(1, int(period)), start
+        self.t0, self.seed = int(t0), seed
         self.survey_vessels = list(dtp.vessels if survey_vessels is None else survey_vessels)
         names = [tp.name for tp in dtp.topics]
         self.outputs = list(outputs) if outputs is not None else [tp.name for tp in dtp.topics if tp.output]
@@ -37,9 +43,17 @@ class Schedule:
                 raise ValueError("unknown topic %r" % o)
 
     def mode(self, t: int) -> str:
-        k = ((t - 1) // self.period) % 2
+        k = ((t - self.t0) // self.period) % 2
         other = "transit" if self.start == "survey" else "survey"
         return self.start if k == 0 else other
+
+    def designated(self, t: int) -> List[int]:
+        """the vessels whose output topics are needed in the survey period of step t: all survey vessels,
+        or, with a seed, one of them drawn by (seed, period index)"""
+        if self.seed is None:
+            return self.survey_vessels
+        k = (t - self.t0) // self.period
+        return [random.Random("%d:survey:%d" % (self.seed, k)).choice(self.survey_vessels)]
 
     def plan(self, t: int) -> Tuple[List[str], Dict[str, List[str]], str]:
         """(sigma_t as names, {"<i>": N_i(t) as names}, mode)."""
@@ -51,8 +65,9 @@ class Schedule:
         if mode == "survey":
             head = req + [n for n in nd if n not in self.outputs] + [n for n in base if n in self.outputs and n not in req]
             needed = {}
+            des = self.designated(t)
             for i in dtp.vessels:
-                extra = self.outputs if i in self.survey_vessels else []
+                extra = self.outputs if i in des else []
                 needed[str(i)] = req + [n for n in nd if n not in self.outputs] + [o for o in extra if o not in req]
         else:
             head = req + [n for n in nd if n not in self.outputs]
@@ -76,7 +91,7 @@ def goals_payload(dtp: DTP, i: int, t: int, mode: str, rng: random.Random) -> by
 
 class OpCtl:
     def __init__(self, dtp: DTP, schedule: Schedule, host: str = "localhost", port: int = 1883, lead: float = 0.005,
-                 seed: int = 1):
+                 seed: int = 1, log_path: Optional[str] = None, first: Optional[int] = None):
         from .service import _client
         self.dtp, self.schedule, self.lead = dtp, schedule, lead
         self.client = _client("opctl")
@@ -85,15 +100,24 @@ class OpCtl:
         self._stop = threading.Event()
         self.rng = random.Random(seed)
         self.sent = 0
+        self.first = first
+        self.log = open(log_path, "a") if log_path else None
 
     def order_message(self, t: int) -> bytes:
         order, needed, mode = self.schedule.plan(t)
         return json.dumps({"t": t, "order": order, "needed": needed, "mode": mode}, separators=(",", ":")).encode()
 
+    def log_line(self, t: int) -> str:
+        order, needed, mode = self.schedule.plan(t)
+        return json.dumps({"t": t, "order": order, "needed": needed, "mode": mode, "at": time.time()},
+                          separators=(",", ":"))
+
     def run(self, steps: Optional[int] = None) -> None:
         """Publishes the order of step t at start(t) - lead and the goals every 1/goals_rate seconds."""
         dtp = self.dtp
         t = dtp.step_of(time.time() + self.lead) + 1
+        if self.first is not None:
+            t = max(t, self.first)
         goal_every = max(1, int(round(1.0 / (dtp.goals_rate * dtp.Ts)))) if dtp.goals_rate > 0 else 0
         done = 0
         while not self._stop.is_set() and (steps is None or done < steps):
@@ -102,6 +126,9 @@ class OpCtl:
             if rest > 0 and self._stop.wait(rest):
                 break
             self.client.publish("fleet/order", self.order_message(t), qos=1)
+            if self.log is not None:
+                self.log.write(self.log_line(t) + "\n")
+                self.log.flush()
             if goal_every and t % goal_every == 0:
                 mode = self.schedule.mode(t)
                 for i in dtp.vessels:
@@ -125,12 +152,17 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--start", default="survey", choices=("survey", "transit"))
     ap.add_argument("--lead", type=float, default=0.005, help="seconds before start(t) to publish the order")
     ap.add_argument("--steps", type=int, default=None)
+    ap.add_argument("--t0-step", type=int, default=1, help="step from which the periods count")
+    ap.add_argument("--first", type=int, default=None, help="first step to publish (default: the next one)")
+    ap.add_argument("--seed", type=int, default=None, help="draws one designated vessel per survey period")
+    ap.add_argument("--log", default=None, help="JSON lines of the published orders")
     a = ap.parse_args(argv)
     dtp = DTP.load(a.dtp)
     sv = None if a.survey_vessels == "all" else [int(x) for x in a.survey_vessels.split(",") if x]
-    sch = Schedule(dtp, a.period, sv, a.start)
+    sch = Schedule(dtp, a.period, sv, a.start, t0=a.t0_step, seed=a.seed)
     host, _, port = a.broker.partition(":")
-    oc = OpCtl(dtp, sch, host or "localhost", int(port or 1883), a.lead)
+    oc = OpCtl(dtp, sch, host or "localhost", int(port or 1883), a.lead, seed=a.seed or 1, log_path=a.log,
+               first=a.first)
     try:
         oc.run(a.steps)
     except KeyboardInterrupt:

@@ -32,6 +32,10 @@
  *   plugin_opt_data_ports 1884                  data bridge listener(s); b2 default 1884,1885,1886
  *                                               (BE, AF41, EF)
  *   plugin_opt_max_msgs 4096                    stream messages per topic and step
+ *   plugin_opt_p1_spacing_us -1                 phase 1 (demand) of the vessel i (position i - 1 of the DTP
+ *                                               list, i = 1..M) starts i * (T1 - g1) / (M + 1) after start(t)
+ *                                               (-1), or i * spacing (>= 0, override)
+ *   plugin_opt_p1_guard_us -1                   g1: -1 = eps + 2 T_tick of the DTP (the rule); >= 0 overrides
  *   plugin_opt_stats_s 10                       statistics line in the broker log (0: off)
  */
 #define _GNU_SOURCE
@@ -256,6 +260,7 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 		g.ds[k].fd = -1;
 	const char *dtp_path = NULL, *ports = NULL;
 	int max_msgs = 4096;
+	long long p1_spacing = -1, p1_guard = -1;
 	char err[256];
 	for (int i = 0; i < opt_count; i++) {
 		const char *k = opts[i].key, *v = opts[i].value;
@@ -273,6 +278,10 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 			ports = v;
 		else if (!strcmp(k, "max_msgs"))
 			max_msgs = atoi(v);
+		else if (!strcmp(k, "p1_spacing_us"))
+			p1_spacing = atoll(v);
+		else if (!strcmp(k, "p1_guard_us"))
+			p1_guard = atoll(v);
 		else if (!strcmp(k, "stats_s"))
 			g.stats_us = (int64_t)(atof(v) * 1e6);
 		else
@@ -298,6 +307,7 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 		mosquitto_log_printf(MOSQ_LOG_ERR, "fdt_regulator: out of memory");
 		return MOSQ_ERR_NOMEM;
 	}
+	fdt_reg_set_p1_offset_guard(&g.reg, p1_spacing, p1_guard);
 	mosquitto_plugin_set_info(identifier, "fdt_regulator", "v2");
 	if (mosquitto_callback_register(identifier, MOSQ_EVT_MESSAGE_IN, on_message_in, NULL, NULL) ||
 	    mosquitto_callback_register(identifier, MOSQ_EVT_MESSAGE_OUT, on_message_out, NULL, NULL) ||
@@ -307,8 +317,8 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 		return MOSQ_ERR_UNKNOWN;
 	mosquitto_log_printf(MOSQ_LOG_NOTICE,
 		"fdt_regulator v2: vessel %d, mode %s, L=%d, epoch=%.3f Ts=%.3f T1=%.3f T2=%.3f T_tick=%.4f L_w=%lld, "
-		"data_ports=%s", g.vessel, fdt_mode_name(g.mode), g.dtp.L, g.dtp.epoch, g.dtp.Ts, g.dtp.T1, g.dtp.T2,
-		g.dtp.T_tick, (long long)g.dtp.L_w_bytes, ports);
+		"data_ports=%s, phase 1 offset %lld us", g.vessel, fdt_mode_name(g.mode), g.dtp.L, g.dtp.epoch, g.dtp.Ts,
+		g.dtp.T1, g.dtp.T2, g.dtp.T_tick, (long long)g.dtp.L_w_bytes, ports, (long long)g.reg.p1_off_us);
 	return MOSQ_ERR_SUCCESS;
 }
 

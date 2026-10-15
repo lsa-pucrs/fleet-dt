@@ -64,8 +64,8 @@ def test_erp_ofdm_timing():
 
 def test_cost_bounds_frame_by_frame():
     """eq. (cost) >= the exact airtime of every frame of n messages, for random segmentations, rates
-    and both QoS levels. On an idle connection (one segment per message) the bound exceeds the count by
-    at most 55 %: N_seg = n + (x + n h_P)/MSS counts about 2n segments for messages near MSS."""
+    and both QoS levels, with N_seg = min{n + (x + n h_P)/MSS, n ceil((s_l + h_P)/MSS)} (Section V-C);
+    the first term alone counts about 2n segments for messages near MSS."""
     d = D.example()
     phy = Phy(d.phy)
     cost = Cost.from_dtp(d)
@@ -80,8 +80,9 @@ def test_cost_bounds_frame_by_frame():
         cuts = [rng.random() < 0.5 for _ in range(n)] if rng.random() < 0.7 else None
         acks = rng.choice([1.0, 0.5])
         ex = exact_airtime(phy, contents, tp.qos, tp.h_P, d.mss, d.h_T, d.h_A, Ri, R0, cuts, acks)
-        a = cost.a(sum(contents), n, tp.qos, Ri, R0, tp.h_P)
-        assert ex <= a + 1e-12, (tp.name, n, Ri, R0)
+        a1 = cost.a(sum(contents), n, tp.qos, Ri, R0, tp.h_P)
+        a = cost.a(sum(contents), n, tp.qos, Ri, R0, tp.h_P, tp.s)
+        assert ex <= a + 1e-12 and a <= a1 + 1e-15, (tp.name, n, Ri, R0)
         if cuts is None and acks == 1.0:
             worst = max(worst, a / ex)
     assert worst < 1.55

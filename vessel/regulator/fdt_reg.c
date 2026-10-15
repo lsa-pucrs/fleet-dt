@@ -154,6 +154,32 @@ int fdt_reg_init(struct fdt_reg *r, const struct fdt_dtp2 *d, int vessel, int mo
 	return 0;
 }
 
+void fdt_reg_set_p1_offset_guard(struct fdt_reg *r, int64_t spacing_us, int64_t guard_us)
+{
+	/* the vessel at position k (0-based) of the DTP list, i = k + 1, publishes its demand
+	 * i * (T1 - g1) / (M + 1) after start(t) (spacing_us < 0), or i * spacing_us (spacing_us >= 0);
+	 * g1 = eps + 2 T_tick (guard_us < 0, the rule of the paper) or guard_us (>= 0, an override) */
+	const struct fdt_dtp2 *d = r->d;
+	int M = d->M > 0 ? d->M : 1, pos = fdt2_vessel_pos(d, r->vessel);
+	if (pos < 0)
+		pos = 0;
+	if (guard_us < 0)
+		guard_us = d->eps_us + 2 * d->T_tick_us;
+	if (guard_us >= d->T1_us)
+		guard_us = 0;
+	if (spacing_us < 0)
+		r->p1_off_us = (int64_t)(pos + 1) * (d->T1_us - guard_us) / (M + 1);
+	else
+		r->p1_off_us = spacing_us * (pos + 1);
+	if (r->p1_off_us >= d->T1_us)
+		r->p1_off_us = d->T1_us / 2;
+}
+
+void fdt_reg_set_p1_offset(struct fdt_reg *r, int64_t spacing_us)
+{
+	fdt_reg_set_p1_offset_guard(r, spacing_us, -1);
+}
+
 void fdt_reg_free(struct fdt_reg *r)
 {
 	for (int k = 0; k < FDT_STEPS; k++)
@@ -234,6 +260,7 @@ int fdt_reg_on_raw(struct fdt_reg *r, int l, const void *payload, size_t len, in
 		if (!msg_new(&m, payload, len))
 			return -1;
 		s->tp[l].rx++;
+		s->tp[l].xrx += len;
 		s->nadm[l] = 1;
 		release(r, s, l, 0, &m);
 		r->pending = 0;
@@ -261,6 +288,7 @@ int fdt_reg_on_raw(struct fdt_reg *r, int l, const void *payload, size_t len, in
 		ts->nm++;
 		ts->x += len;
 		ts->rx++;
+		ts->xrx += len;
 		return 0;
 	}
 	/* output topic: header out:u32, k:u16, n:u16 */
@@ -328,6 +356,7 @@ int fdt_reg_on_raw(struct fdt_reg *r, int l, const void *payload, size_t len, in
 		} else {
 			ts->o[ts->no++] = *o;
 			ts->rx += o->n;
+			ts->xrx += o->x;
 		}
 		r->open[l][j] = r->open[l][--r->nopen[l]];
 		memset(&r->open[l][r->nopen[l]], 0, sizeof(struct fdt_out));
@@ -530,7 +559,7 @@ static void jp(struct jbuf *j, const char *fmt, ...)
 static void units_of_phase1(struct fdt_reg *r, struct fdt_step *s)
 {
 	const struct fdt_dtp2 *d = r->d;
-	int64_t rest = d->T1_us + d->T2_us;
+	int64_t rest = d->T1_us + d->T2_us - r->p1_off_us;   /* the rest of C_i(t) after the demand */
 	for (int l = 0; l < d->L; l++) {
 		const struct fdt2_topic *tp = &d->topic[l];
 		struct fdt_tstep *ts = &s->tp[l];
@@ -595,6 +624,7 @@ static void log_json(struct fdt_reg *r, struct jbuf *j, const struct fdt_step *s
 	jp(j, "{\"t\":%" PRId64 ",\"have_tab\":%s,\"late_us\":%" PRId64 ",\"nsd_max\":%" PRId64
 	   ",\"outq_p1\":%" PRId64, s->t, s->have_tab ? "true" : "false", s->late_v, s->nsd_max, s->outq_p1);
 	JARR(j, "rx", d->L, "%u", s->tp[l_].rx);
+	JARR(j, "xrx", d->L, "%" PRIu64, s->tp[l_].xrx);
 	JARR(j, "rel", d->L, "%u", s->rel[l_]);
 	JARR(j, "disc", d->L, "%u", s->disc[l_]);
 	JARR(j, "xrel", d->L, "%" PRIu64, s->xrel[l_]);
@@ -629,7 +659,7 @@ static void do_p1(struct fdt_reg *r, int64_t t, int64_t now_us)
 	if (prev)
 		close_step(r, prev);
 	struct fdt_step *s = step_get(r, t);
-	s->late_p1 = now_us - fdt2_start_us(d, t);
+	s->late_p1 = now_us - (fdt2_start_us(d, t) + r->p1_off_us);
 	if (s->late_p1 > r->st_.late_max_us)
 		r->st_.late_max_us = s->late_p1;
 	struct fdt_sock sk;
@@ -803,11 +833,27 @@ static void do_v(struct fdt_reg *r, int64_t t, int64_t now_us)
 				admitted[l] = 1;
 				add_topic(r, s, l, s->tb.k[l], police, dflt);
 			}
-	} else {   /* b3, tdma: every unit, strict priority by the DTP order */
+	} else {   /* b3, tdma: every unit, strict priority by the order "o" of the table of t when it
+		    * arrived before v(t) (b3: sigma_t), else by the DTP order */
+		struct fdt_table *tb = &r->tab[slot_of(t)];
+		const uint8_t *ord = NULL;
+		uint8_t dord[FDT_L_MAX];
+		if (tb->t == t) {
+			ord = tb->o;
+		} else {
+			for (int j = 0; j < d->L; j++)
+				dord[j] = (uint8_t)d->order[j];
+			ord = dord;
+		}
 		for (int j = 0; j < d->L; j++) {
-			int l = d->order[j];
+			int l = ord[j];
 			admitted[l] = 1;
 			add_topic(r, s, l, s->tp[l].no, 0, 0);
+		}
+		if (r->mode == FDT_MODE_B3 && tb->t == t) {
+			s->tb = *tb;
+			s->have_tab = 1;
+			r->st_.tab_ok++;
 		}
 		if (r->mode == FDT_MODE_TDMA) {
 			/* the slot of the table of t when it arrived before v(t) (the AS of mode tdma sends one),
@@ -856,11 +902,16 @@ static int64_t gate(struct fdt_reg *r, const struct fdt_step *s, const struct fd
 static int64_t pace(struct fdt_reg *r, int64_t now_us)
 {
 	const struct fdt_dtp2 *d = r->d;
-	int64_t nxt = fdt2_start_us(d, r->next_p1), tv = fdt2_v_us(d, r->next_v);
+	int64_t nxt = fdt2_start_us(d, r->next_p1) + r->p1_off_us, tv = fdt2_v_us(d, r->next_v);
 	if (tv < nxt)
 		nxt = tv;
 	if (immediate(r->mode))
 		return nxt;
+	/* a step ends at start(t + 1) for every vessel: the phase 1 offset of the demand (up to
+	 * M T1 / (M + 1)) does not extend the release of step t */
+	for (int k = 0; k < FDT_STEPS; k++)
+		if (r->st[k].t >= 0 && !r->st[k].closed && now_us >= fdt2_start_us(d, r->st[k].t + 1))
+			close_step(r, &r->st[k]);
 	/* releasing steps in increasing t: the applied step of phase 3 (and, in b5, older steps) */
 	struct fdt_step *order[FDT_STEPS];
 	int ns = 0;
@@ -961,7 +1012,7 @@ int64_t fdt_reg_tick(struct fdt_reg *r, int64_t now_us)
 	const struct fdt_dtp2 *d = r->d;
 	resync(r, now_us);
 	for (;;) {
-		int64_t tp1 = fdt2_start_us(d, r->next_p1), tv = fdt2_v_us(d, r->next_v);
+		int64_t tp1 = fdt2_start_us(d, r->next_p1) + r->p1_off_us, tv = fdt2_v_us(d, r->next_v);
 		if (tp1 <= tv && tp1 <= now_us) {
 			do_p1(r, r->next_p1, now_us);
 			r->next_p1++;

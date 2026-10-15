@@ -6,6 +6,10 @@ vessel broker:
 
 * release instants: output j of topic l is released at phase_l + j / r_l + U(0, J_l) on the host clock;
   phase_l is 0 (aligned with the step clock, --phase zero) or uniform in [0, 1 / r_l) (--phase random);
+  with --t0 (experiments), j counts from the instant t0 (the start of the first step of the run), every
+  random draw (phase, jitter, size) is a function of (--seed, vessel, topic, j) only, so two runs with the
+  same seed release the same outputs at the same instants relative to t0, and the phase of each topic of R
+  stays more than J_l + 2 ms away from v_i(t) = start(t) + T1 + T2 (Corollary state);
 * stream topics: each output is n_l messages of --stream-size bytes (max: s_l; uniform: U[s_l / 2, s_l]);
   the content starts with seq:u32 and the release time in microseconds (u64) when room allows;
 * output topics: the size of each output comes from a lognormal model (--median, --sigma) or from a
@@ -64,7 +68,8 @@ def load_dtp(path):
         d = json.load(f)
     epoch = d.get("epoch")
     return {"epoch": DEFAULT_EPOCH if epoch is None else float(epoch), "Ts": float(d["Ts"]),
-            "topics": [Topic(t) for t in d["topics"]]}
+            "T1": float(d.get("T1", 0.0)), "T2": float(d.get("T2", 0.0)),
+            "required": set(d.get("required", [])), "topics": [Topic(t) for t in d["topics"]]}
 
 
 def load_trace(path):
@@ -128,15 +133,25 @@ class Source(object):
             return tp.rate * self.a.load
         return tp.rate
 
-    def output_size(self, tp):
+    def draw(self, tp, j, what):
+        """random.Random of (seed, vessel, topic, j, what): the draws of output j do not depend on the
+        start time of the process (mode --t0)"""
+        return random.Random("%d:%d:%s:%d:%s" % (self.a.seed, self.a.vessel, tp.name, j, what))
+
+    def output_size(self, tp, j=None):
         cap = tp.n * (tp.s - OUT_HEADER.size)
         if self.trace is not None:
-            k = self.trace_pos.get(tp.name, 0)
-            size = self.trace[k % len(self.trace)]
-            self.trace_pos[tp.name] = k + 1
+            if j is not None:     # mode --t0: a seeded start position in the trace, then output j
+                off = random.Random("%d:%d:%s:trace" % (self.a.seed, self.a.vessel, tp.name)).randrange(len(self.trace))
+                size = self.trace[(off + j) % len(self.trace)]
+            else:
+                k = self.trace_pos.get(tp.name, 0)
+                size = self.trace[k % len(self.trace)]
+                self.trace_pos[tp.name] = k + 1
         else:
             median = self.a.median if self.a.median else 0.5 * cap
-            size = int(round(self.rng.lognormvariate(math.log(median), self.a.sigma)))
+            rng = self.draw(tp, j, "size") if j is not None else self.rng
+            size = int(round(rng.lognormvariate(math.log(median), self.a.sigma)))
         if self.a.load_mode == "size":
             size = int(round(size * self.a.load))
         size = max(1, size)
@@ -149,20 +164,25 @@ class Source(object):
 
     def messages(self, tp, j, now_us):
         """the messages of output j of topic tp and the logged size"""
+        seeded = self.a.t0 is not None
         if tp.kind == "stream":
             msgs, total = [], 0
+            rng = self.draw(tp, j, "stream") if seeded else self.rng
             for _ in range(tp.n):
-                size = self.stream_size(tp)
+                size = rng.randint(max(1, tp.s // 2), tp.s) if self.a.stream_size == "uniform" else tp.s
                 head = struct.pack("!IQ", j & 0xFFFFFFFF, now_us)
                 body = (head + bytes(max(0, size - len(head))))[:size]
                 msgs.append(body)
                 total += size
             return msgs, total, False, j
-        size, trunc = self.output_size(tp)
+        size, trunc = self.output_size(tp, j if seeded else None)
         chunk = tp.s - OUT_HEADER.size
         m = max(1, int(math.ceil(size / float(chunk))))
-        oid = self.out_id.get(tp.name, 0)
-        self.out_id[tp.name] = (oid + 1) & 0xFFFFFFFF
+        if seeded:
+            oid = j & 0xFFFFFFFF
+        else:
+            oid = self.out_id.get(tp.name, 0)
+            self.out_id[tp.name] = (oid + 1) & 0xFFFFFFFF
         msgs, left = [], size
         for k in range(m):
             part = min(chunk, left)
@@ -172,6 +192,20 @@ class Source(object):
             msgs.append(OUT_HEADER.pack(oid, k, m) + body)
         return msgs, size, trunc, oid
 
+    def phase(self, tp, period):
+        """seeded phase of topic tp relative to t0 (mode --t0)"""
+        rng = self.draw(tp, 0, "phase")
+        if self.a.phase == "zero":
+            return 0.0
+        d = self.dtp
+        if tp.name in d["required"] and abs(period - d["Ts"]) < 1e-9:
+            # keep the release (with its jitter) more than J + 2 ms away from v(t) = start + T1 + T2
+            lo = d["T1"] + d["T2"] + tp.jitter + 0.002
+            hi = d["T1"] + d["T2"] + d["Ts"] - 2 * tp.jitter - 0.002
+            if hi > lo:
+                return rng.uniform(lo, hi) % period
+        return rng.uniform(0, period)
+
     def run(self, client, stop, end):
         heap = []
         t0 = time.time()
@@ -180,6 +214,12 @@ class Source(object):
             if r <= 0 or (self.a.topics and tp.name not in self.a.topics):
                 continue
             period = 1.0 / r
+            if self.a.t0 is not None:
+                ph = self.a.t0 + self.phase(tp, period)
+                j0 = int(math.ceil((t0 + 0.05 - ph) / period))     # first output at least 50 ms ahead
+                base = ph + j0 * period
+                heapq.heappush(heap, (base + self.draw(tp, j0, "jit").uniform(0, tp.jitter), base, tp.name, tp, j0))
+                continue
             if self.a.phase == "zero":
                 base = self.dtp["epoch"] + math.ceil((t0 - self.dtp["epoch"]) / period) * period
             else:
@@ -199,11 +239,14 @@ class Source(object):
                 client.publish(topic, body, qos=0)
             self.count[name] = self.count.get(name, 0) + 1
             if self.log is not None:
-                rec = {"topic": name, "out": res[3], "n": len(res[0]), "bytes": res[1],
+                rec = {"topic": name, "out": res[3], "j": j, "n": len(res[0]), "bytes": res[1],
                        "t_us": now_us, "trunc": bool(res[2])}
                 self.log.write(json.dumps(rec, separators=(",", ":")) + "\n")
                 self.log.flush()
             nxt = nominal + 1.0 / self.rate(tp)
+            if self.a.t0 is not None:
+                heapq.heappush(heap, (nxt + self.draw(tp, j + 1, "jit").uniform(0, tp.jitter), nxt, name, tp, j + 1))
+                continue
             if time.time() - nxt > 1.0:   # far behind (suspended process): resynchronize
                 nxt = time.time()
             heapq.heappush(heap, (nxt + self.rng.uniform(0, tp.jitter), nxt, name, tp, j + 1))
@@ -228,6 +271,8 @@ def main(argv=None):
     ap.add_argument("--phase", choices=("random", "zero"), default="random")
     ap.add_argument("--duration", type=float, default=None, help="seconds (default: until SIGTERM)")
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--t0", type=float, default=None,
+                    help="start of the first step of the run (Unix seconds): seeded draws per output (experiments)")
     ap.add_argument("--log", default=None, help="JSON lines of the published outputs")
     a = ap.parse_args(argv)
     a.topics = set(n for n in a.topics.split(",") if n) if a.topics else None

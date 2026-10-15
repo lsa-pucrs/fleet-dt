@@ -98,6 +98,7 @@ struct fdt_tstep {
 	int no;
 	struct fdt_out o[FDT_U_MAX];   /* complete outputs in completion order */
 	uint32_t rx;           /* raw messages of the step (stream, or of the complete outputs) */
+	uint64_t xrx;          /* content bytes of the messages counted in rx */
 	uint32_t over;         /* raw messages dropped over the capacity */
 	uint32_t inc;          /* incomplete outputs dropped at v(t) */
 	uint32_t seq;          /* next sequence number of the topic in the step */
@@ -180,6 +181,7 @@ struct fdt_reg {
 	int nopen[FDT_L_MAX];
 	struct fdt_table tab[FDT_STEPS];
 	int64_t next_p1, next_v;
+	int64_t p1_off_us;     /* phase 1 of this vessel starts p1_off_us after start(t): i (T1 - eps - 2 T_tick) / (M + 1) */
 	int64_t pending;           /* released bytes the broker has not yet written (no MESSAGE_OUT yet) */
 	struct fdt_trk trk[FDT_DATA_MAX];
 	struct fdt_reg_stats st_;
@@ -190,6 +192,11 @@ struct fdt_reg {
 int fdt_reg_init(struct fdt_reg *r, const struct fdt_dtp2 *d, int vessel, int mode, int max_msgs,
                  int64_t now_us, const struct fdt_io *io);
 void fdt_reg_free(struct fdt_reg *r);
+/* offset of phase 1 after the step start (us); spacing_us < 0: the default, min(2000, T1 / (2M)) times the
+ * position of the vessel in the DTP list, so that the demands of the vessels do not start together (hidden
+ * vessels would collide); 0: every vessel at start(t) */
+void fdt_reg_set_p1_offset(struct fdt_reg *r, int64_t spacing_us);
+void fdt_reg_set_p1_offset_guard(struct fdt_reg *r, int64_t spacing_us, int64_t guard_us);
 /* raw message of topic l (0-based) */
 int fdt_reg_on_raw(struct fdt_reg *r, int l, const void *payload, size_t len, int64_t now_us);
 /* boat/b<i>/levels; returns 0 stored, 1 late (ignored), -1 malformed */

@@ -140,14 +140,15 @@ class MonitorStore:
     def busy_fraction(self, a: int, b: int, min_cover: float = 0.5) -> Dict:
         """b(t) = (T_busy(Q) - T_own(Q)) / |Q| over the part of Q = [a, b) that the batches cover.
         T_own: the time in which the channel is busy with a successful exchange of the AP with a vessel
-        (frame and MAC acknowledgment) or with a beacon of the AP."""
+        (frame and MAC acknowledgment) or with a group-addressed frame of the AP or of a vessel (beacons,
+        CF-End): the records with ok = 1 and sta >= 0 (sta = -1 marks the transmitters outside the fleet)."""
         cov, busy, fr = self._select(a, b)
         c = measure(cov)
         out = {"cover": c / (b - a) if b > a else 0.0, "b": None}
         if b <= a or c < min_cover * (b - a):
             return out
         bu = intersect(union(clip(busy, a, b)), cov)
-        own_m = ((fr[:, STA] >= 1) & (fr[:, OK] == 1)) | (fr[:, KIND] == 1) if fr.size else np.zeros(0, bool)
+        own_m = (fr[:, STA] >= 0) & (fr[:, OK] == 1) if fr.size else np.zeros(0, bool)
         own = union(clip(fr[own_m][:, [S, E]], a, b)) if fr.size else np.zeros((0, 2), np.int64)
         tb = measure(bu)
         to = measure(intersect(bu, own))
@@ -190,6 +191,41 @@ class MonitorStore:
             tf = float((np.clip(frac, 0.0, 1.0) * self.t_succ_rows(sel)).sum())
         out["T_fleet"] = tf
         out["kappa"] = tf / ((e - w) * 1e-6)
+        return out
+
+    def slot_capacity(self, a: int, b: int, step_end: int, i: Optional[int] = None) -> Dict:
+        """kappa_j(t) of a slot [a, b) of the slotted variant (Def. tdma): Def. capacity with the slot in
+        place of W(t). i: the vessel of the slot (its frames only; it holds bytes at the end of its slot
+        when an uplink frame of its data bridge starts in [b, step_end)); None: the shared slot (frames of
+        every vessel; e = the end of the last exchange that starts in the slot, at most b)."""
+        cov, _, fr = self._select(a, step_end)
+        out = {"e": None, "kappa": None, "T_fleet": 0.0}
+        if measure(cov) < 0.95 * (step_end - a):
+            return out
+        bm = self._bridge_mask(fr) if fr.size else np.zeros(0, bool)
+        if i is not None and fr.size:
+            bm &= fr[:, STA] == i
+        ok = fr[bm & (fr[:, OK] == 1)] if fr.size else fr
+        hold = False
+        if i is not None and fr.size:
+            hold = bool(np.any(bm & (fr[:, DIR] == 0) & (fr[:, S] >= b) & (fr[:, S] < step_end)))
+        inw = ok[(ok[:, S] >= a) & (ok[:, S] < b)] if ok.size else ok
+        if hold:
+            e = b
+        elif inw.size:
+            e = int(min(int(inw[:, E].max()), b))
+        else:
+            e = a
+        out["e"] = e
+        if e <= a:
+            return out
+        sel = ok[(ok[:, E] > a) & (ok[:, S] < e)] if ok.size else ok
+        tf = 0.0
+        if sel.size:
+            frac = (np.minimum(sel[:, E], e) - np.maximum(sel[:, S], a)) / np.maximum(1, sel[:, E] - sel[:, S])
+            tf = float((np.clip(frac, 0.0, 1.0) * self.t_succ_rows(sel)).sum())
+        out["T_fleet"] = tf
+        out["kappa"] = tf / ((e - a) * 1e-6)
         return out
 
     def t_succ_rows(self, rows: np.ndarray) -> np.ndarray:

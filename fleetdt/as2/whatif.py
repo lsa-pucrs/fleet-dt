@@ -85,7 +85,7 @@ def replay(cfg: DTP, seq: Sequence[Tuple[Optional[float], float]], rates: Option
             for u in arrival_units(cfg, i, range(cfg.L), cfg.Ts):
                 u.inR = u.l in cfg.R
                 Ri, R0i = rates[i]
-                u.c = cost.a(u.x, u.n, u.q, Ri, R0i, cfg.h_P(u.l))
+                u.c = cost.a(u.x, u.n, u.q, Ri, R0i, cfg.h_P(u.l), cfg.topics[u.l].s)
                 u.key = unit_key(u, t, cfg, cfg.R, N, rank)
                 units.append(u)
         forced = sorted([u for u in units if u.inR], key=lambda u: u.key)

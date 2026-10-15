@@ -14,6 +14,8 @@ sudo -E apt-get purge -y -q unattended-upgrades systemd-timesyncd > /dev/null 2>
 sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer fstrim.timer 2>/dev/null || true
 [ -x /opt/mosquitto-2.1/sbin/mosquitto ] || bash "$SRC/mosquitto/build.sh" "$DIST" /opt/mosquitto-2.1
 for b in /opt/mosquitto-2.1/bin/* /opt/mosquitto-2.1/sbin/*; do sudo ln -sf "$b" /usr/local/bin/; done
+# record the patches of this build, so that a run can check that the guests run exactly the repository patches
+( cd "$SRC/mosquitto/patches" && sha256sum *.patch ) | sudo tee /opt/mosquitto-2.1/patches.sha256 > /dev/null
 sudo install -d /usr/local/lib/fdt /etc/fleetdt /etc/chrony/conf.d
 sudo install -m 755 "$SRC"/emu/vm/guest/*.py /usr/local/lib/fdt/
 sudo install -m 644 "$SRC"/emu/vm/guest/*.service /etc/systemd/system/

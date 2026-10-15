@@ -1,0 +1,42 @@
+{
+ "name": "S1-m4-s1",
+ "M": 4,
+ "seed": 1,
+ "run": 1,
+ "rate": {
+  "manager": "constant",
+  "data": "ErpOfdmRate24Mbps",
+  "control": "ErpOfdmRate24Mbps",
+  "non_unicast": "ErpOfdmRate6Mbps"
+ },
+ "edca": {
+  "aifsn_ap": 1,
+  "cwmin_ap": 7,
+  "cwmax_ap": 1023,
+  "aifsn_sta": 3,
+  "cwmin_sta": 15,
+  "cwmax_sta": 1023
+ },
+ "tx_power_dbm": 20,
+ "mac_queue": {
+  "packets": 100,
+  "max_delay_ms": 500
+ },
+ "monitor_period_ms": 5,
+ "beacon_tu": 100,
+ "prio": {
+  "dscp": {
+   "46": 6,
+   "34": 5
+  },
+  "tcp_ports": {
+   "1883": 6
+  }
+ },
+ "channel": {
+  "model": "matrix",
+  "default_loss_db": 70,
+  "loss": []
+ },
+ "scenario_id": "S1"
+}

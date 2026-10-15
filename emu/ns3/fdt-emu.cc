@@ -34,6 +34,7 @@
 #include "ns3/wifi-phy-listener.h"
 
 #include <algorithm>
+#include <array>
 #include <arpa/inet.h>
 #include <atomic>
 #include <cerrno>
@@ -41,6 +42,7 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -71,6 +73,8 @@ WallNs()
 }
 
 int64_t g_originNs = 0; // host CLOCK_REALTIME at simulator time 0
+// actions that need the shift of the scenario time (run start - origin), run just before Simulator::Run
+std::vector<std::function<void(double)>> g_deferred;
 
 int64_t
 NowNs()
@@ -356,6 +360,7 @@ struct FrRec
 {
     int64_t start, end, frameEnd; // ns
     int sta, dir, ipLen, ok, kind;
+    int ac; // access category of a QoS data frame (ns-3 AcIndex: 0 BE, 1 BK, 2 VI, 3 VO), -1 otherwise
     uint32_t rate;
     Mac48Address tx; // transmitter of the frame (the receiver of its ACK)
     bool needAck, done;
@@ -415,6 +420,16 @@ class Monitor
         return k == 0 ? 0 : (k == 1 ? 1 : 2);
     }
 
+    // access category of the frame from the TID (= UP) of a QoS data frame (IEEE 802.11-2020 Table 10-1)
+    static int AcOf(const WifiMacHeader& h)
+    {
+        if (!h.IsQosData())
+        {
+            return -1;
+        }
+        return int(QosUtilsMapTidToAc(h.GetQosTid()));
+    }
+
     void Add(const FrameInfo& fi, int64_t start, int64_t frameEnd, uint32_t rate, bool apTx)
     {
         FrRec r{};
@@ -423,6 +438,7 @@ class Monitor
         r.end = frameEnd;
         r.rate = rate;
         r.kind = MonKind(fi.kind);
+        r.ac = AcOf(fi.hdr);
         r.ipLen = fi.ipLen;
         r.tx = fi.hdr.GetAddr2();
         if (apTx)
@@ -462,6 +478,7 @@ class Monitor
         r.frameEnd = r.end = end;
         r.rate = rate;
         r.kind = MonKind(fi.kind);
+        r.ac = AcOf(fi.hdr);
         r.ipLen = fi.ipLen;
         r.sta = StaOf(fi.hdr.GetAddr2());
         if (r.sta == 0)
@@ -497,6 +514,7 @@ class Monitor
         r.frameEnd = r.end = ackEnd;
         r.rate = rate;
         r.kind = 2;
+        r.ac = -1;
         r.sta = apTx ? StaOf(to) : -1;
         r.dir = apTx ? 1 : 0;
         r.ok = 1;
@@ -517,7 +535,48 @@ class Monitor
         }
     }
 
+    // periodic batch (every m_periodNs)
     void Emit()
+    {
+        Batch();
+        Simulator::Schedule(NanoSeconds(m_periodNs), &Monitor::Emit, this);
+    }
+
+    // extra batches at the end of Q(t) and at the end of W(t) of every step (paper Section V-B): host
+    // times stepEpoch + k Ts + offset, so that the AS has the records of Q(t) when phase 2 starts
+    int64_t m_stepNs = 0;
+    std::vector<int64_t> m_flushOffNs;
+    int64_t m_stepEpochSimNs = 0; // simulator time of a step start
+
+    void ScheduleFlushes()
+    {
+        if (m_stepNs <= 0 || m_flushOffNs.empty())
+        {
+            return;
+        }
+        int64_t now = NowNs();
+        for (int64_t off : m_flushOffNs)
+        {
+            int64_t k = (now - m_stepEpochSimNs - off) / m_stepNs;
+            int64_t t = m_stepEpochSimNs + off + k * m_stepNs;
+            while (t <= now)
+            {
+                t += m_stepNs;
+            }
+            Simulator::Schedule(NanoSeconds(t - now), &Monitor::Flush, this, off);
+        }
+    }
+
+    void Flush(int64_t off)
+    {
+        if (NowNs() > m_from)
+        {
+            Batch();
+        }
+        Simulator::Schedule(NanoSeconds(m_stepNs), &Monitor::Flush, this, off);
+    }
+
+    void Batch()
     {
         int64_t to = NowNs();
         std::string js;
@@ -578,7 +637,7 @@ class Monitor
         {
             snprintf(buf,
                      sizeof buf,
-                     "%s[%lld,%lld,%d,%d,%d,%u,%d,%d]",
+                     "%s[%lld,%lld,%d,%d,%d,%u,%d,%d,%d]",
                      first ? "" : ",",
                      (long long)HostUs(r.start),
                      (long long)HostUs(r.end),
@@ -587,7 +646,8 @@ class Monitor
                      r.ipLen,
                      r.rate,
                      r.ok,
-                     r.kind);
+                     r.kind,
+                     r.ac);
             js += buf;
             first = false;
         }
@@ -602,7 +662,6 @@ class Monitor
         }
         m_batches++;
         m_from = to;
-        Simulator::Schedule(NanoSeconds(m_periodNs), &Monitor::Emit, this);
     }
 };
 
@@ -1169,6 +1228,8 @@ main(int argc, char* argv[])
     double duration = 0, hardLimitMs = 50;
     bool vms = true, gt = true;
     std::string selftest;
+    std::string runStartUs; // host time (us) of scenario time 0 of the schedules and the waypoints
+    std::string flush;      // "TS_US:OFF1_US,OFF2_US": extra monitor batches at runStart + k Ts + off
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("scenario", "scenario JSON (emu/scenarios)", scenarioPath);
@@ -1182,6 +1243,14 @@ main(int argc, char* argv[])
     cmd.AddValue("gt", "write the ground truth gt.bin", gt);
     cmd.AddValue("gtStates", "PHY state records in gt.bin: ap, all or none", g_gtStates);
     cmd.AddValue("selftest", "RATE_BPS,SIZE: built-in uplink sources of every vessel (no VMs)", selftest);
+    cmd.AddValue("runStartUs",
+                 "host time (us) at which the scenario time 0 of the interference schedules and the waypoints "
+                 "falls (default: the start of the emulator)",
+                 runStartUs);
+    cmd.AddValue("flush",
+                 "TS_US:OFF_US[,OFF_US...]: extra monitor batches at the host times runStartUs + k TS + OFF "
+                 "(the ends of Q(t) and W(t))",
+                 flush);
     cmd.Parse(argc, argv);
 
     mj::Value sc = mj::ParseFile(scenarioPath);
@@ -1263,12 +1332,27 @@ main(int argc, char* argv[])
         const mj::Value& wp = pos[g_names[n]];
         if (wp.size() > 1 && wp[0].type == mj::Value::ARR)
         {
+            // the node waits at the first waypoint until its time (shifted by the run start), then moves
             Ptr<WaypointMobilityModel> m = CreateObject<WaypointMobilityModel>();
+            m->AddWaypoint(Waypoint(Seconds(0), Vector(wp[0][1].Num(), wp[0][2].Num(), wp[0][3].Num())));
+            std::vector<std::array<double, 4>> pts;
             for (size_t k = 0; k < wp.size(); k++)
             {
-                m->AddWaypoint(Waypoint(Seconds(wp[k][0].Num()),
-                                        Vector(wp[k][1].Num(), wp[k][2].Num(), wp[k][3].Num())));
+                pts.push_back({wp[k][0].Num(), wp[k][1].Num(), wp[k][2].Num(), wp[k][3].Num()});
             }
+            g_deferred.push_back([m, pts](double shift) {
+                double last = 0;
+                for (auto& p : pts)
+                {
+                    double at = shift + p[0];
+                    if (at <= last)
+                    {
+                        continue;
+                    }
+                    m->AddWaypoint(Waypoint(Seconds(at), Vector(p[1], p[2], p[3])));
+                    last = at;
+                }
+            });
             all.Get(n)->AggregateObject(m);
         }
         else
@@ -1634,8 +1718,14 @@ main(int argc, char* argv[])
             oo.SetAttribute("OnTime", StringValue("ns3::ConstantRandomVariable[Constant=1e9]"));
             oo.SetAttribute("OffTime", StringValue("ns3::ConstantRandomVariable[Constant=0]"));
             ApplicationContainer a = oo.Install(ext2.Get(tx));
-            a.Start(Seconds(S[k][0].Num()));
-            a.Stop(Seconds(S[k][1].Num()));
+            double t0 = S[k][0].Num(), t1 = S[k][1].Num();
+            a.Start(Seconds(1e6)); // replaced by the deferred start
+            a.Stop(Seconds(1e6));
+            g_deferred.push_back([a, t0, t1](double shift) {
+                ApplicationContainer b = a;
+                b.Start(Seconds(std::max(0.0, shift + t0)));
+                b.Stop(Seconds(std::max(0.0, shift + t1)));
+            });
         }
     }
 
@@ -1652,13 +1742,16 @@ main(int argc, char* argv[])
         const mj::Value& S = jam["schedule"];
         for (size_t k = 0; k < S.size(); k++)
         {
-            Simulator::Schedule(Seconds(S[k][0].Num()),
-                                &JamOn,
-                                wg,
-                                S[k][2].Num(),
-                                S[k][3].Num(),
-                                S[k][4].Num(10));
-            Simulator::Schedule(Seconds(S[k][1].Num()), &JamOff, wg);
+            double t0 = S[k][0].Num(), t1 = S[k][1].Num(), per = S[k][2].Num(), duty = S[k][3].Num(),
+                   pw = S[k][4].Num(10);
+            g_deferred.push_back([wg, t0, t1, per, duty, pw](double shift) {
+                if (shift + t1 <= 0)
+                {
+                    return;
+                }
+                Simulator::Schedule(Seconds(std::max(0.0, shift + t0)), &JamOn, wg, per, duty, pw);
+                Simulator::Schedule(Seconds(shift + t1), &JamOff, wg);
+            });
         }
     }
 
@@ -1688,11 +1781,39 @@ main(int argc, char* argv[])
     std::cout << "START nodes=" << g_names.size() << " M=" << g_M << " vms=" << vms
               << " basePort=" << basePort << " outdir=" << outdir << std::endl;
     g_originNs = WallNs();
+    double shift = runStartUs.empty() ? 0.0 : (std::stod(runStartUs) * 1e3 - double(g_originNs)) / 1e9;
+    for (auto& f : g_deferred)
+    {
+        f(shift);
+    }
+    if (!flush.empty())
+    {
+        auto colon = flush.find(':');
+        NS_ABORT_MSG_IF(colon == std::string::npos, "--flush=TS_US:OFF_US[,OFF_US...]");
+        mon.m_stepNs = int64_t(std::stod(flush.substr(0, colon)) * 1e3);
+        std::string rest = flush.substr(colon + 1);
+        size_t p0 = 0;
+        while (p0 < rest.size())
+        {
+            size_t p1 = rest.find(',', p0);
+            if (p1 == std::string::npos)
+            {
+                p1 = rest.size();
+            }
+            mon.m_flushOffNs.push_back(int64_t(std::stod(rest.substr(p0, p1 - p0)) * 1e3));
+            p0 = p1 + 1;
+        }
+        mon.m_stepEpochSimNs = int64_t(shift * 1e9);
+        mon.ScheduleFlushes();
+    }
+    std::cout << "SHIFT " << shift << " s (scenario time 0 at host us " << (runStartUs.empty() ? "origin" : runStartUs)
+              << ")" << std::endl;
     if (g_gt)
     {
         // header: magic, u32 length, JSON (origin, node names and MACs, record layout)
         std::ostringstream hj;
-        hj << "{\"origin_ns\":" << g_originNs << ",\"record_size\":" << sizeof(GtRec) << ",\"M\":" << g_M
+        hj << "{\"origin_ns\":" << g_originNs << ",\"shift_s\":" << shift << ",\"record_size\":" << sizeof(GtRec)
+           << ",\"M\":" << g_M
            << ",\"scenario\":\"" << scenarioPath << "\",\"nodes\":[";
         for (size_t n = 0; n < g_names.size(); n++)
         {
@@ -1724,7 +1845,8 @@ main(int argc, char* argv[])
     LagStats ls = g_realtime ? ComputeLag(g_lagUs, std::min<size_t>(g_lagUs.size() / 2, 300)) : LagStats();
     LagStats lsAll = g_realtime ? ComputeLag(g_lagUs, 0) : LagStats();
     std::ofstream sm(outdir + "/summary.json");
-    sm << "{\"origin_ns\":" << g_originNs << ",\"sim_end_s\":" << simEnd / 1e9 << ",\"M\":" << g_M
+    sm << "{\"origin_ns\":" << g_originNs << ",\"shift_s\":" << shift << ",\"sim_end_s\":" << simEnd / 1e9
+       << ",\"M\":" << g_M
        << ",\"nodes\":[";
     for (size_t n = 0; n < g_names.size(); n++)
     {

@@ -103,9 +103,13 @@ class Cost:
     def from_dtp(cls, dtp) -> "Cost":
         return cls(Phy(dtp.phy), dtp.mss, dtp.h_T, dtp.h_A)
 
-    def n_seg(self, x: float, n: float, h_P: float) -> float:
-        """N_seg(x, n) = n + (x + n h_P)/MSS (Section V-C)."""
-        return n + (x + n * h_P) / self.mss
+    def n_seg(self, x: float, n: float, h_P: float, s: Optional[float] = None) -> float:
+        """N_seg(x, n) = min{n + (x + n h_P)/MSS, n ceil((s + h_P)/MSS)} (Section V-C), with s the largest
+        content of one message of the topic (s_l); without s, the first term alone."""
+        v = n + (x + n * h_P) / self.mss
+        if s is not None:
+            v = min(v, n * math.ceil((s + h_P) / self.mss))
+        return v
 
     def per_seg(self, Ri: float, R0: float) -> float:
         p = self.phy
@@ -117,26 +121,28 @@ class Cost:
         p, hT, hA = self.phy, self.h_T, self.h_A
         return 3 * p.t_oh(R0) + 3 * p.t_oh(Ri) + 8.0 * (3 * hT + 2 * hA) / R0 + 8.0 * (3 * hT + hA) / Ri
 
-    def a(self, x: float, n: float, q: int, Ri: float, R0: float, h_P: float) -> float:
-        """a_i(x, n, q) of eq. (cost) for n messages with x bytes of content and the PUBLISH header h_P."""
+    def a(self, x: float, n: float, q: int, Ri: float, R0: float, h_P: float, s: Optional[float] = None) -> float:
+        """a_i(x, n, q) of eq. (cost) for n messages with x bytes of content and the PUBLISH header h_P, each
+        message with at most s bytes of content (s_l of the topic; None: the first term of N_seg alone)."""
         if n <= 0 and x <= 0:
             return 0.0
-        v = self.n_seg(x, n, h_P) * self.per_seg(Ri, R0) + 8.0 * (x + n * h_P) / Ri
+        v = self.n_seg(x, n, h_P, s) * self.per_seg(Ri, R0) + 8.0 * (x + n * h_P) / Ri
         if q == 2:
             v += n * self.ctl(Ri, R0)
         return v
 
-    def held(self, B: Dict, Ri: float, R0: float, n_pubrel: int = 0) -> float:
+    def held(self, B: Dict, Ri: float, R0: float, n_pubrel: int = 0, s_max: Optional[float] = None) -> float:
         """c^B_i: a_i applied to the held bytes with the QoS of each part, plus the QoS 2 control packets
         of n_pubrel messages whose PUBREL has not reached the GS broker. B holds socket bytes (MQTT
-        headers included), so h_P = 0 here."""
+        headers included), so h_P = 0 here, and s_max bounds one message with its header (the largest
+        s_l + h_P of the topics)."""
         x0, n0 = float(B.get("x0", 0)), float(B.get("n0", 0))
         x2, n2 = float(B.get("x2", 0)), float(B.get("n2", 0))
         if x0 > 0 and n0 <= 0:
             n0 = 1.0      # bytes without a whole message: at least one segment
         if x2 > 0 and n2 <= 0:
             n2 = 1.0
-        return (self.a(x0, n0, 0, Ri, R0, 0) + self.a(x2, n2, 2, Ri, R0, 0)
+        return (self.a(x0, n0, 0, Ri, R0, 0, s_max) + self.a(x2, n2, 2, Ri, R0, 0, s_max)
                 + max(0, int(n_pubrel)) * self.ctl(Ri, R0))
 
 

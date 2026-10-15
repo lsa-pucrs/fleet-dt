@@ -1,0 +1,161 @@
+{
+ "M": 8,
+ "Ts": 0.125,
+ "scenario": "S2",
+ "rho": 1.5,
+ "dtp": {
+  "epoch": null,
+  "Ts": 0.125,
+  "T1": 0.02,
+  "T2": 0.01,
+  "eps": 0.002,
+  "d_rx": 0.002,
+  "d_m": 0.001,
+  "T_tick": 0.001,
+  "L_w": 16384,
+  "B_cap": 1048576,
+  "T_min": 0.005,
+  "beta": 0.05,
+  "gamma": 0.05,
+  "alpha1": 0.5,
+  "lambda": 0.75,
+  "phy": {
+   "slot": 9e-06,
+   "sifs": 1e-05,
+   "t_pre": 1.6e-05,
+   "t_sig": 4e-06,
+   "t_sym": 4e-06,
+   "t_se": 6e-06,
+   "h_mac": 38,
+   "aifsn_sta": 3,
+   "cwmin_sta": 15,
+   "cwmax_sta": 1023,
+   "m_b": 6,
+   "aifsn_ap": 1,
+   "cwmin_ap": 7,
+   "cwmax_ap": 1023,
+   "basic_rates": [
+    6000000.0,
+    12000000.0,
+    24000000.0
+   ],
+   "rate_init": 24000000.0
+  },
+  "tcp": {
+   "mss": 1448,
+   "h_T": 80
+  },
+  "mqtt": {
+   "h_A": 4
+  },
+  "vessels": [
+   1,
+   2,
+   3,
+   4,
+   5,
+   6,
+   7,
+   8
+  ],
+  "topics": [
+   {
+    "name": "state",
+    "rate": 8.0,
+    "jitter": 0.002,
+    "n": 1,
+    "s": 48,
+    "kind": "stream",
+    "qos": 2
+   },
+   {
+    "name": "imu",
+    "rate": 32,
+    "jitter": 0.002,
+    "n": 1,
+    "s": 48,
+    "kind": "stream",
+    "qos": 0
+   },
+   {
+    "name": "gps",
+    "rate": 8,
+    "jitter": 0.002,
+    "n": 1,
+    "s": 80,
+    "kind": "stream",
+    "qos": 0
+   },
+   {
+    "name": "baro",
+    "rate": 8,
+    "jitter": 0.002,
+    "n": 1,
+    "s": 32,
+    "kind": "stream",
+    "qos": 0
+   },
+   {
+    "name": "power",
+    "rate": 8,
+    "jitter": 0.002,
+    "n": 1,
+    "s": 40,
+    "kind": "stream",
+    "qos": 0
+   },
+   {
+    "name": "mag",
+    "rate": 16,
+    "jitter": 0.002,
+    "n": 1,
+    "s": 40,
+    "kind": "stream",
+    "qos": 0
+   },
+   {
+    "name": "video",
+    "rate": 7.104,
+    "jitter": 0.01,
+    "n": 13,
+    "s": 1400,
+    "kind": "output",
+    "qos": 0
+   }
+  ],
+  "required": [
+   "state"
+  ],
+  "goals": {
+   "rate": 1,
+   "s": 200
+  },
+  "order": [
+   "state",
+   "imu",
+   "gps",
+   "video",
+   "baro",
+   "power",
+   "mag"
+  ],
+  "needed": [
+   "state",
+   "imu",
+   "gps"
+  ]
+ },
+ "rho_setting": {
+  "quality": 70,
+  "trace": "emu/traces/water-sbs-q70-s0p5.txt",
+  "rate": 7.104,
+  "n": 13,
+  "kappa_sat": 0.6885429267286829,
+  "T_W": 0.089,
+  "c_streams": 0.004176166666666667,
+  "c_frame": 0.00823660966666671,
+  "target": 0.09192048071827916,
+  "R_up": 24000000.0,
+  "R_down": 24000000.0
+ }
+}

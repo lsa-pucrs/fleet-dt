@@ -1,0 +1,28 @@
+{
+ "eval": [
+  1001,
+  1002,
+  1003,
+  1004,
+  1005,
+  1006,
+  1007,
+  1008,
+  1009,
+  1010,
+  1011,
+  1012
+ ],
+ "calibration_E0": [
+  9001,
+  9002,
+  9003,
+  9004
+ ],
+ "saturation": [
+  9101,
+  9102
+ ],
+ "order_seed": 20261015,
+ "scenario_seed_rule": "each run: scengen.make(S, M, seed) (emu/scenarios/gen.py); the sources draw with --seed = the run seed (vessel/publishers/fdt_source.py)"
+}

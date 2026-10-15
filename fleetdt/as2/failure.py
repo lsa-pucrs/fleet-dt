@@ -15,6 +15,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 TX_RE = re.compile(r"^boat/b(\d+)/tx/([^/]+)$")
 HDR = struct.Struct("!IH")
+OUT_HDR = struct.Struct("!IHH")     # out:u32, k:u16, n:u16 at the start of the content of an output topic
 
 
 @dataclass
@@ -33,7 +34,8 @@ class Acceptor:
     (i, l, t, seq, at, first `prefix` bytes of the content as hex)."""
 
     def __init__(self, dtp, log_topics: Optional[Iterable[int]] = None,
-                 log: Optional[Callable[[Tuple], None]] = None, prefix: int = 16):
+                 log: Optional[Callable[[Tuple], None]] = None, prefix: int = 16,
+                 out_log: Optional[Callable[[Dict], None]] = None):
         self.dtp = dtp
         self.lock = threading.Lock()
         self.e: Dict[Tuple[int, int, int], EdgeAcc] = {}
@@ -42,6 +44,12 @@ class Acceptor:
         self.prefix = prefix
         self.bad = 0
         self.unknown = 0
+        # outputs of the output topics, by (vessel, topic, output index of the source): one "out" record
+        # per output when its last message arrives (or, incomplete, when it is pruned), so that the
+        # analysis finds the outputs that the GS accepts complete, independent of the step header
+        self.out_log = out_log
+        self.out_topics = set(tp.index for tp in dtp.topics if tp.output)
+        self.outs: Dict[Tuple[int, int, int], Dict] = {}
 
     def on_message(self, topic: str, payload: bytes, at: float) -> Optional[Tuple]:
         m = TX_RE.match(topic)
@@ -72,7 +80,30 @@ class Acceptor:
                 e.x_late += x
         if self.log is not None and l in self.log_topics:
             self.log((i, l, t, seq, at, bytes(payload[HDR.size:HDR.size + self.prefix]).hex()))
+        if self.out_log is not None and l in self.out_topics and len(payload) >= HDR.size + OUT_HDR.size:
+            oid, k, n = OUT_HDR.unpack_from(payload, HDR.size)
+            done = None
+            with self.lock:
+                o = self.outs.get((i, l, oid))
+                if o is None:
+                    o = self.outs[(i, l, oid)] = {"n": n, "k": set(), "x": 0, "t": t, "t_max": t, "first": at,
+                                                  "last": at}
+                if k not in o["k"]:
+                    o["k"].add(k)
+                    o["x"] += x
+                    o["last"] = max(o["last"], at)
+                    o["t"] = min(o["t"], t)
+                    o["t_max"] = max(o["t_max"], t)
+                if len(o["k"]) >= o["n"]:
+                    done = self.outs.pop((i, l, oid))
+            if done is not None:
+                self._emit_out(i, l, oid, done, True)
         return (i, l, t, seq, intime)
+
+    def _emit_out(self, i: int, l: int, oid: int, o: Dict, complete: bool) -> None:
+        self.out_log({"type": "out", "i": i, "l": l, "o": oid, "n": o["n"], "got": len(o["k"]), "x": o["x"],
+                      "t": o["t"], "t_max": o["t_max"], "first": o["first"], "at": o["last"],
+                      "complete": complete})
 
     def get(self, i: int, l: int, t: int) -> EdgeAcc:
         with self.lock:
@@ -91,9 +122,15 @@ class Acceptor:
         return out
 
     def prune(self, t_min: int) -> None:
+        old = []
         with self.lock:
             for k in [k for k in self.e if k[2] < t_min]:
                 del self.e[k]
+            for k in [k for k, o in self.outs.items() if o["t_max"] < t_min]:
+                old.append((k, self.outs.pop(k)))
+        if self.out_log is not None:
+            for (i, l, oid), o in old:
+                self._emit_out(i, l, oid, o, False)
 
 
 @dataclass

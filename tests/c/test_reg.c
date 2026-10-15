@@ -396,6 +396,40 @@ static void test_demand_and_table(void)
 	free(r);
 }
 
+/* with a phase 1 offset (vessel 2 of 2: 2 (T1 - 4 ms) / 3 after start(t)), step t still ends at start(t + 1): the
+ * messages that L_w holds back at the end of the step are discarded, not released in phase 1 of t + 1 */
+static void test_close_at_step_end(void)
+{
+	struct fdt_reg *r = calloc(1, sizeof *r);
+	int64_t t = 3500;
+	start(r, FDT_MODE_FLEETDT, t);
+	fdt_reg_set_p1_offset(r, -1);
+	int64_t off = r->p1_off_us;
+	CHECK(off == 2 * (D.T1_us - 4000) / 3);
+	int64_t a = V(t - 1) + 1000;
+	stream_msg(r, STATE, 48, a);
+	whole_output(r, 200, 16, 1400, a + 100);
+	fake.n = 1;
+	run(r, S(t), S(t) + off);
+	int p[4] = {2, 0, 0, 1}, k[4] = {1, 0, 0, 1}, o[4] = {STATE, IMU, VIDEO, GPS};
+	table(r, t, p, k, o, S(t) + off + 2000, 0);
+	fake.s[0].nsd = 16384;                       /* L_w holds every message back until the end of W(t) */
+	run(r, V(t), S(t + 1) - 1000);
+	struct fdt_step *s = fdt_reg_step(r, t);
+	CHECK(s && s->irl == 0 && s->nrl == 17 && !s->closed);
+	fake.s[0].nsd = 0;                           /* room again, after start(t + 1) and before phase 1 */
+	r->pending = 0;
+	int i0 = nsent;
+	fdt_reg_tick(r, S(t + 1) + 1);
+	CHECK(s->closed && s->irl == s->nrl && tx_of(i0, NULL, (int[1]){0}, 1) == 0);
+	run(r, S(t + 1) + 1000, S(t + 1) + off + 1000);
+	cJSON *dj = last_json("boat/b2/demand");
+	CHECK(dj && jint(dj, "t") == t + 1 && jint(cJSON_GetObjectItemCaseSensitive(dj, "rep"), "disc") == 17);
+	cJSON_Delete(dj);
+	fdt_reg_free(r);
+	free(r);
+}
+
 static void test_pacing_and_discard(void)
 {
 	struct fdt_reg *r = calloc(1, sizeof *r);
@@ -510,6 +544,43 @@ static void test_modes(void)
 	CHECK(n == 5 && strstr(sent[idx[0]].topic, "state") && strstr(sent[idx[1]].topic, "imu") &&
 	      strstr(sent[idx[2]].topic, "video") && strstr(sent[idx[4]].topic, "gps"));
 	fdt_reg_free(r);
+	/* b3 with the table of the AS of mode b3: the order sigma_t of "o" (state, gps, video, imu), every
+	 * unit (p and k do not police) */
+	start(r, FDT_MODE_B3, t);
+	stream_msg(r, GPS, 80, V(t - 1) + 100);
+	whole_output(r, 1, 2, 100, V(t - 1) + 200);
+	stream_msg(r, IMU, 48, V(t - 1) + 300);
+	stream_msg(r, STATE, 48, V(t - 1) + 400);
+	fdt_reg_tick(r, S(t));
+	{
+		char tb[160];
+		int tl = snprintf(tb, sizeof tb, "{\"t\":%" PRId64 ",\"p\":[2,1,0,1],\"k\":[1,1,0,0],\"o\":[0,2,3,1]}", t);
+		CHECK(fdt_reg_on_levels(r, tb, (size_t)tl, S(t) + 25000) == 0);
+	}
+	run(r, V(t), V(t) + 2000);
+	n = tx_of(0, NULL, idx, 256);
+	CHECK(n == 5 && strstr(sent[idx[0]].topic, "state") && strstr(sent[idx[1]].topic, "gps") &&
+	      strstr(sent[idx[2]].topic, "video") && strstr(sent[idx[4]].topic, "imu"));
+	CHECK(fdt_reg_step(r, t)->have_tab && fdt_reg_step(r, t)->tp[VIDEO].xrx == 200 &&
+	      fdt_reg_step(r, t)->tp[GPS].xrx == 80);
+	fdt_reg_free(r);
+	/* phase 1 offset: vessel 2 (position 1, i = 2) publishes its demand 2 (T1 - eps - 2 T_tick) / (M + 1) */
+	start(r, FDT_MODE_FLEETDT, t);
+	fdt_reg_set_p1_offset(r, -1);
+	{
+		int64_t off = 2 * (D.T1_us - D.eps_us - 2 * D.T_tick_us) / (D.M + 1);
+		CHECK(r->p1_off_us == off);
+		int64_t nx = fdt_reg_tick(r, S(t) + off - 1);
+		CHECK(nx == S(t) + off && fdt_reg_step(r, t) == NULL);
+		fdt_reg_tick(r, S(t) + off);
+		CHECK(fdt_reg_step(r, t) && fdt_reg_step(r, t)->have_dem && fdt_reg_step(r, t)->late_p1 == 0);
+	}
+	/* overrides: guard 0 (i T1 / (M + 1)), spacing 2500 (i 2500) */
+	fdt_reg_set_p1_offset_guard(r, -1, 0);
+	CHECK(r->p1_off_us == 2 * D.T1_us / (D.M + 1));
+	fdt_reg_set_p1_offset_guard(r, 2500, -1);
+	CHECK(r->p1_off_us == 5000);
+	fdt_reg_free(r);
 	char b[256];
 	int len;
 	/* tdma: release only in the own slot of W(t): vessel 2 is second of 2 */
@@ -613,6 +684,7 @@ int main(void)
 	test_assembly();
 	test_demand_and_table();
 	test_pacing_and_discard();
+	test_close_at_step_end();
 	test_modes();
 	test_held_fallback();
 	test_resync();

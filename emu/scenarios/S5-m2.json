@@ -1,0 +1,97 @@
+{
+ "name": "S5-m2-s1",
+ "M": 2,
+ "seed": 1,
+ "run": 1,
+ "rate": {
+  "manager": "minstrel",
+  "non_unicast": "OfdmRate6Mbps"
+ },
+ "edca": {
+  "aifsn_ap": 1,
+  "cwmin_ap": 7,
+  "cwmax_ap": 1023,
+  "aifsn_sta": 3,
+  "cwmin_sta": 15,
+  "cwmax_sta": 1023
+ },
+ "tx_power_dbm": 20,
+ "mac_queue": {
+  "packets": 100,
+  "max_delay_ms": 500
+ },
+ "monitor_period_ms": 5,
+ "beacon_tu": 100,
+ "prio": {
+  "dscp": {
+   "46": 6,
+   "34": 5
+  },
+  "tcp_ports": {
+   "1883": 6
+  }
+ },
+ "channel": {
+  "model": "tworay",
+  "frequency_hz": 2412000000.0,
+  "nakagami": {
+   "m0": 5,
+   "m1": 5,
+   "m2": 5,
+   "d1": 80,
+   "d2": 200
+  },
+  "positions": {
+   "gs": [
+    0,
+    0,
+    6
+   ],
+   "v1": [
+    [
+     0.0,
+     617.39,
+     -145.0,
+     1.5
+    ],
+    [
+     169.025,
+     800.0,
+     -145.0,
+     1.5
+    ],
+    [
+     196.793,
+     800.0,
+     -115.0,
+     1.5
+    ]
+   ],
+   "v2": [
+    [
+     0.0,
+     341.78,
+     285.0,
+     1.5
+    ],
+    [
+     430.276,
+     800.0,
+     285.0,
+     1.5
+    ]
+   ]
+  }
+ },
+ "scenario_id": "S5",
+ "standard": "11a",
+ "basic_modes": [
+  "OfdmRate6Mbps",
+  "OfdmRate12Mbps",
+  "OfdmRate24Mbps"
+ ],
+ "speeds_mps": {
+  "v1": 1.08,
+  "v2": 1.065
+ }
+}

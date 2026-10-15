@@ -27,7 +27,7 @@ import time
 import uuid
 from typing import Dict, List, Optional, Tuple
 
-from .core import ASCore, MODES, warmup
+from .core import ASCore, MODES, PREDICTORS, warmup
 from .dtp import DTP
 
 log = logging.getLogger("fleetdt.as2")
@@ -114,13 +114,16 @@ def scores_from_dta(paths: List[str]) -> Tuple[List[float], Optional[float]]:
 class Service:
     def __init__(self, dtp: DTP, host: str = "localhost", port: int = 1883, mode: str = "fleetdt",
                  log_path: Optional[str] = None, monitor_wait: float = 0.002, spin: float = 0.0005,
+                 monitor_lag: float = 0.0,
                  acc_log: bool = True, **core_kw):
         self.dtp = dtp
         self.host, self.port = host, port
         self.monitor_wait, self.spin = monitor_wait, spin
+        self.monitor_lag = monitor_lag
         self._lines: List[Dict] = []
         self._lines_lock = threading.Lock()
-        self.core = ASCore(dtp, mode=mode, acc_log=self._acc_line if acc_log else None, **core_kw)
+        self.core = ASCore(dtp, mode=mode, acc_log=self._acc_line if acc_log else None,
+                           out_log=self._line if acc_log else None, **core_kw)
         self.log_file = open(log_path, "a", encoding="utf-8") if log_path else None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
@@ -251,7 +254,10 @@ class Service:
         gc.disable()          # no collection inside phase 2; the collector runs again in phase 3
         try:
             if self.monitor_wait > 0:
-                self.core.monitor.wait_until(int(round(dl * 1e6)), max(0.0, dl + self.monitor_wait - time.time()))
+                # the batch that the monitor publishes monitor_lag after the end of Q(t) holds the records of
+                # the exchanges that cross the end of Q(t) (a record joins the batch in which it ends)
+                tgt = dl + self.monitor_lag
+                self.core.monitor.wait_until(int(round(tgt * 1e6)), max(0.0, tgt + self.monitor_wait - time.time()))
             tabs, rec = self.core.phase2(t, publish=publish)
             if publish:
                 self.publish(t, tabs, rec, dl)
@@ -338,12 +344,23 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--oracle", default=None, help="ground truth kappa(t) of mode oracle (JSON lines or gt.py CSV)")
     ap.add_argument("--oracle-origin", type=float, default=0.0, help="host time of simulator time 0 (gt.py CSV)")
     ap.add_argument("--init-dta", nargs="*", default=[], help="DTA files with the initial scores and b_hat")
+    ap.add_argument("--init-scores", default=None,
+                    help="JSON file {\"scores\": [z, ...], \"b_hat\": b} with the initial scores (calibration)")
+    ap.add_argument("--predictor", default="eq", choices=PREDICTORS, help="point predictor of kappa (E2)")
+    ap.add_argument("--pred-gain", type=float, default=0.25, help="gain of the exponential smoothing of kappa")
+    ap.add_argument("--cal-kappa", type=float, default=None, help="calibration mean of kappa (predictor calmean)")
     ap.add_argument("--score-window", type=int, default=None)
     ap.add_argument("--z-empty", type=float, default=1.0, help="Z while no score exists")
-    ap.add_argument("--monitor-wait", type=float, default=0.002)
-    ap.add_argument("--tab-unsent", choices=("count", "ignore"), default="count",
-                    help="tab=false of a vessel outside M(t) counts in f(t) (literal Def. aci) or not")
+    ap.add_argument("--monitor-wait", type=float, default=0.002,
+                    help="seconds to wait, after the expected batch, for the monitor batch of the end of Q(t)")
+    ap.add_argument("--monitor-lag", type=float, default=0.0,
+                    help="the monitor publishes its batch of the end of Q(t) this many seconds after it (emulator: "
+                         "--flush offset T1 + lag)")
+    ap.add_argument("--tab-unsent", choices=("count", "ignore"), default="ignore",
+                    help="tab=false of a vessel outside M(t), to which the AS sent no table, counts in f(t) (count) or "
+                         "not (ignore: Def. aci, which counts the vessels of M(t))")
     ap.add_argument("--steps", type=int, default=None)
+    ap.add_argument("--first", type=int, default=None, help="first step (default: the next step)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO if a.verbose else logging.WARNING,
@@ -352,16 +369,24 @@ def main(argv: Optional[List[str]] = None) -> None:
     if a.epoch is not None:
         dtp.epoch = a.epoch
     zs, bh = scores_from_dta(a.init_dta) if a.init_dta else ([], None)
+    if a.init_scores:
+        with open(a.init_scores, encoding="utf-8") as f:
+            o = json.load(f)
+        zs = zs + [float(z) for z in (o["scores"] if isinstance(o, dict) else o)]
+        if isinstance(o, dict) and o.get("b_hat") is not None:
+            bh = float(o["b_hat"])
     kw = dict(z0=a.z0, initial_scores=zs, b_hat0=bh or 0.0, score_window=a.score_window, z_empty=a.z_empty,
-              count_tab_unsent=a.tab_unsent == "count")
+              count_tab_unsent=a.tab_unsent == "count", predictor=a.predictor, pred_gain=a.pred_gain,
+              cal_kappa=a.cal_kappa)
     if a.oracle:
         kw["oracle"] = load_oracle(a.oracle, dtp, a.oracle_origin)
     host, port = _broker(a.broker)
-    svc = Service(dtp, host, port, mode=a.mode, log_path=a.log, monitor_wait=a.monitor_wait, **kw)
+    svc = Service(dtp, host, port, mode=a.mode, log_path=a.log, monitor_wait=a.monitor_wait,
+                  monitor_lag=a.monitor_lag, **kw)
     svc.connect()
     print("epoch = %.3f, mode = %s" % (dtp.epoch, a.mode), flush=True)
     try:
-        svc.run(steps=a.steps)
+        svc.run(steps=a.steps, first=a.first)
     except KeyboardInterrupt:
         pass
     finally:

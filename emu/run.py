@@ -6,15 +6,23 @@
   emu/run.py up --scenario S.json          VMs (GS + M vessels), emulator, monitor bridge, clock probe
   emu/run.py sync                          copy this repository into every VM (~/fleet-dt)
   emu/run.py ssh HOST [CMD...]             HOST: gs, v1..vM (interactive without CMD)
-  emu/run.py run EXP.json                  one experiment; results in EMU/runs/<time>-<name>/
+  emu/run.py run EXP.json                  one experiment; results in EMU/runs/<time>-<name>/ (or the
+                                           "run_dir" of a fleet experiment, see emu/fleet.py)
   emu/run.py status
   emu/run.py down                          stop only the processes that `up` started (PID files)
 
-EMU (default ~/fleetdt-deploy/emu, env FDT_EMU) holds img/, vms/, session/, runs/.
+  emu/run.py --slot K ...                  session K (0..9): its own VMs, ports, vsock CIDs, emulator and CPU
+                                           set, so that up to 10 sessions run at once (emu/experiments/runner.py)
+
+EMU (default ~/fleetdt-deploy/emu, env FDT_EMU) holds img/, vms/, session/, runs/ (session K >= 1:
+vms-K/, session-K/).
 """
 import argparse
+import base64
 import glob
+import hashlib
 import json
+import math
 import os
 import random
 import shlex
@@ -33,17 +41,48 @@ QEMU = os.environ.get("QEMU", "/opt/qemu-upstream/bin/qemu-system-x86_64")
 EMU_BIN = os.path.join(NS3, "build/scratch/fdt-emu/ns3.48-fdt-emu-optimized")
 IMG = os.path.join(EMU, "img")
 KEY = os.path.join(IMG, "id_ed25519")
-STATE = os.path.join(EMU, "session", "state.json")
-BASE_PORT = 41000          # data plane: QEMU 41000+2h, emulator 41001+2h
-SSH_PORT = 2300            # management: ssh of host h on 127.0.0.1:2300+h
-MQTT_FWD = 2883            # GS broker (1883) on 127.0.0.1:2883 for the monitor bridge
-MON_PORT = 9550            # emulator -> monitor bridge (UDP)
-CID_BASE = 100
-# CPU affinity (rootless): the emulator on two P-cores (4 hardware threads), the VMs on the E-cores of
-# the i7-14700; FDT_EMU_CPUS / FDT_VM_CPUS override ("" disables pinning)
-EMU_CPUS = os.environ.get("FDT_EMU_CPUS", "12-15")
-VM_CPUS = os.environ.get("FDT_VM_CPUS", "16-27")
-AUX_CPUS = os.environ.get("FDT_AUX_CPUS", "0-11")     # monitor bridge, clock probe, monitor capture
+
+# Session (slot) K: every resource below is offset by K, so that sessions run side by side.
+SLOT = 0
+SESS = os.path.join(EMU, "session")
+VMS = os.path.join(EMU, "vms")
+STATE = os.path.join(SESS, "state.json")
+BASE_PORT = 41000          # data plane: QEMU BASE+2h, emulator BASE+2h+1 (slot K: 41000 + 100 K)
+SSH_PORT = 2300            # management: ssh of host h on 127.0.0.1:SSH_PORT+h (slot K: 2300 + 20 K)
+MQTT_FWD = 2883            # GS broker (1883) on 127.0.0.1:MQTT_FWD for the monitor bridge (slot K: 2883 + K)
+MON_PORT = 9550            # emulator -> monitor bridge (UDP; slot K: 9550 + K)
+CID_BASE = 100             # vsock CID of host h: CID_BASE + h (slot K: 100 + 20 K)
+VM_PREFIX = "fdt-emu"
+# CPU affinity (rootless taskset) on the i7-14700 (CPUs 0-15: 8 P-cores with 2 threads, 16-27: 12 E-cores).
+# The user keeps CPUs 0-7 (4 P-cores) and 24-27 (4 E-cores). Session K runs its emulator on P-core 4+K
+# (CPUs 8+2K, 9+2K: simulation and ground-truth writer); the VMs and the host-side helpers of every
+# session share the E-cores 16-23. FDT_EMU_CPUS / FDT_VM_CPUS / FDT_AUX_CPUS override ("" disables pinning).
+EMU_CPUS = "8,9"
+VM_CPUS = "16-23"
+AUX_CPUS = "16-23"         # monitor bridge, clock probe, monitor capture
+
+
+def configure_slot(k):
+    global SLOT, SESS, VMS, STATE, BASE_PORT, SSH_PORT, MQTT_FWD, MON_PORT, CID_BASE, VM_PREFIX
+    global EMU_CPUS, VM_CPUS, AUX_CPUS
+    if not 0 <= k <= 9:
+        raise SystemExit("slot must be in 0..9")
+    SLOT = k
+    SESS = os.path.join(EMU, "session" if k == 0 else "session-%d" % k)
+    VMS = os.path.join(EMU, "vms" if k == 0 else "vms-%d" % k)
+    STATE = os.path.join(SESS, "state.json")
+    BASE_PORT = 41000 + 100 * k
+    SSH_PORT = 2300 + 20 * k
+    MQTT_FWD = 2883 + k
+    MON_PORT = 9550 + k
+    CID_BASE = 100 + 20 * k
+    VM_PREFIX = "fdt-emu" if k == 0 else "fdt-emu-s%d" % k
+    EMU_CPUS = os.environ.get("FDT_EMU_CPUS", "%d,%d" % (8 + 2 * k, 9 + 2 * k) if k < 4 else "8-15")
+    VM_CPUS = os.environ.get("FDT_VM_CPUS", "16-23")
+    AUX_CPUS = os.environ.get("FDT_AUX_CPUS", "16-23")
+
+
+configure_slot(int(os.environ.get("FDT_SLOT", "0")))
 
 
 def pinned(cmd, cpus):
@@ -200,7 +239,7 @@ def seed_iso(h, M, d, clock, chrony):
 
 
 def start_vm(h, M, clock, chrony, mem=768):
-    d = os.path.join(EMU, "vms", host_name(h))
+    d = os.path.join(VMS, host_name(h))
     if os.path.isdir(d):
         shutil.rmtree(d)
     os.makedirs(d)
@@ -212,7 +251,7 @@ def start_vm(h, M, clock, chrony, mem=768):
     if h == 0:
         fwd += ",hostfwd=tcp:127.0.0.1:%d-:1883" % MQTT_FWD
     pidf = os.path.join(d, "qemu.pid")
-    name = "fdt-emu-%s" % host_name(h)
+    name = "%s-%s" % (VM_PREFIX, host_name(h))
     cmd = [QEMU, "-name", "%s,process=%s" % (name, name), "-enable-kvm", "-cpu", "host", "-smp", "1",
            "-m", str(mem), "-drive", "file=%s,if=virtio,cache=unsafe" % disk,
            "-drive", "file=%s,media=cdrom,readonly=on" % iso,
@@ -244,11 +283,15 @@ def wait_ssh(h, timeout=180):
 # ------------------------------------------------------------------------------------------------
 # emulator, bridge, probe
 
-def start_emulator(scenario, outdir, M, gt=True, rt="HardLimit", extra=()):
+def start_emulator(scenario, outdir, M, gt=True, rt="HardLimit", extra=(), run_start_us=None, gt_states=None):
     os.makedirs(outdir, exist_ok=True)
     out = open(os.path.join(outdir, "emu.out"), "w")
     cmd = [EMU_BIN, "--scenario=%s" % scenario, "--outdir=%s" % outdir, "--basePort=%d" % BASE_PORT,
            "--monitor=127.0.0.1:%d" % MON_PORT, "--rt=%s" % rt, "--gt=%d" % int(gt)] + list(extra)
+    if run_start_us is not None:
+        cmd.append("--runStartUs=%d" % run_start_us)
+    if gt_states:
+        cmd.append("--gtStates=%s" % gt_states)
     p = subprocess.Popen(pinned(cmd, EMU_CPUS), stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                          start_new_session=True)
     t = time.time()
@@ -334,13 +377,13 @@ def cmd_up(a):
         clocks[h] = {"offset_ms": round(rng.uniform(-50, 50), 3), "ppm": round(rng.uniform(-50, 50), 3)}
     if a.no_clock_error:
         clocks = {h: {"offset_ms": 0, "ppm": 0} for h in range(M + 1)}
-    sess = os.path.join(EMU, "session")
+    sess = SESS
     if os.path.isdir(sess):
         shutil.rmtree(sess)
     os.makedirs(sess)
     chrony = {"minpoll": a.chrony_minpoll, "maxpoll": a.chrony_maxpoll}
     st = {"M": M, "scenario": os.path.abspath(a.scenario), "clocks": clocks, "procs": [], "t_up": time.time(),
-          "vm_pids": {}}
+          "vm_pids": {}, "slot": SLOT, "clock_seed": a.clock_seed}
     log("starting %d VMs" % (M + 1))
     for h in range(M + 1):
         pid, name = start_vm(h, M, clocks[h], chrony, mem=a.mem)
@@ -354,7 +397,7 @@ def cmd_up(a):
     st["probe_pid"] = ppid
     st["procs"].append([ppid, "probe.py"])
     save_state(st)
-    epid = start_emulator(st["scenario"], os.path.join(sess, "emu-idle"), M, gt=False, rt=a.rt)
+    epid = start_emulator(st["scenario"], os.path.join(sess, "emu-idle"), M, gt=False, rt=a.rt, gt_states="none")
     st["emu_pid"] = epid
     st["procs"].append([epid, "fdt-emu-optimized"])
     save_state(st)
@@ -420,6 +463,12 @@ def cmd_run(a):
         raise SystemExit("not up")
     M = st["M"]
     exp = json.load(open(a.exp))
+    if exp.get("kind") == "fleet":
+        import fleet
+        res = fleet.run_fleet(sys.modules[__name__], exp, a)
+        if res["status"] != "ok":
+            sys.exit(1)
+        return
     name = exp.get("name", os.path.splitext(os.path.basename(a.exp))[0])
     rd = os.path.join(EMU, "runs", time.strftime("%Y%m%d-%H%M%S") + "-" + name)
     os.makedirs(rd)
@@ -504,13 +553,13 @@ def cmd_run(a):
             for h in hosts_of(c.get("host", "all"), M):
                 rsync_from(h, c["path"], os.path.join(rd, "vms", host_name(h)) + "/")
         # clock probe and bridge statistics of the run interval
-        slice_csv(os.path.join(EMU, "session", "clock.csv"), os.path.join(rd, "clock.csv"), res["t_start"],
+        slice_csv(os.path.join(SESS, "clock.csv"), os.path.join(rd, "clock.csv"), res["t_start"],
                   res["t_end"])
-        slice_jsonl(os.path.join(EMU, "session", "bridge-stats.jsonl"), os.path.join(rd, "bridge-stats.jsonl"),
+        slice_jsonl(os.path.join(SESS, "bridge-stats.jsonl"), os.path.join(rd, "bridge-stats.jsonl"),
                     res["t_start"], res["t_end"])
         with open(os.path.join(rd, "result.json"), "w") as f:
             json.dump(res, f, indent=1)
-        epid = start_emulator(st["scenario"], os.path.join(EMU, "session", "emu-idle"), M, gt=False)
+        epid = start_emulator(st["scenario"], os.path.join(SESS, "emu-idle"), M, gt=False)
         st["emu_pid"] = epid
         st["procs"].append([epid, "fdt-emu-optimized"])
         save_state(st)
@@ -568,6 +617,7 @@ def cmd_down(a):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--slot", type=int, default=None, help="session 0..9 (default: env FDT_SLOT or 0)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("build")
     sub.add_parser("image")
@@ -589,6 +639,8 @@ def main():
     sub.add_parser("status")
     sub.add_parser("down")
     a = ap.parse_args()
+    if a.slot is not None:
+        configure_slot(a.slot)
     {"build": cmd_build, "image": cmd_image, "up": cmd_up, "sync": cmd_sync, "ssh": cmd_ssh, "run": cmd_run,
      "status": cmd_status, "down": cmd_down}[a.cmd](a)
 
