@@ -1,0 +1,23 @@
+# Raspbian 10 stand-in for the vessel RP4: Debian 10 (buster) armhf, gcc 8.3, glibc 2.28,
+# Python 3.7, run under qemu-arm (binfmt_misc) on an x86 host. The C code builds for the armv6
+# baseline of Raspbian (FDT_ARM_CFLAGS), so a dependency on libatomic or on armv7 instructions
+# fails here as it would on the vessel.
+FROM docker.io/arm32v7/debian:buster
+# archive.debian.org lacks some buster files (mime-support); snapshot.debian.org keeps the final buster state
+RUN printf 'deb http://snapshot.debian.org/archive/debian/20240601T000000Z buster main\ndeb http://snapshot.debian.org/archive/debian-security/20240601T000000Z buster/updates main\n' \
+        > /etc/apt/sources.list \
+ && printf 'Acquire::Check-Valid-Until "false";\nAcquire::Retries "5";\nAcquire::http::Pipeline-Depth "0";\nAcquire::http::No-Cache "true";\n' \
+        > /etc/apt/apt.conf.d/99archive \
+ && apt-get update \
+ && for k in 1 2 3; do apt-get install -y --no-install-recommends build-essential python3 python3-pip \
+        python3-setuptools python3-wheel ca-certificates sudo procps && break; sleep 10; done \
+ && python3 --version \
+ && rm -rf /var/lib/apt/lists/*
+RUN pip3 install --no-cache-dir "paho-mqtt>=2,<3"
+ENV CFLAGS="-O2 -g -marm -march=armv6 -mfpu=vfp -mfloat-abi=hard"
+COPY mosquitto /src/mosquitto
+COPY dist /dist
+RUN /src/mosquitto/build.sh /dist /opt/mosquitto-2.1 && rm -rf /tmp/fdt-mosq-build.*
+# paho-mqtt 2.x imports typing.Literal, which Python 3.7 lacks; it falls back to typing_extensions
+# without declaring it, so the vessel needs it too (RUNBOOK.md)
+RUN pip3 install --no-cache-dir typing_extensions

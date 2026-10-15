@@ -177,7 +177,8 @@ function edgeTip(g, e, out) {
     (out ? "vessel outside M(t), forwards nothing<br>" : "") +
     `d = ${fmtB(e.d)} &middot; p = ${e.p ?? "-"} &middot; in N(t): ${need}<br>` +
     `r = ${fmtB(e.r)} (${e.d ? (100 * e.r / e.d).toFixed(0) : 0}% of d)<br>` +
-    `messages ${e.n}, repeated ${e.dup}, late ${e.late}`;
+    `messages ${e.n}, repeated ${e.dup}, late ${e.late}` +
+    (e.fwd != null ? `<br>vessel regulator: forwarded ${e.fwd}, withheld ${e.held}` : "");
 }
 function vesselTip(g, i, inM) {
   const a = g.edges.filter((e) => e.i === i && e.p > 0).reduce((s, e) => s + e.d, 0);

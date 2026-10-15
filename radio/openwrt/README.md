@@ -13,7 +13,8 @@ placeholder (the key of the field network stays out of the repository).
 All radios use channel 6 (2437 MHz), 20 MHz, no HT, and the fixed legacy rate of 24 Mbit/s, the
 R_PHY of `dtp.json`. `hotplug.d/iface/99-fdt-rate` fixes the rate when the interface comes up.
 
-Build of the channel monitor for the radio: copy `radio/channel_monitor/openwrt/` to
+Build of the channel monitor for the radio: `radio/channel_monitor/openwrt/build-sdk.sh` runs the
+OpenWrt SDK container (ath79, 23.05.5) and writes `build/openwrt/fdt-chmon_2.0-1_mips_24kc.ipk`. By hand: copy `radio/channel_monitor/openwrt/` to
 `package/fdt-chmon/` of the OpenWrt SDK of the target (ath79), set `FDT_SRC` in its Makefile to the
 root of this repository, and run `make package/fdt-chmon/compile`. The package depends on
 `libmosquitto-nossl` and `cJSON`.

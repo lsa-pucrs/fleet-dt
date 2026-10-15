@@ -198,6 +198,10 @@ def main(argv=None) -> None:
             dt = time.time() - s_t
             log.info("%.2f frames/s, %.2f messages/s, %.0f content bytes/s, %.0f bytes/frame",
                      s_frames / dt, s_msgs / dt, s_bytes / dt, s_bytes / max(s_frames, 1))
+            if s_msgs / dt > dtp.topics["video"].rate:
+                log.warning("%.1f messages/s exceed the DTP rate of video (%.1f/s): the vessel regulator "
+                            "withholds the excess, so frames arrive incomplete; raise --divider or lower "
+                            "--quality", s_msgs / dt, dtp.topics["video"].rate)
             s_frames = s_msgs = s_bytes = 0
             s_t = time.time()
     stop.set()

@@ -41,7 +41,7 @@ sudo systemctl enable --now fleetdt-gs-broker fleetdt-as fleetdt-ve
 Each RP4 (vessel i):
 
 ```bash
-sudo apt install python3-opencv python3-numpy && pip3 install "paho-mqtt>=2" pymavlink
+sudo apt install python3-opencv python3-numpy && pip3 install "paho-mqtt>=2" typing_extensions pymavlink
 python3 -m fleetdt.gsconf vessel --vessel 1 | sudo tee /etc/fleetdt/mosquitto.conf
 sudo install -m 0644 system/chrony/vessel.conf /etc/chrony/conf.d/fleetdt.conf && sudo systemctl restart chrony
 sudo install -m 0644 system/systemd/vessel/*.service /etc/systemd/system/

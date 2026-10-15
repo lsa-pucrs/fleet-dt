@@ -8,6 +8,11 @@ the delivery of every forwarded message within its step, the rejection of the vi
 drop of C_hat(t), and the Section VI metrics of the resulting DTA.
 
 Needs MOSQ (default /opt/mosquitto-2.1) and the C programs in FDT_BUILD (default build/).
+
+With FDT_VESSEL_EXEC (a command prefix, e.g. "podman exec fdt-rpi10"), the vessel programs (vessel
+brokers, DTI programs, synthetic load) run through that prefix, with FDT_VESSEL_BUILD,
+FDT_VESSEL_MOSQ and FDT_VESSEL_PYTHON for their binaries: tests/armhf/run.sh runs them in an emulated
+Raspbian 10 (armhf, gcc 8.3, Python 3.7) while the GS programs run on the host.
 """
 import json
 import math
@@ -32,9 +37,13 @@ MOSQ = Path(os.environ.get("MOSQ", "/opt/mosquitto-2.1"))
 BUILD = Path(os.environ.get("FDT_BUILD", ROOT / "build"))
 BROKER = MOSQ / "sbin" / "mosquitto"
 RUN_S = float(os.environ.get("FDT_IT_SECONDS", "24"))
+VEXEC = os.environ.get("FDT_VESSEL_EXEC", "").split()
+VBUILD = Path(os.environ.get("FDT_VESSEL_BUILD", BUILD))
+VBROKER = Path(os.environ.get("FDT_VESSEL_MOSQ", MOSQ)) / "sbin" / "mosquitto"
+VPYTHON = os.environ.get("FDT_VESSEL_PYTHON", sys.executable)
 
-pytestmark = pytest.mark.skipif(not (BROKER.exists() and (BUILD / "fdt_regulator.so").exists()
-                                     and (BUILD / "fdt_dti").exists() and (BUILD / "fdt_chmon").exists()),
+pytestmark = pytest.mark.skipif(not (BROKER.exists() and (VBUILD / "fdt_regulator.so").exists()
+                                     and (VBUILD / "fdt_dti").exists() and (BUILD / "fdt_chmon").exists()),
                                 reason="needs the patched Mosquitto and make")
 
 Y_HIGH, Y_LOW = 351_000.0, 99_000.0   # y(t) of the replayed counters: busy 8 ms and 92 ms per step
@@ -48,7 +57,7 @@ def free_port() -> int:
     return p
 
 
-def wait_port(port: int, timeout: float = 5.0) -> None:
+def wait_port(port: int, timeout: float = 30.0) -> None:
     end = time.time() + timeout
     while time.time() < end:
         try:
@@ -78,10 +87,10 @@ def stack(tmp_path):
     procs = []
     logs = []
 
-    def spawn(name, args, env=None):
+    def spawn(name, args, env=None, vessel=False):
         log = open(tmp_path / ("%s.log" % name), "w")
         logs.append((name, tmp_path / ("%s.log" % name)))
-        p = subprocess.Popen([str(a) for a in args], stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT),
+        p = subprocess.Popen((VEXEC if vessel else []) + [str(a) for a in args], stdout=log, stderr=subprocess.STDOUT, cwd=str(ROOT),
                              env=dict(os.environ, PYTHONPATH=str(ROOT), **(env or {})))
         procs.append((name, p))
         return p
@@ -110,9 +119,9 @@ def test_stack(stack):
     vp = {i: (free_port(), free_port()) for i in (1, 2)}
     for i, (cp, dp) in vp.items():
         conf = tmp / ("vessel%d.conf" % i)
-        conf.write_text(vessel_conf(i, str(dtp_path), plugin=str(BUILD / "fdt_regulator.so"), port=cp,
+        conf.write_text(vessel_conf(i, str(dtp_path), plugin=str(VBUILD / "fdt_regulator.so"), port=cp,
                                     data_port=dp, bind="127.0.0.1", stats_s=5, log_dest="stdout"))
-        spawn("broker-b%d" % i, [BROKER, "-c", conf])
+        spawn("broker-b%d" % i, [VBROKER, "-c", conf], vessel=True)
         wait_port(cp)
     gconf = tmp / "gs.conf"
     gconf.write_text(gs_conf({i: "127.0.0.1,%d,%d" % v for i, v in vp.items()}, listen="127.0.0.1:%d" % gs_port)
@@ -132,12 +141,12 @@ def test_stack(stack):
     asm = Assembler(dtp, StepClock(dtp.Ts, dtp.t0))
     col = MqttCollector(asm, graphs.append, "127.0.0.1", gs_port)
     col.start()
-    time.sleep(1.0)   # bridges connected
+    time.sleep(2.0)   # bridges connected
     for i, (cp, dp) in vp.items():
-        spawn("dti-b%d" % i, [BUILD / "fdt_dti", "--dtp", dtp_path, "--vessel", i, "--broker", "127.0.0.1:%d" % cp,
-                              "--prio", "0", "--idle", "4"])
-        spawn("load-b%d" % i, [sys.executable, ROOT / "vessel" / "publishers" / "raw_load.py", "--dtp", dtp_path,
-                               "--vessel", i, "--port", cp, "--seed", 7])
+        spawn("dti-b%d" % i, [VBUILD / "fdt_dti", "--dtp", dtp_path, "--vessel", i, "--broker", "127.0.0.1:%d" % cp,
+                              "--prio", "0", "--idle", "4"], vessel=True)
+        spawn("load-b%d" % i, [VPYTHON, ROOT / "vessel" / "publishers" / "raw_load.py", "--dtp", dtp_path,
+                               "--vessel", i, "--port", cp, "--seed", 7], vessel=True)
     time.sleep(RUN_S)
     col.stop()
     with open(tmp / "dta.jsonl", "w") as f:

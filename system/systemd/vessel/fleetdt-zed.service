@@ -4,8 +4,10 @@ After=fleetdt-broker.service
 Requires=fleetdt-broker.service
 
 [Service]
+# 15 fps / 2 = 7.5 frames/s of about 3 messages of 14000 bytes (quality 50): 22.5 messages/s, under
+# the video rate of dtp.json (30/s), so the demand of each step covers the frames
 EnvironmentFile=/etc/fleetdt/fleetdt.env
-ExecStart=/usr/bin/python3 /opt/fleet-dt/src/vessel/publishers/zed_publisher.py --dtp ${FDT_DTP} --vessel ${FDT_VESSEL} --device /dev/video0 --quality 50
+ExecStart=/usr/bin/python3 /opt/fleet-dt/src/vessel/publishers/zed_publisher.py --dtp ${FDT_DTP} --vessel ${FDT_VESSEL} --device /dev/video0 --quality 50 --divider 2
 Restart=always
 RestartSec=2
 

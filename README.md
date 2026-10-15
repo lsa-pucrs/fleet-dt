@@ -47,6 +47,8 @@ make                       # build/fdt_regulator.so, build/fdt_dti, build/fdt_ch
 make test                  # C unit test, Python tests, end-to-end test (about 40 s)
 sudo make install          # /opt/fleet-dt/{lib,bin}
 pip install -r requirements.txt
+tests/armhf/run.sh <dir with the tarballs>             # vessel programs on an emulated Raspbian 10 (armhf)
+radio/channel_monitor/openwrt/build-sdk.sh             # fdt-chmon .ipk for the Bullet M2 (OpenWrt SDK)
 ```
 
 The end-to-end test (`tests/test_integration.py`) runs on one host: two vessel brokers with the
@@ -54,6 +56,9 @@ vessel regulator, the GS broker with the bridges of `fleetdt.gsconf`, the DTI pr
 synthetic load of each vessel, the channel monitor replaying a drop of the channel, the AS and the VE.
 It checks Algorithm 1 against every G(t), the bound r ≤ d of every edge, the delivery within the step
 of every forwarded message, the rejection of the video topic while Ĉ(t) is low, and δ, φ and μ.
+`tests/armhf/run.sh` runs the same test with the vessel brokers, DTI programs and load inside a
+Debian 10 armhf container under qemu-arm (gcc 8.3, glibc 2.28, Python 3.7, armv6 code), the platform
+of the vessel RP4.
 
 ## Main commands
 

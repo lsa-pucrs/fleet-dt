@@ -25,7 +25,15 @@ IEEE Access paper and replaces the C library of the ICECS 2026 model.
   patches, chrony, sysctl, quick ACK route, systemd units
 - C unit test of the vessel regulator, Python tests, end-to-end test of the whole stack on one host
 
+- `tests/armhf/run.sh`: end-to-end test with the vessel programs on an emulated Raspbian 10 (armhf)
+- `radio/channel_monitor/openwrt/build-sdk.sh`: `.ipk` of the channel monitor from the OpenWrt SDK
+- VE: forwarded and withheld messages of the vessel regulator in the hover of each edge
+- video publisher: warning when the offered messages per second exceed the DTP rate of video
+
 ### Fixed
+
+- channel monitor: `sys/time.h` for musl (OpenWrt)
+- vessel: paho-mqtt 2.x on Python 3.7 needs `typing_extensions`, which it does not declare
 
 - every MQTT client sets TCP_NODELAY: paho-mqtt leaves Nagle's algorithm on, and a PUBLISH that
   follows a PUBACK waited for the delayed ACK of the broker (about 22 ms after start(t) + T1)
