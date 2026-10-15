@@ -1,0 +1,16 @@
+[Unit]
+Description=Fleet-DT vessel MQTT broker with the vessel regulator
+After=network-online.target chrony.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/mosquitto-2.1/sbin/mosquitto -c /etc/fleetdt/mosquitto.conf
+Restart=always
+RestartSec=1
+# the plugin runs phase 3 in the main loop of the broker
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=40
+LimitRTPRIO=99
+
+[Install]
+WantedBy=multi-user.target

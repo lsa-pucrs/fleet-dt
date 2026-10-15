@@ -1,170 +1,72 @@
 # fleet-dt
 
-A C implementation of Fleet-DT, the digital twin model and architecture of
+Reference implementation of **Fleet-DT**, the network digital twin with dynamic bandwidth
+allocation for fleets of unmanned surface vehicles (USVs) of the IEEE Access paper "Fleet-DT: A
+Network Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Vehicles".
+Built for the fleet of the Jundiá Project, whose vessels share one Wi-Fi channel (Ubiquiti Bullet
+M2 radios) with a ground station (GS).
 
-> A. R. P. Domingues, C. J. D. Silva, F. da R. Lui, J. Maia, R. S. Cenço,
-> C. A. M. Marcon, F. G. Moraes. **A Digital Twin Model and Architecture for
-> Monitoring and Controlling Fleets of Autonomous Unmanned Surface Vehicles.**
-> ICECS 2026.
+`SPEC.md` fixes the interfaces between the programs (DTP file, topics, wire formats, bridges, phase
+timing); `RUNBOOK.md` gives the installation and the operation on the vessels, the GS and the radios.
 
-Built for the Jundiá Project's fleet of autonomous unmanned surface vehicles,
-which collect environmental DNA samples from the lagoons of southern Brazil.
+## The step cycle
 
-**This repository tracks manuscript revision `-10`**, where the model is
-Section IV and the equations run (1) to (6). The revision is pinned to a symbol
-and checked by the test suite, because that numbering has already shifted once.
+Each step t of Ts = 125 ms has three phases:
 
-## What is here
+| Phase | Interval | Program | Action |
+|---|---|---|---|
+| 1 | [start(t), start(t) + T1) | DTI program of each vessel | publishes the demand table D_i(t) |
+| 2 | [start(t) + T1, start(t) + T1 + T2) | AS on the GS | closes M(t), predicts Ĉ(t) (eq. 2), computes K̂(t) and the grant limit b(t) (eq. 3), runs Algorithm 1, publishes p(t) |
+| 3 | [start(t) + T1 + T2, start(t + 1)) | vessel regulator of each vessel | forwards the messages of step t: level 2 with QoS 2, then level 1 with QoS 1, each topic policed by c(x, n) = c_b x + c_m n ≤ d_{i,l}(t) (eq. 5) |
 
-The library implements the model of Section IV and the architecture of
-Section III: the state types of Table I, the bounded state queue, the
-transition and decision functions, the fleet aggregate, the coordinator, the
-125 ms pacer, the wire protocol, the bandwidth regulators, and the link-budget
-model. The application supplies the dynamics.
-
-No external dependency. `make lib` and `make test` work on a bare toolchain;
-anything needing an SDK — MQTT, WeBots — sits behind its own target and skips
-with a notice.
-
-    make            # library, tests, examples, benchmarks, report
-    make test       # every published figure of the paper, checked
-    make bench      # the measurement campaign; writes results/
-    make report     # claim coverage, and docs/RESULTS.md
-    make syntax     # type-check the SDK adapters against stubs
-
-Two targets need an SDK and skip with a notice without it:
-
-    make webots     # the simulation; needs WEBOTS_HOME
-    make mqtt-test  # a round trip through a real broker; needs libmosquitto
-
-Requires `gcc`, `make`, and glibc: the pacer uses POSIX.1-2008
-`clock_nanosleep` with `TIMER_ABSTIME`, which Apple libc does not provide.
+At the end of each step the channel monitor of the GS radio publishes y(t), and the VE closes the
+graph G(t) of the network (Definition 7), draws it, and appends it to the DTA. The outer loop of the
+AS tunes α and U from the DTA, and `fleetdt.analysis` computes the metrics of Section VI.
 
 ## Layout
 
-| Path | What lives there |
-|---|---|
-| `include/fleet_dt/`, `src/` | the library: model, queue, transition, fleet, coordinator, pacer, feasibility, wire, regulators, link budget, DTE, plotter |
-| `tests/` | one suite per module; every published figure is asserted, not printed |
-| `examples/` | two runnable programs — see [`examples/README.md`](examples/README.md) |
-| `tools/injector/` | the synthetic telemetry injectors of Section V-B |
-| `tools/bench/` | the measurement campaign |
-| `tools/report/` | claim coverage and results assembly |
-| `adapters/` | Ardupilot ingest, the camera boundary, MQTT, and the WeBots project — world, hull meshes and the controller running δ |
-| `config/mosquitto/` | the bridge-mode broker configuration of Section III |
-| `docs/` | the paper-to-code map, the claim inventory, the generated results |
+| Directory | Content | Host |
+|---|---|---|
+| `fleetdt/` | AS (`as_service.py`), outer loop (`outer.py`), Section VI metrics (`analysis.py`), broker configuration generator (`gsconf.py`), shared model and wire formats (`model.py`, `as_model.py`), synthetic fleet (`mock.py`), VE (`ve/`) | GS |
+| `vessel/regulator/` | vessel regulator, a Mosquitto 2.1 plugin (`fdt_reg.c` holds the logic) | vessel |
+| `vessel/dti/` | DTI program `fdt_dti` | vessel |
+| `vessel/publishers/` | telemetry (`mav_publisher.py`), video (`zed_publisher.py`), synthetic load (`raw_load.py`) | vessel |
+| `radio/channel_monitor/` | channel monitor `fdt_chmon` (nl80211, no libnl) and its OpenWrt package | GS radio |
+| `radio/injector/` | TX99 interference injector | extra radio |
+| `radio/openwrt/` | UCI configuration of the radios | radios |
+| `mosquitto/` | build of Mosquitto 2.1.2 and cJSON 1.7.19, patches, example configurations | vessels, GS |
+| `system/` | chrony, sysctl, quick ACK route, systemd units | vessels, GS |
+| `common/` | DTP reader, step clock and wire formats of the C programs | all |
+| `tests/` | C unit test of the vessel regulator, Python tests, end-to-end test of the whole stack | any |
 
-## The simulation
+## Build and test
 
-`adapters/webots/` is a WeBots project: the world of Section III with its fluid
-node and two hulls, the mesh derived from the DTP, and the controller that runs
-δ at the simulation tick.
+```bash
+mosquitto/build.sh <dir with mosquitto-2.1.2.tar.gz and cJSON-1.7.19.tar.gz>   # once per host, into /opt/mosquitto-2.1
+make                       # build/fdt_regulator.so, build/fdt_dti, build/fdt_chmon, build/test_reg
+make test                  # C unit test, Python tests, end-to-end test (about 40 s)
+sudo make install          # /opt/fleet-dt/{lib,bin}
+pip install -r requirements.txt
+```
 
-    make webots && webots adapters/webots/worlds/jundia_fleet.wbt
+The end-to-end test (`tests/test_integration.py`) runs on one host: two vessel brokers with the
+vessel regulator, the GS broker with the bridges of `fleetdt.gsconf`, the DTI program and the
+synthetic load of each vessel, the channel monitor replaying a drop of the channel, the AS and the VE.
+It checks Algorithm 1 against every G(t), the bound r ≤ d of every edge, the delivery within the step
+of every forwarded message, the rejection of the video topic while Ĉ(t) is low, and δ, φ and μ.
 
-`tests/test_world.c` checks the world against what the controller assumes of it
-on any machine, with or without the SDK — the DEF names resolve, the meshes
-exist, one node is the coordinator, and the 125 ms frame divides into whole
-physics steps.
+## Main commands
 
-On a machine with the SDK it does run. Verified on 2026-08-17 against WeBots
-R2025a: 674,360 frames under the coordinator, feasible throughout, worst δ of
-117 µs against the 125 ms budget, and `--mode=realtime` rendering without a
-single GL error.
-
-## Paper to code
-
-[`docs/paper-to-code.md`](docs/paper-to-code.md) maps every symbol of
-Sections III, IV and V to the file that implements it, and names the three
-things a reader will look for and not find — there is no `fdt_delta`, no frame
-type, and no signature that takes a clock. Each absence follows from something
-the paper does or does not say.
-
-## What the paper promises, and where each promise is discharged
-
-[`docs/spec/paper-claims.md`](docs/spec/paper-claims.md) is the inventory:
-one row per falsifiable claim, with the paper's own words and the artefact
-that discharges it. `make report` walks that list and prints what the table
-should say.
-
-Four statuses, and the third is not a gap:
-
-- **quita** — an artefact exists and `make test` or `make bench` checks it.
-- **fronteira** — the interface is here, or the measurement is, but the answer
-  is not. One claim is in this state: the CPU figures of Section V-A. The
-  benchmark exists and runs three worlds that differ only in vessel count. It
-  reproduces the *shape* of the claim — the first hull costs two to three
-  times the second, because renderer, physics and fluid are paid for once —
-  and it resolves the first-boat increment at 1.24 % against a published 10 %,
-  which is a real disagreement rather than noise. The subsequent-boat
-  increment, 0.56 %, stays under the host's 0.88 % noise floor and is reported
-  as boundary: consistent with the paper's "< 1 %" but not measured.
-- **diferido** — Section VI declares it future work. Building it would
-  contradict the published text, so its absence is the correct state.
-- **pendente** — not built.
-
-Seven items are `diferido`, including dropping late packets at the receiver
-and moving the regulators into the firmware. They are listed so their absence
-reads as a decision rather than an oversight.
-
-## Measurements
-
-[`docs/RESULTS.md`](docs/RESULTS.md) is generated by `make report` from the
-artefacts in `results/`. Every benchmark writes three files — the report, the
-raw series, and an SVG chart with the paper's figure drawn as a dashed rule —
-so a measurement can be re-read, re-plotted, or disagreed with.
-
-A benchmark measures the machine it runs on, which is not the machine the
-paper measured. Divergence is therefore labelled `[DIVERGE]` and reported, not
-treated as failure. What does fail a run is a structural error: a vessel lost
-from a frame, or a counter that does not balance.
-
-Three places where a plausible benchmark would pass while reporting nonsense,
-and what is done about each:
-
-- **48 bytes is not 48 KB.** The state width of Section IV and the packet
-  payload of Section V-A are unrelated quantities that share two digits. Both
-  appear in the bandwidth report, on separate rows.
-- **The ~25-boat ceiling was the injectors'.** Section V-B says so explicitly.
-  The scaling benchmark reports the DTI ceiling and the injector ceiling as two
-  numbers under two headings.
-- **δ compute time is not actuation latency.** Section V-A observes actuation
-  arriving late *while* δ is feasible. They are measured in separate blocks and
-  never summed.
-
-## One number that does not reconcile
-
-Section V-A reports a 48 KB payload at 8 Hz and a bandwidth usage that
-"increased < 1%". On a 100 Mbps link that payload occupies 3.1%. Either the
-48 KB is per second rather than per update window, or "increased" means growth
-against traffic already flowing rather than absolute occupancy.
-
-The manuscript does not say which. The code therefore computes both —
-`fdt_link_utilization` and `fdt_link_increase` — and the benchmark prints them
-side by side. No test asserts the published figure, because asserting it would
-mean choosing a reading on the authors' behalf. Recorded as ambiguity 5 in the
-claim inventory, along with four others worth fixing in the manuscript.
-
-## Origin
-
-Parts of this repository come from `lsa-pucrs/boat-digital-twin` (MIT), by
-Anderson Domingues and the Jundiá project team:
-
-- `fdt_state_t` derives from `dt-daemon/include/boat.h`;
-- `examples/daemon.c` from `dt-daemon/daemon.c`;
-- the WeBots world, the hull and collision meshes, the material and texture,
-  and the immersion and drag coefficients from `projeto_barco/`.
-
-That repository is private. The assets above are redistributed here under its
-licence, with the changes to the world noted in
-[`adapters/webots/README.md`](adapters/webots/README.md); the repository itself
-remains a credit rather than a link a reader can follow.
-
-## Funding
-
-Partially financed by CNPq under grants 460166/2025-8 and 308182/2023-5, and
-by PUCRS/PROPESQ call 01/2026.
+```bash
+python -m fleetdt.as_service --dtp dtp.json --broker 127.0.0.1:1883 --log as.jsonl
+python -m fleetdt.ve live --broker 127.0.0.1:1883 --dtp dtp.json --dta dta.jsonl   # http://localhost:8080
+python -m fleetdt.ve replay dta.jsonl
+python -m fleetdt.outer dta.jsonl --target 0.99 --window 4800 --every 4800
+python -m fleetdt.analysis run1.jsonl run2.jsonl --dtp dtp.json
+python -m fleetdt.gsconf gs --vessel 1=192.168.1.99 --vessel 2=192.168.1.98 > gs.conf
+fdt_chmon --dtp dtp.json --iface wlan0 --broker 192.168.1.10:1883      # on the GS radio
+```
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT, see `LICENSE`.

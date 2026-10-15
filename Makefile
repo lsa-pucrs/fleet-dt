@@ -1,168 +1,53 @@
-# fleet-dt — build of the model, the tests, the examples and the benchmarks.
+# Fleet-DT: C programs (vessel regulator plugin, DTI program, channel monitor) and tests.
 #
-#   make lib       the static library, no external dependency
-#   make test      the unit suite; every published figure is checked here
-#   make examples  the runnable daemons
-#   make bench     the measurement campaign; writes results/
-#   make all       lib + test + examples + bench
+#   make                 build everything into build/
+#   make test            C unit test and the Python tests (the integration test needs MOSQ)
+#   make install         install the C programs into PREFIX (vessel or GS)
 #
-# Anything needing a third-party SDK lives behind its own target and skips
-# with a notice when the SDK is absent, so this file never fails for a reason
-# the reader cannot act on.
+# MOSQ is the prefix of the patched Mosquitto 2.1.2 and of cJSON 1.7.19 (mosquitto/build.sh).
+# On the GS radio (OpenWrt) the channel monitor builds with the OpenWrt SDK: radio/channel_monitor/openwrt/.
 
-CC      = gcc
-# -MMD -MP emit a .d beside every .o listing the headers it included, and the
-# generated rules are pulled in below. Without them, editing a header rebuilds
-# nothing: a constant changed in tools/injector/injector.h once left every
-# object stale and the simulation kept running the old value, which looks
-# exactly like a change that did not work.
-CFLAGS  = -std=c18 -Wall -Wextra -Werror -pedantic-errors -O2 -MMD -MP \
-          -Iinclude -Itools -Iadapters
-LDLIBS  = -lm
+MOSQ    ?= /opt/mosquitto-2.1
+PREFIX  ?= /opt/fleet-dt
+CC      ?= cc
+PYTHON  ?= python3
+CFLAGS  ?= -O2 -g -Wall -Wextra -Wno-unused-parameter -std=gnu11
+CPPFLAGS += -Icommon -Ivessel/regulator -I$(MOSQ)/include
+LDFLAGS += -L$(MOSQ)/lib -Wl,-rpath,$(MOSQ)/lib
+B = build
+# sanitizers for the unit test where libasan exists: make SAN="-fsanitize=address,undefined"
+SAN     ?=
 
-LIB     = libfleetdt.a
-LIBSRC  = $(wildcard src/*.c)
-LIBOBJ  = $(LIBSRC:.c=.o)
+COMMON = common/fdt_common.c
+COMMON_H = common/fdt_common.h
 
-# The injector is a tool, not part of the library: it belongs to the Section
-# V-B campaign rather than to the model. It is compiled once and linked into
-# whatever needs it.
-TOOLSRC = tools/injector/injector.c
-TOOLOBJ = $(TOOLSRC:.c=.o)
+all: $(B)/fdt_regulator.so $(B)/fdt_dti $(B)/fdt_chmon $(B)/test_reg
 
-# Adapters with no external dependency: the Ardupilot ingest mapping and the
-# HSDT camera boundary. Those that do need an SDK -- MQTT, WeBots -- live
-# behind their own targets further down.
-ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/rtsp/fdt_rtsp_fake.c
-ADAPTOBJ = $(ADAPTSRC:.c=.o)
+$(B):
+	mkdir -p $(B)
 
-TESTSRC = $(wildcard tests/test_*.c)
-TESTBIN = $(TESTSRC:tests/test_%.c=fleet_dt_test_%)
+$(B)/fdt_regulator.so: vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_reg.c vessel/regulator/fdt_reg.h $(COMMON) $(COMMON_H) | $(B)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -o $@ vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_reg.c $(COMMON) $(LDFLAGS) -lcjson -lm
 
-EXAMPLESRC = $(wildcard examples/*.c)
-EXAMPLEBIN = $(EXAMPLESRC:.c=)
+$(B)/fdt_dti: vessel/dti/fdt_dti.c $(COMMON) $(COMMON_H) | $(B)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -pthread -o $@ vessel/dti/fdt_dti.c $(COMMON) $(LDFLAGS) -lmosquitto -lcjson -lm
 
-BENCHSRC = $(wildcard tools/bench/bench_*.c)
-BENCHBIN = $(BENCHSRC:.c=)
+$(B)/fdt_chmon: radio/channel_monitor/fdt_chmon.c $(COMMON) $(COMMON_H) | $(B)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ radio/channel_monitor/fdt_chmon.c $(COMMON) $(LDFLAGS) -lmosquitto -lcjson -lm
 
-RESULTS = results
+$(B)/test_reg: tests/c/test_reg.c vessel/regulator/fdt_reg.c vessel/regulator/fdt_reg.h $(COMMON) $(COMMON_H) | $(B)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN) -o $@ tests/c/test_reg.c vessel/regulator/fdt_reg.c $(COMMON) $(LDFLAGS) -lcjson -lm
 
-# Port the MQTT integration check runs its own broker on, chosen so it cannot
-# collide with a broker already serving a fleet on 1883.
-MQTT_IT_PORT = 18830
+test: all
+	$(B)/test_reg
+	FDT_BUILD=$(abspath $(B)) MOSQ=$(MOSQ) $(PYTHON) -m pytest -q tests
 
-.PHONY: all lib test examples bench report syntax mqtt mqtt-test webots clean
-
-# Adapters needing a third-party SDK. Each skips with a notice rather than
-# failing the build, so a reader without the SDK still gets a green tree.
-MOSQ_CFLAGS = $(shell pkg-config --cflags libmosquitto 2>/dev/null)
-MOSQ_LIBS   = $(shell pkg-config --libs libmosquitto 2>/dev/null)
-
-all: lib test examples bench syntax report
-
-lib: $(LIB)
-
-$(LIB): $(LIBOBJ)
-	ar rcs $@ $^
-
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
-
-fleet_dt_test_%: tests/test_%.c $(LIB) $(TOOLOBJ) $(ADAPTOBJ)
-	$(CC) $(CFLAGS) $< $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(LDLIBS) -o $@
-
-test: $(TESTBIN)
-	@for t in $(TESTBIN); do echo "== $$t"; ./$$t || exit 1; done
-
-examples: $(EXAMPLEBIN)
-
-examples/%: examples/%.c $(LIB)
-	$(CC) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-tools/bench/bench_%: tools/bench/bench_%.c $(LIB) $(TOOLOBJ)
-	$(CC) $(CFLAGS) $< $(TOOLOBJ) $(LIB) $(LDLIBS) -o $@
-
-bench: $(BENCHBIN)
-	@mkdir -p $(RESULTS)
-	@for b in $(BENCHBIN); do echo "== $$b"; ./$$b || exit 1; echo; done
-	@echo "artefacts in $(RESULTS)/"
-
-# Compile coverage for the adapters whose SDK is not installed here. Parsing
-# and type-checking them against stub headers is the difference between
-# "written" and "known to compile"; it does not replace a real build, which is
-# the only thing that can catch a wrong assumption about the API.
-syntax:
-	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
-	  adapters/mqtt/fdt_mqtt.c && echo "syntax ok: adapters/mqtt"
-	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
-	  adapters/webots/controllers/fdt_controller/fdt_controller.c && \
-	  echo "syntax ok: adapters/webots"
-
-mqtt: $(LIB)
-	@if [ -z "$(MOSQ_LIBS)" ]; then \
-	  echo "libmosquitto not found; skipping the MQTT transport."; \
-	  echo "  install it with: dnf install mosquitto-devel"; \
-	else \
-	  $(CC) $(CFLAGS) $(MOSQ_CFLAGS) -c adapters/mqtt/fdt_mqtt.c \
-	    -o adapters/mqtt/fdt_mqtt.o && \
-	  ar rcs libfleetdt_mqtt.a adapters/mqtt/fdt_mqtt.o && \
-	  echo "built libfleetdt_mqtt.a"; \
-	fi
-
-# Integration check for the MQTT adapter: needs libmosquitto and a broker.
-# Kept out of `make test` so the unit suite stays dependency-free.
-mqtt-test: mqtt
-	@if [ -z "$(MOSQ_LIBS)" ]; then \
-	  echo "libmosquitto not found; skipping the MQTT integration check."; \
-	elif ! command -v mosquitto >/dev/null 2>&1; then \
-	  echo "no mosquitto broker on PATH; skipping the integration check."; \
-	else \
-	  $(CC) $(CFLAGS) $(MOSQ_CFLAGS) tests/it_mqtt.c \
-	    libfleetdt_mqtt.a $(LIB) $(MOSQ_LIBS) $(LDLIBS) -o fleet_dt_it_mqtt && \
-	  { echo "listener $(MQTT_IT_PORT) 127.0.0.1"; \
-	    echo "allow_anonymous true"; \
-	    echo "pid_file /tmp/fleet-dt-it.pid"; } > /tmp/fleet-dt-it.conf && \
-	  mosquitto -c /tmp/fleet-dt-it.conf -d >/dev/null 2>&1 && \
-	  for i in 1 2 3 4 5 6 7 8 9 10; do \
-	    ss -ltn 2>/dev/null | grep -q ':$(MQTT_IT_PORT)' && break; \
-	    sleep 0.2; \
-	  done && \
-	  ./fleet_dt_it_mqtt $(MQTT_IT_PORT); rc=$$?; \
-	  kill `cat /tmp/fleet-dt-it.pid` 2>/dev/null; \
-	  exit $$rc; \
-	fi
-
-webots: $(LIB) $(TOOLOBJ)
-	@if [ -z "$$WEBOTS_HOME" ]; then \
-	  echo "WEBOTS_HOME is not set; skipping the WeBots controller."; \
-	  echo "  see adapters/webots/README.md"; \
-	else \
-	  $(CC) $(CFLAGS) -I$$WEBOTS_HOME/include/controller/c \
-	    adapters/webots/controllers/fdt_controller/fdt_controller.c \
-	    $(TOOLOBJ) $(LIB) -L$$WEBOTS_HOME/lib/controller \
-	    -lController $(LDLIBS) \
-	    -o adapters/webots/controllers/fdt_controller/fdt_controller && \
-	  echo "built adapters/webots/controllers/fdt_controller/fdt_controller" && \
-	  echo "open the world with:  webots adapters/webots/worlds/jundia_fleet.wbt"; \
-	fi
-
-tools/report/report: tools/report/report.c $(LIB)
-	$(CC) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
-
-report: tools/report/report
-	@./tools/report/report
-
-# Header dependencies for everything compiled so far.
--include $(LIBOBJ:.o=.d) $(TOOLOBJ:.o=.d) $(ADAPTOBJ:.o=.d)
+install: all
+	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/bin
+	install -m 0644 $(B)/fdt_regulator.so $(DESTDIR)$(PREFIX)/lib/
+	install -m 0755 $(B)/fdt_dti $(B)/fdt_chmon $(DESTDIR)$(PREFIX)/bin/
 
 clean:
-	rm -f $(LIBOBJ:.o=.d) $(TOOLOBJ:.o=.d) $(ADAPTOBJ:.o=.d)
-	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
-	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
-	      adapters/mqtt/fdt_mqtt.o fleet_dt_it_mqtt \
-	      adapters/webots/controllers/fdt_controller/fdt_controller
-	rm -rf $(RESULTS)/selftest
-# results/ itself is NOT removed. It is committed, so that the charts in
-# docs/RESULTS.md resolve on a fresh clone, and a clean that deleted it would
-# stage the deletion of tracked artefacts -- which is exactly what happened
-# once. Only the plotter's self-test output, which is ignored, is swept.
+	rm -rf $(B)
+
+.PHONY: all test install clean

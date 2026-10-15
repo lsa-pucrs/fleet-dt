@@ -7,22 +7,26 @@ vulnerability.
 
 ## Surface
 
-The library performs no I/O, allocates nothing, and holds no file-scope state.
-All storage belongs to the caller, so its memory safety is bounded by the
-caller's.
+Every program parses bytes from the network, and each rejects a malformed input
+whole rather than accepting part of it:
 
-Two places do touch the outside world, and are where to look first:
+- the vessel regulator (`vessel/regulator/`) runs inside the vessel broker and
+  reads the demand and priority tables (`fdt_demand_decode`,
+  `fdt_levels_decode` reject a wrong length or a level above 2), and copies raw
+  messages into queues bounded by `plugin_opt_max_msgs`;
+- the AS and the VE decode the binary tables and the JSON topics of the GS
+  broker and drop a malformed message;
+- the channel monitor parses netlink attributes of the kernel with length
+  checks on every attribute.
 
-- `src/codec.c` and `src/envelope.c` parse bytes off the network. Both reject
-  a truncated or malformed frame outright rather than accepting part of it: a
-  half-read state entering a twin's queue would be indistinguishable from a
-  measurement.
-- `adapters/mqtt/` connects to a broker. The shipped configuration in
-  `config/mosquitto/` uses `allow_anonymous true`, which is appropriate for an
-  isolated field network and **not** for anything reachable from a wider one.
-  A deployment on a shared network wants TLS and per-client credentials.
+The brokers use `allow_anonymous true`, which suits an isolated field network
+and **not** a network reachable from a wider one. A deployment on a shared
+network wants TLS and per-client credentials on both brokers and on the bridges.
+The repository holds no key of the field network: `radio/openwrt/` carries the
+placeholder `CHANGE_ME`.
 
 ## Not a threat model for the vessels
 
-This repository is the digital twin, not the vessel firmware. Anything
-concerning the physical control of a boat belongs to the Ardupilot side.
+This repository is the digital twin and the network of the fleet, not the
+vessel firmware. Anything concerning the physical control of a boat belongs to
+the ArduPilot side.

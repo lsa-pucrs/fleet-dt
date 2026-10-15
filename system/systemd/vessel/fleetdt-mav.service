@@ -1,0 +1,13 @@
+[Unit]
+Description=Fleet-DT telemetry publisher and autopilot interface
+After=fleetdt-broker.service
+Requires=fleetdt-broker.service
+
+[Service]
+EnvironmentFile=/etc/fleetdt/fleetdt.env
+ExecStart=/usr/bin/python3 /opt/fleet-dt/src/vessel/publishers/mav_publisher.py --dtp ${FDT_DTP} --vessel ${FDT_VESSEL} --mavlink udpin:0.0.0.0:14551
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fleet-DT VE</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #1d2330; --muted: #6b7280; --line: #d9dde3;
+  --gs: #f2c94c; --vessel: #3d85c6; --out: #c4c9d1;
+  --l2: #c0504d; --l1: #3f8f3a; --l0: #9aa0a6; --y: #2f6fd0; --chat: #d9822b; --bad: #fde2e1;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151b; --panel: #1b2029; --ink: #e6e9ef; --muted: #9aa3b2; --line: #2c3340;
+    --out: #4a5160; --l0: #6b7280; --bad: #3a2224; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 15px; margin: 0 8px 0 0; }
+.kv { color: var(--muted); } .kv b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--l0); margin-right: 4px; }
+.dot.on { background: var(--l1); }
+main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: minmax(360px, 58vh) auto; gap: 12px; padding: 12px 16px; }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+section h2 { font-size: 13px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+#graphBox { position: relative; }
+#graph { width: 100%; height: calc(100% - 22px); display: block; }
+#side { grid-row: span 2; overflow: auto; }
+#series { min-height: 230px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+td, th { padding: 3px 4px; border-bottom: 1px solid var(--line); text-align: right; }
+td:first-child, th:first-child { text-align: left; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 12px; }
+.sw { display: inline-block; width: 18px; height: 4px; vertical-align: middle; margin-right: 4px; border-radius: 2px; }
+#tip { position: fixed; pointer-events: none; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px; display: none; box-shadow: 0 2px 8px rgba(0,0,0,.15); z-index: 5; }
+#controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 6px; }
+#controls input[type=range] { flex: 1 1 200px; }
+button, select { font: inherit; padding: 3px 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 5px; cursor: pointer; }
+.metrics { display: flex; flex-wrap: wrap; gap: 16px; margin: 4px 0 6px; }
+.bad { background: var(--bad); }
+@media (max-width: 900px) { main { grid-template-columns: 1fr; } #side { grid-row: auto; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Fleet-DT &middot; VE</h1>
+  <span class="kv"><span id="conn" class="dot"></span><span id="mode">-</span></span>
+  <span class="kv">step <b id="hT">-</b></span>
+  <span class="kv">m(t) <b id="hM">-</b></span>
+  <span class="kv">y(t) <b id="hY">-</b></span>
+  <span class="kv">&Ccirc;(t) <b id="hC">-</b></span>
+  <span class="kv">b(t) <b id="hB">-</b></span>
+  <span class="kv">y &ge; U&Ccirc; <b id="hCov">-</b></span>
+</header>
+<main>
+  <section id="graphBox">
+    <h2>G(t): edges (i, &#8467;) from each vessel to vertex 0</h2>
+    <svg id="graph" role="img" aria-label="Graph of the network in step t"></svg>
+  </section>
+  <section id="side">
+    <h2>Vertex 0 (GS)</h2>
+    <table id="v0"></table>
+    <h2 style="margin-top:12px">Grant per vessel (a<sub>i</sub> versus b(t))</h2>
+    <svg id="bars" width="100%" height="180"></svg>
+    <h2 style="margin-top:12px">Priority table p(t)</h2>
+    <table id="levels"></table>
+    <div class="legend" style="margin-top:8px">
+      <span><span class="sw" style="background:var(--l2)"></span>level 2 (QoS 2)</span>
+      <span><span class="sw" style="background:var(--l1)"></span>level 1 (QoS 1)</span>
+      <span><span class="sw" style="background:var(--l0)"></span>level 0 (withheld)</span>
+    </div>
+    <p class="kv" style="margin-top:8px">Edge width grows with the demand d<sub>i,&#8467;</sub>(t). The opaque part of each edge is the fraction r<sub>i,&#8467;</sub>(t)/d<sub>i,&#8467;</sub>(t) that the GS received within step t.</p>
+  </section>
+  <section id="series">
+    <h2>Prediction and fidelity (window of <span id="wlen">400</span> steps)</h2>
+    <div class="metrics kv">
+      <span>MAPE <b id="mMape">-</b></span>
+      <span>&gamma; <b id="mGamma">-</b></span>
+      <span>&delta; <b id="mDelta">-</b></span>
+      <span>&eta;(N) <b id="mEta">-</b></span>
+    </div>
+    <svg id="chart" width="100%" height="150"></svg>
+    <div class="legend">
+      <span><span class="sw" style="background:var(--y)"></span>y(t)</span>
+      <span><span class="sw" style="background:var(--chat)"></span>&Ccirc;(t)</span>
+      <span><span class="sw" style="background:repeating-linear-gradient(90deg,var(--chat) 0 4px,transparent 4px 7px)"></span>U&Ccirc;(t)</span>
+      <span><span class="sw bad" style="height:10px"></span>y(t) &lt; U&Ccirc;(t)</span>
+    </div>
+    <div id="controls">
+      <button id="bPlay">Pause</button>
+      <button id="bPrev">&lsaquo;</button>
+      <button id="bNext">&rsaquo;</button>
+      <input id="slider" type="range" min="0" max="0" value="0">
+      <select id="speed"><option value="0.25">0.25&times;</option><option value="1" selected>1&times;</option><option value="4">4&times;</option><option value="16">16&times;</option></select>
+      <button id="bLive">Follow last step</button>
+    </div>
+  </section>
+</main>
+<div id="tip"></div>
+<script>
+"use strict";
+const NS = "http://www.w3.org/2000/svg";
+const $ = (id) => document.getElementById(id);
+const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const fmtB = (v) => v == null ? "-" : (v >= 1e6 ? (v / 1e6).toFixed(2) + " MB" : v >= 1e3 ? (v / 1e3).toFixed(1) + " kB" : Math.round(v) + " B");
+const W = 400;                 // window of the series and of the fidelity metrics
+const state = { steps: [], idx: -1, follow: true, playing: true, mode: "", U: null, timer: null, speed: 1, Ts: 0.125 };
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+const levelColor = (p) => p === 2 ? css("--l2") : p === 1 ? css("--l1") : css("--l0");
+
+// ---------------------------------------------------------------- graph G(t)
+function drawGraph(g) {
+  const svg = $("graph");
+  svg.innerHTML = "";
+  const w = svg.clientWidth || 800, h = svg.clientHeight || 400;
+  const vessels = [...new Set(g.edges.map((e) => e.i).concat(g.vessels))].sort((a, b) => a - b);
+  const inM = new Set(g.vessels);
+  const gs = { x: w * 0.84, y: h / 2 };
+  const pos = {};
+  vessels.forEach((i, k) => { pos[i] = { x: w * 0.1, y: h * (k + 1) / (vessels.length + 1) }; });
+  const bmax = g.b || Math.max(1, ...g.edges.map((e) => e.d));
+  const L = g.L;
+  for (const e of g.edges) {
+    const a = pos[e.i]; if (!a) continue;
+    const off = (e.l - (L + 1) / 2) * Math.min(26, h / (vessels.length + 1) / L * 1.6);
+    const mx = (a.x + gs.x) / 2, my = (a.y + gs.y) / 2 + off * 2.2;
+    const d = `M${a.x},${a.y} Q${mx},${my} ${gs.x},${gs.y}`;
+    const out = !inM.has(e.i);
+    const col = out ? css("--out") : levelColor(e.p);
+    const width = 1.2 + 7 * Math.sqrt(Math.min(1, e.d / bmax));
+    const withheld = e.p === 0 || out;
+    const base = el("path", { d, fill: "none", stroke: col, "stroke-width": width, "stroke-opacity": withheld ? 0.6 : 0.28, "stroke-linecap": "butt" }, svg);
+    if (withheld) base.setAttribute("stroke-dasharray", "6 5");
+    const frac = e.d > 0 ? Math.min(1, e.r / e.d) : 0;
+    if (frac > 0 && !out) {
+      const top = el("path", { d, fill: "none", stroke: col, "stroke-width": width, "stroke-linecap": "butt" }, svg);
+      const len = top.getTotalLength();
+      top.setAttribute("stroke-dasharray", `${frac * len} ${len}`);
+    }
+    const hit = el("path", { d, fill: "none", stroke: "transparent", "stroke-width": Math.max(10, width + 6) }, svg);
+    hit.addEventListener("mousemove", (ev) => tip(ev, edgeTip(g, e, out)));
+    hit.addEventListener("mouseleave", () => ($("tip").style.display = "none"));
+  }
+  for (const i of vessels) {
+    const p = pos[i];
+    const c = el("circle", { cx: p.x, cy: p.y, r: 15, fill: inM.has(i) ? css("--vessel") : css("--out") }, svg);
+    const tx = el("text", { x: p.x, y: p.y + 4, "text-anchor": "middle", fill: "#fff", "font-size": 11, "font-weight": 600 }, svg);
+    tx.textContent = "b" + i;
+    if (!inM.has(i)) { const t2 = el("text", { x: p.x + 20, y: p.y + 4, fill: css("--muted"), "font-size": 11 }, svg); t2.textContent = "outside M(t)"; }
+    c.addEventListener("mousemove", (ev) => tip(ev, vesselTip(g, i, inM.has(i))));
+    c.addEventListener("mouseleave", () => ($("tip").style.display = "none"));
+  }
+  el("circle", { cx: gs.x, cy: gs.y, r: 22, fill: css("--gs"), stroke: "#8a6d00", "stroke-width": 1 }, svg);
+  const t0 = el("text", { x: gs.x, y: gs.y + 4, "text-anchor": "middle", "font-size": 12, "font-weight": 700, fill: "#3a2f00" }, svg);
+  t0.textContent = "0";
+  const lab = el("text", { x: gs.x, y: gs.y + 40, "text-anchor": "middle", "font-size": 12, fill: css("--ink") }, svg);
+  lab.textContent = "GS";
+  // topic legend along the right border, in the order of the edges
+  g.topics.forEach((name, k) => {
+    const y = 14 + k * 15;
+    const tt = el("text", { x: w - 6, y, "text-anchor": "end", "font-size": 11, fill: css("--muted") }, svg);
+    tt.textContent = `${k + 1}: ${name}`;
+  });
+}
+
+function edgeTip(g, e, out) {
+  const name = g.topics[e.l - 1];
+  const need = g.needed.includes(e.l) ? "yes" : "no";
+  return `<b>edge (${e.i}, ${e.l})</b> b${e.i} &middot; ${name}<br>` +
+    (out ? "vessel outside M(t), forwards nothing<br>" : "") +
+    `d = ${fmtB(e.d)} &middot; p = ${e.p ?? "-"} &middot; in N(t): ${need}<br>` +
+    `r = ${fmtB(e.r)} (${e.d ? (100 * e.r / e.d).toFixed(0) : 0}% of d)<br>` +
+    `messages ${e.n}, repeated ${e.dup}, late ${e.late}`;
+}
+function vesselTip(g, i, inM) {
+  const a = g.edges.filter((e) => e.i === i && e.p > 0).reduce((s, e) => s + e.d, 0);
+  const r = g.edges.filter((e) => e.i === i).reduce((s, e) => s + e.r, 0);
+  return `<b>vessel ${i}</b> ${inM ? "in M(t)" : "outside M(t)"}<br>a<sub>i</sub> = ${fmtB(a)} &middot; b(t) = ${fmtB(g.b)}<br>received ${fmtB(r)}`;
+}
+function tip(ev, html) {
+  const t = $("tip"); t.innerHTML = html; t.style.display = "block";
+  t.style.left = Math.min(ev.clientX + 14, innerWidth - t.offsetWidth - 8) + "px";
+  t.style.top = Math.min(ev.clientY + 14, innerHeight - t.offsetHeight - 8) + "px";
+}
+
+// ---------------------------------------------------------------- side panel
+function drawSide(g) {
+  const cov = g.y != null && g.U != null && g.C_hat != null ? g.y >= g.U * g.C_hat : null;
+  $("v0").innerHTML =
+    row("y(t), measured", fmtB(g.y)) + row("Ĉ(t), predicted", fmtB(g.C_hat)) +
+    row("U · Ĉ(t)", g.U != null && g.C_hat != null ? fmtB(g.U * g.C_hat) : "-") +
+    row("K̂(t), phase 3", fmtB(g.K_hat)) + row("b(t), grant limit", fmtB(g.b)) +
+    row("m(t)", g.vessels.length) + row("U, α", `${g.U ?? "-"}, ${g.alpha ?? "-"}`) +
+    `<tr class="${cov === false ? "bad" : ""}"><td>y(t) ≥ U Ĉ(t)</td><td>${cov == null ? "-" : cov ? "yes" : "no"}</td></tr>`;
+  const ord = g.order.length ? g.order : g.topics.map((_, k) => k + 1);
+  const p0 = {};
+  for (const e of g.edges) if (e.p != null) p0[e.l] = e.p;
+  $("levels").innerHTML = "<tr><th>σ</th><th>topic</th><th>N(t)</th><th>p</th></tr>" +
+    ord.map((l, k) => `<tr><td>${k + 1}</td><td>${g.topics[l - 1]}</td><td>${g.needed.includes(l) ? "✓" : ""}</td>` +
+      `<td style="color:${levelColor(p0[l])};font-weight:600">${p0[l] ?? "-"}</td></tr>`).join("");
+  drawBars(g, ord);
+}
+const row = (k, v) => `<tr><td>${k}</td><td>${v}</td></tr>`;
+
+function drawBars(g, ord) {
+  const svg = $("bars"); svg.innerHTML = "";
+  const w = svg.clientWidth || 320, h = 180, pad = 22;
+  const vs = g.vessels;
+  if (!vs.length || !g.b) return;
+  const tot = vs.map((i) => g.edges.filter((e) => e.i === i).reduce((s, e) => s + e.d, 0));
+  const ymax = Math.max(g.b * 1.15, ...tot);
+  const sy = (v) => h - pad - (h - 2 * pad) * v / ymax;
+  const bw = Math.min(36, (w - 40) / vs.length * 0.6);
+  vs.forEach((i, k) => {
+    const x = 30 + k * (w - 40) / vs.length;
+    let acc = 0;
+    // admitted topics in the order sigma_t, then the rejected topics above them in light color
+    for (const pass of [true, false]) for (const l of ord) {
+      const e = g.edges.find((q) => q.i === i && q.l === l); if (!e || !e.d) continue;
+      const adm = e.p > 0;
+      if (adm !== pass) continue;
+      const r = el("rect", { x, y: sy(acc + e.d), width: bw, height: Math.max(0.5, sy(acc) - sy(acc + e.d)),
+        fill: levelColor(e.p), "fill-opacity": adm ? 0.85 : 0.25, stroke: css("--panel"), "stroke-width": 0.6 }, svg);
+      r.addEventListener("mousemove", (ev) => tip(ev, edgeTip(g, e, false)));
+      r.addEventListener("mouseleave", () => ($("tip").style.display = "none"));
+      acc += e.d;
+    }
+    const t = el("text", { x: x + bw / 2, y: h - 6, "text-anchor": "middle", "font-size": 11, fill: css("--muted") }, svg);
+    t.textContent = "b" + i;
+  });
+  el("line", { x1: 24, x2: w - 4, y1: sy(g.b), y2: sy(g.b), stroke: css("--ink"), "stroke-dasharray": "5 3" }, svg);
+  const lb = el("text", { x: w - 4, y: sy(g.b) - 4, "text-anchor": "end", "font-size": 11, fill: css("--ink") }, svg);
+  lb.textContent = "b(t) = " + fmtB(g.b);
+}
+
+// ---------------------------------------------------------------- series and fidelity
+function drawSeries() {
+  const svg = $("chart"); svg.innerHTML = "";
+  const w = svg.clientWidth || 800, h = 150, pl = 60, pr = 6, pt = 6, pb = 18;
+  const hi = state.idx + 1, lo = Math.max(0, hi - W);
+  const S = state.steps.slice(lo, hi);
+  if (!S.length) return;
+  const vals = S.flatMap((g) => [g.y, g.C_hat]).filter((v) => v != null);
+  const ymax = Math.max(1, ...vals) * 1.08;
+  const sx = (k) => pl + (w - pl - pr) * k / Math.max(1, W - 1);
+  const sy = (v) => pt + (h - pt - pb) * (1 - v / ymax);
+  S.forEach((g, k) => {
+    if (g.y != null && g.U != null && g.C_hat != null && g.y < g.U * g.C_hat)
+      el("rect", { x: sx(k) - 0.5, y: pt, width: Math.max(1, (w - pl - pr) / W), height: h - pt - pb, fill: css("--bad") }, svg);
+  });
+  const line = (f, color, dash) => {
+    let d = "", pen = false;
+    S.forEach((g, k) => { const v = f(g); if (v == null) { pen = false; return; } d += (pen ? "L" : "M") + sx(k).toFixed(1) + "," + sy(v).toFixed(1); pen = true; });
+    el("path", { d, fill: "none", stroke: color, "stroke-width": 1.4, "stroke-dasharray": dash || "" }, svg);
+  };
+  line((g) => g.y, css("--y"));
+  line((g) => g.C_hat, css("--chat"));
+  line((g) => (g.U != null && g.C_hat != null ? g.U * g.C_hat : null), css("--chat"), "4 3");
+  for (const f of [0, 0.5, 1]) {
+    const v = ymax * f;
+    el("line", { x1: pl, x2: w - pr, y1: sy(v), y2: sy(v), stroke: css("--line") }, svg);
+    const t = el("text", { x: pl - 4, y: sy(v) + 4, "text-anchor": "end", "font-size": 10, fill: css("--muted") }, svg);
+    t.textContent = fmtB(v);
+  }
+  const t1 = el("text", { x: pl, y: h - 4, "font-size": 10, fill: css("--muted") }, svg); t1.textContent = "t = " + S[0].t;
+  const t2 = el("text", { x: sx(S.length - 1), y: h - 4, "text-anchor": "end", "font-size": 10, fill: css("--muted") }, svg); t2.textContent = "t = " + S[S.length - 1].t;
+  fidelity(S);
+}
+
+// Definition 15: MAPE, coverage gamma, message delivery ratio delta; eta over the topics of N(t)
+function fidelity(S) {
+  let ape = 0, na = 0, cov = 0, nc = 0, ok = 0, nd = 0, rN = 0, dN = 0;
+  for (const g of S) {
+    if (g.y > 0 && g.C_hat != null) { ape += Math.abs(g.y - g.C_hat) / g.y; na++;
+      if (g.U != null) { nc++; if (g.y >= g.U * g.C_hat) cov++; } }
+    const ls = g.topics.indexOf("state") + 1;
+    const inM = new Set(g.vessels);
+    for (const e of g.edges) {
+      if (!inM.has(e.i)) continue;
+      if (e.l === ls && e.p > 0 && g.needed.includes(ls)) { nd++; if (e.n === 1) ok++; }
+      if (g.needed.includes(e.l)) { rN += e.r; dN += e.d; }
+    }
+  }
+  $("mMape").textContent = na ? (100 * ape / na).toFixed(1) + "%" : "-";
+  $("mGamma").textContent = nc ? (cov / nc).toFixed(3) : "-";
+  $("mDelta").textContent = nd ? (ok / nd).toFixed(3) : "-";
+  $("mEta").textContent = dN ? (rN / dN).toFixed(3) : "-";
+}
+
+// ---------------------------------------------------------------- navigation
+function show(idx) {
+  if (!state.steps.length) return;
+  state.idx = Math.max(0, Math.min(state.steps.length - 1, idx));
+  const g = state.steps[state.idx];
+  $("slider").max = state.steps.length - 1; $("slider").value = state.idx;
+  $("hT").textContent = g.t; $("hM").textContent = g.vessels.length;
+  $("hY").textContent = fmtB(g.y); $("hC").textContent = fmtB(g.C_hat); $("hB").textContent = fmtB(g.b);
+  const cov = g.y != null && g.U != null && g.C_hat != null ? g.y >= g.U * g.C_hat : null;
+  $("hCov").textContent = cov == null ? "-" : cov ? "yes" : "no";
+  drawGraph(g); drawSide(g); drawSeries();
+}
+function push(g) {
+  state.steps.push(g);
+  if (state.steps.length > 20000) { state.steps.splice(0, 5000); state.idx -= 5000; }
+  if (state.follow && state.playing) show(state.steps.length - 1);
+  else $("slider").max = state.steps.length - 1;
+}
+function setPlaying(on) { state.playing = on; $("bPlay").textContent = on ? "Pause" : "Play"; schedule(); }
+function schedule() {
+  clearTimeout(state.timer);
+  if (!state.playing || state.follow) return;
+  state.timer = setTimeout(() => {
+    if (state.idx < state.steps.length - 1) { show(state.idx + 1); schedule(); }
+    else if (state.mode !== "replay") { state.follow = true; }
+    else setPlaying(false);
+  }, 1000 * state.Ts / state.speed);
+}
+$("bPlay").onclick = () => setPlaying(!state.playing);
+$("bPrev").onclick = () => { state.follow = false; setPlaying(false); show(state.idx - 1); };
+$("bNext").onclick = () => { state.follow = false; setPlaying(false); show(state.idx + 1); };
+$("slider").oninput = (e) => { state.follow = false; show(+e.target.value); schedule(); };
+$("speed").onchange = (e) => { state.speed = +e.target.value; schedule(); };
+$("bLive").onclick = () => { state.follow = true; setPlaying(true); show(state.steps.length - 1); };
+addEventListener("resize", () => show(state.idx));
+
+async function start() {
+  const meta = await (await fetch("api/meta")).json();
+  state.mode = meta.mode; state.Ts = meta.Ts || 0.125;
+  $("mode").textContent = meta.mode + (meta.file ? " · " + meta.file.split("/").pop() : "");
+  $("wlen").textContent = W;
+  const hist = await (await fetch("api/dta")).json();
+  hist.forEach((g) => state.steps.push(g));
+  if (meta.mode === "replay") {
+    state.follow = false; $("bLive").style.display = "none"; $("conn").classList.add("on");
+    show(0); setPlaying(true); return;
+  }
+  show(state.steps.length - 1);
+  const ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + location.pathname.replace(/[^/]*$/, "") + "ws");
+  ws.onopen = () => $("conn").classList.add("on");
+  ws.onclose = () => { $("conn").classList.remove("on"); setTimeout(() => location.reload(), 3000); };
+  ws.onmessage = (m) => { const o = JSON.parse(m.data); if (o.type === "graph") push(o.g); };
+}
+start();
+</script>
+</body>
+</html>

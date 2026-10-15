@@ -1,0 +1,12 @@
+[Unit]
+Description=Fleet-DT GS MQTT broker (bridges to the vessels)
+After=network-online.target chronyd.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/mosquitto-2.1/sbin/mosquitto -c /etc/fleetdt/gs.conf
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

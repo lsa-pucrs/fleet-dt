@@ -1,0 +1,16 @@
+[Unit]
+Description=Fleet-DT DTI program (demand table of each step)
+After=fleetdt-broker.service
+Requires=fleetdt-broker.service
+
+[Service]
+EnvironmentFile=/etc/fleetdt/fleetdt.env
+ExecStart=/opt/fleet-dt/bin/fdt_dti --dtp ${FDT_DTP} --vessel ${FDT_VESSEL} --broker 127.0.0.1:1883 --prio 50
+Restart=always
+RestartSec=1
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+LimitRTPRIO=99
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,16 @@
+diff --git a/src/plugin_tick.c b/src/plugin_tick.c
+index a00c95b..6b9705b 100644
+--- a/src/plugin_tick.c
++++ b/src/plugin_tick.c
+@@ -50,6 +50,11 @@ static void plugin__handle_tick_single(struct mosquitto__security_options *opts)
+ 				cb_base->data.next_tick.tv_nsec -= 1000000000;
+ 				cb_base->data.next_tick.tv_sec += 1;
+ 			}
++		}else{
++			/* PATCH: keep the pending tick deadline in the poll timeout */
++			long rem_ms = (long)((cb_base->data.next_tick.tv_sec - event_data.now_s)*1000
++				+ (cb_base->data.next_tick.tv_nsec - event_data.now_ns)/1000000) + 1;
++			loop__update_next_event(rem_ms > 0 ? rem_ms : 1);
+ 		}
+ 	}
+ }

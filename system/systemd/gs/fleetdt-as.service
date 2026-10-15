@@ -1,0 +1,17 @@
+[Unit]
+Description=Fleet-DT allocation system (AS)
+After=fleetdt-gs-broker.service
+Requires=fleetdt-gs-broker.service
+
+[Service]
+EnvironmentFile=/etc/fleetdt/fleetdt.env
+WorkingDirectory=/opt/fleet-dt/src
+ExecStart=/usr/bin/python3 -m fleetdt.as_service --dtp ${FDT_DTP} --broker 127.0.0.1:1883 --log ${FDT_DATA}/as.jsonl -v
+Restart=always
+RestartSec=1
+CPUSchedulingPolicy=fifo
+CPUSchedulingPriority=40
+LimitRTPRIO=99
+
+[Install]
+WantedBy=multi-user.target

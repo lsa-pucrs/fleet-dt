@@ -1,79 +1,36 @@
 # Changelog
 
-Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
-this project adheres to [SemVer](https://semver.org/).
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [2.0.0] - 2026-10-14
+
+The repository now implements the network digital twin with dynamic bandwidth allocation of the
+IEEE Access paper and replaces the C library of the ICECS 2026 model.
 
 ### Added
 
-The model of Section IV:
+- vessel regulator (Definition 13) as a Mosquitto 2.1 plugin: step ownership of raw messages, strict
+  priority with QoS 2 and QoS 1, policing by c(x, n) = c_b x + c_m n, step log on `boat/b<i>/regulator`
+- DTI program `fdt_dti`: demand table at start(t) under SCHED_FIFO, zero demand for idle topics
+- AS: eq. (2), eq. (3) and Algorithm 1 on absolute deadlines, `fleet/as` with σ_t and N(t)
+- outer loop: α* by one-step MSE, U* by coverage, what-if table, sliding windows (condition C3)
+- Section VI metrics: MAPE, γ, δ, φ, η per vessel with Jain's index, μ, ν, τ_int, n_eff, block
+  bootstrap, Clopper-Pearson, Diebold-Mariano, Wilcoxon with Holm and Hodges-Lehmann
+- VE: G(t) per step from the GS broker, live page, replay, DTA in JSON lines
+- channel monitor `fdt_chmon` for the GS radio (nl80211 survey and station counters through generic
+  netlink, replay backend, OpenWrt package)
+- TX99 interference injector, OpenWrt configuration of the radios
+- publishers of telemetry and video and the synthetic load `raw_load.py`
+- broker configuration generator, Mosquitto 2.1.2 build with the plugin tick and bridge TCP_NODELAY
+  patches, chrony, sysctl, quick ACK route, systemd units
+- C unit test of the vessel regulator, Python tests, end-to-end test of the whole stack on one host
 
-- model types for equation (1) and the 21 entries of Table I, with the state
-  pinned at 48 bytes by static assertion
-- the bounded state frame queue, and the `48d` bound the paper computes from it
-- δ, δᵉ and π over a window of the `n` most recent states; equation (2) is the
-  `n == 1` case, so there is no separate δ
-- the non-autonomous vessel, where actuation is absorbed by the state
-- the fleet aggregate of equations (4), (5) and (6), with `cᵗ` delivered to
-  every δᵉ and every π rather than only stored
-- the `Bᵗ` store and the coordinator `S` of Figure 4, computing `cᵗ` in the
-  same step in which it distributes `gᵗ`
-- the 125 ms pacer with absolute deadlines
-- the feasibility predicate, measured per vessel over δ compute time only
+### Fixed
 
-The architecture of Section III:
+- every MQTT client sets TCP_NODELAY: paho-mqtt leaves Nagle's algorithm on, and a PUBLISH that
+  follows a PUBACK waited for the delayed ACK of the broker (about 22 ms after start(t) + T1)
 
-- the transport seam, with an in-process loopback that separates publication
-  from delivery
-- a fixed-width little-endian wire codec for `Iᵗ`, `Bᵗ` and `Aᵗ`
-- a wire envelope carrying the per-vessel sequence number Table I does not
-- detection and counting of the partial and double frame updates Section V-B
-  reports and leaves open
-- the bandwidth regulators, decimating publication to the DT rate while the
-  sensor path keeps its own
-- the link-budget model, with both readings of the Section V-A figure
-- the DTE registry, ticking parallel simulations off one clock
-- MQTT transport over libmosquitto, and the bridge-mode broker configuration
-- the Ardupilot ingest mapping for all 21 Table I entries, and `Aᵗ` back out as
-  RC channel overrides
-- the HSDT camera boundary, kept off the MQTT path
-- the WeBots controller running δ at the simulation tick
+### Removed
 
-The validation of Section V:
-
-- deterministic synthetic telemetry injectors
-- five benchmarks — regulator, link budget, scaling, latency, jitter — each
-  writing a text report, a CSV series and an SVG chart
-- a dependency-free SVG plotter, so a measurement can be regenerated on a bare
-  toolchain
-- claim coverage and results assembly, generating `docs/RESULTS.md`
-- two runnable examples: a coordinated fleet frame, and the filtered/raw
-  two-path arrangement of Section V-A
-
-The simulation, verified against the real toolchain:
-
-- the WeBots project — world, hull meshes, material and texture — from
-  `lsa-pucrs/boat-digital-twin`, rewired to the model of Section IV
-- three worlds differing only in vessel count, so the CPU claim of Section V-A
-  can be measured as a difference rather than asserted
-- `fdt_geo_offset`, the geodetic-to-local mapping, extracted from the WeBots
-  controller after it placed every vessel 5700 km outside the world
-- `FDT_SHOT` and `FDT_SHOT_FRAME`, which export the 3D view from a running
-  controller, because a rendering cannot be asserted any other way
-- `make syntax`, type-checking the SDK adapters against stub headers on a
-  machine that has neither
-- `make mqtt-test`, a round trip through a real mosquitto broker
-- `make webots`, building the controller against a real WeBots install
-- header dependency tracking, so editing a header rebuilds what included it
-
-Documentation:
-
-- the claim inventory, one row per falsifiable claim with the artefact that
-  discharges it, including the seven items Section VI declares future work
-- the paper-to-code map for revision `-10`
-- six recorded ambiguities and findings in the manuscript, five worth fixing,
-  including that the 48-byte state of Section IV quantises position to between
-  0.2 and 0.4 m at the Jundiá coordinates — a third of a hull length
-- a captured frame of the running simulation, since two position bugs left
-  every counter green and were caught only by looking
+- the C library, adapters, benchmarks and results of the ICECS 2026 model (tag the commit before the
+  merge to recover them)

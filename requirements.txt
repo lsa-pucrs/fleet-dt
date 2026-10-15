@@ -1,0 +1,6 @@
+paho-mqtt>=2.0
+aiohttp>=3.9
+numpy>=1.21
+scipy>=1.7
+pytest>=7
+# vessel publishers: pymavlink (telemetry), opencv (video)
