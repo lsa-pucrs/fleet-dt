@@ -133,3 +133,12 @@ Drop: no v1 entry needs removal from the reference list. Two v1 Table I rows lea
 | refs_v2.bib | 26 entries: 8 keys of the revision text, 16 related-work keys, 2 replacement keys; checked with BibTeX (no error) |
 | sec2_related_additions.tex | Four blocks for II-A, II-C, II-D, and II-E (about 600 words), with the place of insertion in a comment |
 | table1_v2.tex | Table I with standards, research systems on medium allocation and admission, NDT and AoI works, and the Fleet-DT row of v2; compiled with IEEEtran |
+
+## Additions (S5 and PHY justification, 2026-10-15)
+
+| Key | Verification | Use |
+|---|---|---|
+| ieee80211std2020 | Crossref DOI 10.1109/IEEESTD.2021.9363693 | 6, 12 and 24 Mb/s are the mandatory OFDM rates (Clause 17) |
+| wang2018maritime | Crossref: IEEE Access 6, 68070–68088 | Sparse scattering; direct plus sea-reflected ray near the surface |
+| yamamoto2019rssi | Crossref and MDPI full text: JMSE 7(9) 290 | Two-ray fit over seawater; 2–3 dB extra loss at 2.4 GHz with 2 m antennas |
+| sun2026landship | Crossref: IEEE TWC 25, 10051–10065 | Rician K 17.6–18.8 dB at 3 and 12 km, 5.8 GHz (values read from the arXiv version 2507.15969; check against the published Tables IV and V) |
