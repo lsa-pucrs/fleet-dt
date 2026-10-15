@@ -1,0 +1,31 @@
+% Replacement text for Background Sections II-C (paragraphs added) and II-E (whole subsection).
+% Related-work additions are listed in REFS_TODO.md.
+
+%%% II-C: insert after the paragraph on Bianchi and Heusse et al.
+Bianchi models the backoff of each of $n$ saturated stations with a Markov chain and obtains the probability $\tau$ that a station transmits in a slot and the probability $p_{\mathrm{c}}$ that a transmitted frame collides from
+\begin{equation}
+\tau = \frac{2\,(1 - 2p_{\mathrm{c}})}{(1 - 2p_{\mathrm{c}})(\mathrm{CW}_{\min} + 2) + p_{\mathrm{c}} (\mathrm{CW}_{\min} + 1) \big(1 - (2p_{\mathrm{c}})^{m_{\mathrm{b}}}\big)}, \qquad p_{\mathrm{c}} = 1 - (1 - \tau)^{n-1},
+\label{eq:bianchi}
+\end{equation}
+where $m_{\mathrm{b}}$ is the maximum backoff stage [bianchi2000performance]. With $P_{\mathrm{tr}} = 1 - (1 - \tau)^n$, the probability that a slot holds a transmission, and $P_{\mathrm{s}} = n\tau(1-\tau)^{n-1}/P_{\mathrm{tr}}$, the probability that this transmission succeeds, the fraction of time in which the channel carries successful transmissions is
+\begin{equation}
+\eta(n) = \frac{P_{\mathrm{tr}} P_{\mathrm{s}}\, T_{\mathrm{succ}}}{(1 - P_{\mathrm{tr}})\,T_{\mathrm{slot}} + P_{\mathrm{tr}} P_{\mathrm{s}}\, T_{\mathrm{succ}} + P_{\mathrm{tr}}(1 - P_{\mathrm{s}})\, T_{\mathrm{coll}}},
+\label{eq:eff}
+\end{equation}
+where $T_{\mathrm{slot}}$ is the slot time, $T_{\mathrm{succ}}$ is the duration of a successful transmission (PHY header, MAC header and payload, SIFS, acknowledgment, and DIFS), and $T_{\mathrm{coll}}$ is the duration of a collision (PHY header, MAC header and payload, and DIFS) [bianchi2000performance]. The saturation throughput of Bianchi is~\eqref{eq:eff} with the transmission time of the mean payload in place of $T_{\mathrm{succ}}$ in the numerator. With EDCA, AIFS of the access category takes the place of DIFS and the contention window of the access category takes the place of $\mathrm{CW}_{\min}$ [ieee80211std2020]. The ns-3 Model Library compares the throughput of the ns-3 Wi-Fi model with the model of Bianchi for IEEE~802.11a, b, and g [nsnam2020wifi].
+
+%%% II-C: insert after the paragraph on HCF/EDCA/HCCA
+IEEE~802.11 maps the user priority (UP) of a frame to the access category, with UP~6 and~7 in AC\_VO and UP~0 and~3 in AC\_BE, and RFC~8325 maps the differentiated services code point (DSCP) of an IP packet to the UP [ieee80211std2020, rfc8325]. Leith et al.\ show that, under the DCF, the AP of an infrastructure WLAN receives about the same share of the transmission opportunities as one station, although the AP sends the TCP acknowledgments of every upload and the data of every download, and that EDCA parameters that give the acknowledgments at the AP a shorter AIFS and a smaller $\mathrm{CW}_{\min}$ and the download data at the AP a TXOP of several packets restore the fairness between TCP uploads and downloads [leith2005tcp].
+
+%%% II-E: replace the whole subsection
+\subsection{One-Step Prediction and Adaptive Conformal Inference}\label{subsec:aci}
+Exponential smoothing with the gain $\lambda \in (0, 1]$ predicts the next value of a measured series $y(t)$ with $\hat{y}(t+1) = (1 - \lambda)\,\hat{y}(t) + \lambda\, y(t)$, and, for a random walk observed with additive noise, a gain that depends on the ratio of the variance of the increments to the variance of the noise minimizes the mean squared error of the one-step prediction [harvey1989forecasting]. TCP predicts the round-trip time of a connection with exponential smoothing and the gain $1/8$ [rfc6298].
+
+Conformal prediction turns a point predictor into a prediction set: with a nonconformity score $S_t$ and the empirical quantile $\hat{Q}_t$ of the past scores, the set $\hat{C}_t(\alpha) = \{y : S_t(y) \leq \hat{Q}_t(1 - \alpha)\}$ covers the next observation with probability at least $1 - \alpha$ when the observations are exchangeable [gibbs2021adaptive]. Adaptive conformal inference (ACI) requires no exchangeability of the observations. With $\mathrm{err}_t = 1$ when the observation of step $t$ falls outside $\hat{C}_t(\alpha_t)$ and $\mathrm{err}_t = 0$ otherwise, ACI updates the level with
+\begin{equation}
+\alpha_{t+1} = \alpha_t + \gamma\,(\beta - \mathrm{err}_t),
+\label{eq:aci_bg}
+\end{equation}
+where $\beta$ is the target miscoverage and $\gamma > 0$ is the step. The conventions $\hat{Q}_t(x) = \infty$ for $x > 1$ and $\hat{Q}_t(x) = -\infty$ for $x < 0$ keep $\alpha_t \in [-\gamma, 1 + \gamma]$, and summing~\eqref{eq:aci_bg} gives $\big|\frac{1}{T}\sum_{t=1}^{T} \mathrm{err}_t - \beta\big| \leq (\max\{\alpha_1, 1 - \alpha_1\} + \gamma)/(\gamma T)$ for every sequence of observations [gibbs2021adaptive].
+
+The age of information (AoI) of a status at a monitor is the time elapsed since the release of the newest status that the monitor has received [kaul2012real].

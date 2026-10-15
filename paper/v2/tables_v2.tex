@@ -1,0 +1,68 @@
+% Tables of Fleet-DT v2 referenced by Sections III, VI.
+
+\begin{table}[t]
+\caption{Uplink topics of the experiments (DTP). Each stream output holds one message.}\label{tab:topics}
+\centering\footnotesize
+\begin{tabular}{@{}lrrrrll@{}}
+\toprule
+Topic & $r_\ell$ (1/s) & $J_\ell$ (ms) & $n_\ell$ & $s_\ell$ (B) & Kind & QoS \\
+\midrule
+\texttt{state} ($\mathcal{R}$) & 8 & 2 & 1 & 48 & stream & 2 \\
+\texttt{imu} & 32 & 2 & 1 & 48 & stream & 0 \\
+\texttt{gps} & 8 & 2 & 1 & 80 & stream & 0 \\
+\texttt{baro} & 8 & 2 & 1 & 32 & stream & 0 \\
+\texttt{power} & 8 & 2 & 1 & 40 & stream & 0 \\
+\texttt{mag} & 16 & 2 & 1 & 40 & stream & 0 \\
+\texttt{video} & 15$^{\ast}$ & 10 & 16--23$^{\ast}$ & 1400 & output & 0 \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\raggedright\footnotesize $^{\ast}$The rate and $n_\ell$ of the video topic follow the offered-load ratio $\rho$ of each run (Section~\ref{subsec:scen}).
+\end{table}
+
+\begin{table}[t]
+\caption{Parameters of the experiments.}\label{tab:param}
+\centering\footnotesize
+\begin{tabular}{@{}lll@{}}
+\toprule
+Group & Parameter & Value \\
+\midrule
+Step & $T_{\mathrm{s}}$, $T_1$, $T_2$ & 125, 20, 10~ms \\
+ & $\varepsilon$, $d_{\mathrm{rx}}$, $g_1$ & 2, 2, 4~ms \\
+ & $T_W$ & 89~ms \\
+Regulator & $T_{\mathrm{tick}}$, $d_{\mathrm{m}}$ & 1, 1~ms \\
+ & $L_{\mathrm{w}}$, $B_{\mathrm{cap}}$ & 16~KiB, 1~MiB \\
+AS & $\beta$, $\gamma$, $\alpha_1$ & 0.05, 0.05, 0.5 \\
+ & $\lambda$, $T_{\min}$ & 0.75, 5~ms \\
+PHY and MAC & Standard, rate & IEEE~802.11g ERP-OFDM, 24~Mb/s$^{\dagger}$ \\
+ & Basic rates & 6, 12, 24~Mb/s \\
+ & Slot, SIFS & 9, 10~$\mu$s \\
+ & AIFSN, $\mathrm{CW}_{\min}$ (stations) & 3, 15 \\
+ & AIFSN, $\mathrm{CW}_{\min}$ (AP, own AC\_BE) & 1, 7 \\
+ & $\mathrm{CW}_{\max}$, $m_{\mathrm{b}}$ & 1023, 6 \\
+Headers & $h_{\mathrm{MAC}}$, $h_{\mathrm{T}}$, $h_{\mathrm{A}}$ & 38, 80, 4~B \\
+TCP & MSS, \texttt{rto\_min} & 1448~B, 20~ms \\
+\bottomrule
+\end{tabular}
+
+\smallskip
+\raggedright\footnotesize $^{\dagger}$S5 uses IEEE~802.11a OFDM rates with Minstrel (Section~\ref{subsec:scen}).
+\end{table}
+
+\begin{table}[t]
+\caption{Validation of the testbed.}\label{tab:valid}
+\centering\footnotesize
+\begin{tabular}{@{}p{3.6cm}p{4.2cm}@{}}
+\toprule
+Check & Result \\
+\midrule
+Saturation throughput, $n = 1, \dots, 16$, 24~Mb/s & within 0.93\% of the ns-3 reference and 1.52\% of~\eqref{eq:eff} (DCF); within 1.6\% of~\eqref{eq:eff} with the EDCA parameters of Table~\ref{tab:param} \\
+$\kappa(t)$ and $b(t)$ of the AS against the ground truth (E0) & 99th percentile of the absolute difference $1.2 \times 10^{-4}$ ($\kappa$) and $5.5 \times 10^{-3}$ ($b$) \\
+Lag of the real-time scheduler (E0, $M = 4$) & 99th percentile 0.17--0.25~ms (S1, S3--S5) and 0.34--0.54~ms (S2) \\
+Clock offset of the vessels after convergence & 30 to 150~$\mu$s, no sample above $\varepsilon$ \\
+Monitor path to the broker of the GS & 104 to 119~$\mu$s at the median \\
+Hidden vessels (S4) & acknowledged fraction of the frames of the hidden pair 0.52 against 0.9999 without hiding \\
+\bottomrule
+\end{tabular}
+\end{table}

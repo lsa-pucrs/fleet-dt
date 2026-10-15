@@ -1,0 +1,28 @@
+\documentclass[journal]{IEEEtran}
+\usepackage[utf8]{inputenc}\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb,amsthm,booktabs,tabularx,algorithm,algpseudocode,graphicx,cite,url}
+\usepackage{tikz}\usetikzlibrary{arrows.meta,positioning,fit,calc,decorations.pathreplacing}
+\newtheorem{definition}{Definition}\newtheorem{assumption}{Assumption}\newtheorem{lemma}{Lemma}\newtheorem{theorem}{Theorem}\newtheorem{corollary}{Corollary}\newtheorem{problem}{Problem}
+\begin{document}
+\title{Fleet-DT: A Network Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Vehicles}
+\author{A. R. P. Domingues, C. J. D. Silva, C. A. M. Marcon, F. G. Moraes}
+\maketitle
+\input{abstract}
+\input{sec1_intro}
+\input{sec2_background}
+\input{sec3_problem}
+\input{tables_v2}
+\begin{figure}[t]\centering\resizebox{\columnwidth}{!}{\input{fig_step}}\caption{Step $t$ of Fleet-DT on the clock of the GS.}\label{fig:step}\end{figure}
+\input{sec4_model}
+\begin{figure}[t]\centering\footnotesize\resizebox{\columnwidth}{!}{\input{fig_admission}}\caption{Example of Algorithm~\ref{alg:admission}.}\label{fig:alg}\end{figure}
+\begin{figure*}[t]\centering\resizebox{0.85\textwidth}{!}{\input{fig_loop}}\caption{Closed loop of the DBA and the constructs of the DT of the network.}\label{fig:loop}\end{figure*}
+\input{sec5_platform}
+\begin{figure}[t]\centering\fbox{deployment diagram (v1 Fig. 4, to update)}\caption{Deployment.}\label{fig:deploy}\end{figure}
+\input{sec6_method}
+\section{Results}\label{sec:results}
+RESULTS (after the campaign). \newpage \mbox{} \newpage \mbox{}
+\section{Discussion}\label{sec:discussion}
+DISCUSSION. \newpage
+\input{back}
+\bibliographystyle{IEEEtran}\bibliography{refs_v2}
+\end{document}

@@ -1,0 +1,21 @@
+% Fig. 3 (v2): example of Algorithm 1. M = 2, R = {state}, N_1 = {state, imu}, N_2 = {state, imu, video},
+% sigma_t = (state, imu, gps, video, baro), rotation starting at vessel 1, K(t) = 40 ms.
+\begin{tabular}{@{}rllrrl@{}}
+\toprule
+$\pi_t$ & Unit $(i,\ell,k)$ & Class & $c_u$ (ms) & $c_A$ (ms) & Decision \\
+\midrule
+1 & $(1,\texttt{state},1)$ & $\mathcal{R}$ & 1.2 & 1.2 & forced \\
+2 & $(2,\texttt{state},1)$ & $\mathcal{R}$ & 1.2 & 2.4 & forced \\
+3 & $(1,\texttt{imu},1)$ & needed & 3.0 & 5.4 & admitted \\
+4 & $(2,\texttt{imu},1)$ & needed & 3.0 & 8.4 & admitted \\
+5 & $(2,\texttt{video},1)$ & needed & 12.1 & 20.5 & admitted \\
+6 & $(2,\texttt{video},2)$ & needed & 12.1 & 32.6 & admitted \\
+7 & $(2,\texttt{video},3)$ & needed & 12.1 & -- & rejected ($44.7 > 40$) \\
+8 & $(1,\texttt{gps},1)$ & other & 1.5 & 34.1 & admitted \\
+9 & $(2,\texttt{gps},1)$ & other & 1.5 & 35.6 & admitted \\
+10 & $(1,\texttt{video},1)$ & other & 12.1 & -- & rejected ($47.7 > 40$) \\
+11 & $(1,\texttt{video},2)$ & other & 12.1 & -- & skipped (prefix) \\
+12 & $(1,\texttt{baro},1)$ & other & 1.0 & 36.6 & admitted \\
+13 & $(2,\texttt{baro},1)$ & other & 1.0 & 37.6 & admitted \\
+\bottomrule
+\end{tabular}

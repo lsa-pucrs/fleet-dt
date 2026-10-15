@@ -1,0 +1,36 @@
+% Fig. 5 (v2): closed loop of the DBA and the constructs of the DT of the network.
+\begin{tikzpicture}[font=\scriptsize,
+  blk/.style={draw,rounded corners=1pt,align=center,minimum height=7mm,inner sep=2pt,fill=white,text width=#1},
+  blk/.default=22mm,
+  grp/.style={draw,dashed,rounded corners=2pt,inner sep=2.5mm},
+  ar/.style={-{Latex[length=1.6mm]},semithick},
+  ctl/.style={ar,red!70!black}, dat/.style={ar,magenta!70!black}]
+% columns and rows
+\node[blk] (pred) at (-1.6,4.0) {Prediction~\eqref{eq:pred}: $\eta(M{+}1)$, $\hat{b}(t)$};
+\node[blk] (aci)  at ( 1.2,4.0) {ACI~\eqref{eq:aci}: $\alpha_t$, $Z_t$};
+\node[blk] (alg)  at ( 4.0,4.0) {Budget~\eqref{eq:grant} and Algorithm~\ref{alg:admission}};
+\node[grp,fit=(pred)(aci)(alg)] (as) {}; \node[anchor=south west] at (as.north west) {AS, inner loop (every step)};
+\node[blk=20mm] (opc) at (7.4,4.0) {Operation control (outside the DT)};
+\node[blk=40mm] (dti) at (1.2,1.9) {DTI: $G(t)$ with the demands, $\bar{B}_i$, the reports, $b$, $\kappa$, $e$, $d_{i,\ell}$, $\hat{\kappa}$, $\alpha_t$, $K$, $A$, the tables};
+\node[blk=24mm] (outer) at (-5.0,4.0) {Outer loop (between operations): $\lambda$, $\gamma$, initial scores, fidelity, what-if};
+\node[blk=24mm] (dta) at (-5.0,1.9) {DTA: sequences of $G(t)$};
+\node[blk=24mm] (dtp) at (-5.0,0.0) {DTP: parameters of every block};
+\node[blk] (reg) at (-1.6,-0.3) {Vessel regulators (actuator)};
+\node[blk] (ch)  at ( 1.2,-0.3) {Channel and radios (plant, $\kappa(t)$)};
+\node[blk] (mon) at ( 4.0,-0.3) {Monitor of the AP (sensor)};
+\node[grp,fit=(reg)(ch)(mon)] (pu) {}; \node[anchor=north west] at (pu.south west) {PU};
+% arrows
+\draw[dat] (reg) -- (ch) node[midway,above] {data};
+\draw[ar] (ch) -- (mon);
+\draw[ctl] ([xshift=-4mm]reg.north) |- ([yshift=-2mm]dti.west) node[pos=0.2,left] {demands, $B_i$, reports};
+\draw[ar] (mon.north) |- ([yshift=-2mm]dti.east) node[pos=0.2,right] {$b$, $e$, $\kappa$, rates};
+\draw[ar] ([xshift=-10mm]dti.north) |- ++(0,0.5) -| (pred.south);
+\draw[ar] (pred) -- (aci); \draw[ar] (aci) -- (alg);
+\draw[ar] (opc) -- (alg) node[pos=0.35,above] {$\mathcal{N}_i$, $\sigma_t$};
+\draw[ctl] (alg.south) |- ([yshift=2mm]dti.east);
+\draw[ctl] ([xshift=4mm]dti.south) -- ++(0,-0.45) -| ([xshift=4mm]reg.north) node[pos=0.25,above] {tables};
+\draw[ar] (dti) -- (dta);
+\draw[ar,dashed] (dta) -- (outer);
+\draw[ar,dashed] (outer) -- (as);
+\draw[ar,dashed] (dtp) -- (dta);
+\end{tikzpicture}

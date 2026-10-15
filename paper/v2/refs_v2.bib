@@ -1,0 +1,340 @@
+% refs_v2.bib: references that are new in the revision of Fleet-DT (IEEE Access).
+% Every entry was checked on 2026-10-15 against Crossref, the publisher page, or the
+% standards body (see REFS_REPORT.md). Field style follows IEEEtran.bst.
+% Section 1: keys already cited in sec2_patch.tex to sec6_method.tex.
+% Section 2: keys of the related-work additions (sec2_related_additions.tex, table1_v2.tex).
+% Section 3: new keys that replace weak v1 entries (see REFS_REPORT.md, Part C).
+
+%% ===================== Section 1: keys cited in the revision =====================
+
+@inproceedings{gibbs2021adaptive,
+  author    = {Gibbs, Isaac and Cand{\`e}s, Emmanuel},
+  title     = {Adaptive Conformal Inference Under Distribution Shift},
+  booktitle = {Advances in Neural Information Processing Systems 34 (NeurIPS 2021)},
+  volume    = {34},
+  pages     = {1660--1672},
+  publisher = {Curran Associates, Inc.},
+  year      = {2021},
+  url       = {https://proceedings.neurips.cc/paper/2021/hash/0d441de75945e5acbc865406fc9a2559-Abstract.html}
+}
+
+@inproceedings{kaul2012real,
+  author    = {Kaul, Sanjit and Yates, Roy and Gruteser, Marco},
+  title     = {Real-Time Status: How Often Should One Update?},
+  booktitle = {Proc. IEEE INFOCOM},
+  address   = {Orlando, FL, USA},
+  pages     = {2731--2735},
+  month     = mar,
+  year      = {2012},
+  doi       = {10.1109/INFCOM.2012.6195689}
+}
+
+@article{leith2005tcp,
+  author  = {Leith, D. J. and Clifford, P. and Malone, D. and Ng, A.},
+  title   = {{TCP} Fairness in 802.11e {WLANs}},
+  journal = {IEEE Communications Letters},
+  volume  = {9},
+  number  = {11},
+  pages   = {964--966},
+  month   = nov,
+  year    = {2005},
+  doi     = {10.1109/LCOMM.2005.11004}
+}
+
+@techreport{rfc8325,
+  author      = {Szigeti, T. and Henry, J. and Baker, F.},
+  title       = {Mapping {Diffserv} to {IEEE} 802.11},
+  institution = {Internet Engineering Task Force},
+  type        = {RFC},
+  number      = {8325},
+  month       = feb,
+  year        = {2018},
+  doi         = {10.17487/RFC8325}
+}
+
+% The ns-3 Model Library documents the comparison of the ns-3 Wi-Fi model with the
+% model of Bianchi (Section 35.3.4, wifi-bianchi.cc, 802.11a/b/g). The key keeps the
+% name used in the .tex files; the entry cites the release that Section VI uses.
+@misc{nsnam2020wifi,
+  author       = {{ns-3 Project}},
+  title        = {Wi-Fi Module, Testing Documentation, Section 35.3.4: {Bianchi} Validation},
+  howpublished = {ns-3 Model Library, release ns-3.48},
+  month        = jun,
+  year         = {2026},
+  url          = {https://www.nsnam.org/docs/release/3.48/models/html/wifi-testing.html},
+  note         = {Accessed: Oct. 15, 2026}
+}
+
+@inproceedings{djukic2009soft,
+  author    = {Djukic, Petar and Mohapatra, Prasant},
+  title     = {{Soft-TDMAC}: A Software {TDMA}-Based {MAC} over Commodity 802.11 Hardware},
+  booktitle = {Proc. IEEE INFOCOM},
+  address   = {Rio de Janeiro, Brazil},
+  pages     = {1836--1844},
+  month     = apr,
+  year      = {2009},
+  doi       = {10.1109/INFCOM.2009.5062104}
+}
+
+@book{hollander2013nonparametric,
+  author    = {Hollander, Myles and Wolfe, Douglas A. and Chicken, Eric},
+  title     = {Nonparametric Statistical Methods},
+  edition   = {3rd},
+  series    = {Wiley Series in Probability and Statistics},
+  publisher = {Wiley},
+  address   = {Hoboken, NJ, USA},
+  year      = {2013},
+  isbn      = {978-0-470-38737-5},
+  doi       = {10.1002/9781119196037}
+}
+
+@article{holm1979simple,
+  author  = {Holm, Sture},
+  title   = {A Simple Sequentially Rejective Multiple Test Procedure},
+  journal = {Scandinavian Journal of Statistics},
+  volume  = {6},
+  number  = {2},
+  pages   = {65--70},
+  year    = {1979},
+  url     = {https://www.jstor.org/stable/4615733}
+}
+
+%% ===================== Section 2: related-work additions =====================
+
+% (a) Available-bandwidth estimation and admission control in IEEE 802.11
+@article{sarr2008bandwidth,
+  author  = {Sarr, Cheikh and Chaudet, Claude and Chelius, Guillaume and Gu{\'e}rin Lassous, Isabelle},
+  title   = {Bandwidth Estimation for {IEEE} 802.11-Based Ad Hoc Networks},
+  journal = {IEEE Transactions on Mobile Computing},
+  volume  = {7},
+  number  = {10},
+  pages   = {1228--1241},
+  month   = oct,
+  year    = {2008},
+  doi     = {10.1109/TMC.2008.41}
+}
+
+@article{yang2005contention,
+  author  = {Yang, Yaling and Kravets, Robin},
+  title   = {Contention-Aware Admission Control for Ad Hoc Networks},
+  journal = {IEEE Transactions on Mobile Computing},
+  volume  = {4},
+  number  = {4},
+  pages   = {363--377},
+  month   = jul,
+  year    = {2005},
+  doi     = {10.1109/TMC.2005.52}
+}
+
+% (b) Overlay or software TDMA over commodity IEEE 802.11 (djukic2009soft is in Section 1)
+@inproceedings{rao2005overlay,
+  author    = {Rao, Ananth and Stoica, Ion},
+  title     = {An Overlay {MAC} Layer for 802.11 Networks},
+  booktitle = {Proc. 3rd Int. Conf. Mobile Systems, Applications, and Services (MobiSys)},
+  address   = {Seattle, WA, USA},
+  publisher = {ACM},
+  pages     = {135--148},
+  month     = jun,
+  year      = {2005},
+  doi       = {10.1145/1067170.1067185}
+}
+
+% Published at IEEE RTSS 2013 (34th Real-Time Systems Symposium), not at RTAS 2013.
+@inproceedings{wei2013rtwifi,
+  author    = {Wei, Yi-Hung and Leng, Quan and Han, Song and Mok, Aloysius K. and Zhang, Wenlong and Tomizuka, Masayoshi},
+  title     = {{RT-WiFi}: Real-Time High-Speed Communication Protocol for Wireless Cyber-Physical Control Applications},
+  booktitle = {Proc. IEEE 34th Real-Time Systems Symposium (RTSS)},
+  address   = {Vancouver, BC, Canada},
+  pages     = {140--149},
+  month     = dec,
+  year      = {2013},
+  doi       = {10.1109/RTSS.2013.22}
+}
+
+% (d) Airtime fairness in Linux Wi-Fi
+@inproceedings{hoiland2017ending,
+  author    = {H{\o}iland-J{\o}rgensen, Toke and Kazior, Micha{\l} and T{\"a}ht, Dave and Hurtig, Per and Brunstrom, Anna},
+  title     = {Ending the Anomaly: Achieving Low Latency and Airtime Fairness in {WiFi}},
+  booktitle = {Proc. USENIX Annual Technical Conference (USENIX ATC)},
+  address   = {Santa Clara, CA, USA},
+  publisher = {USENIX Association},
+  pages     = {139--151},
+  month     = jul,
+  year      = {2017},
+  isbn      = {978-1-931971-38-6},
+  url       = {https://www.usenix.org/conference/atc17/technical-sessions/presentation/hoilan-jorgesen}
+}
+
+% (e) Stochastic capacity forecasting
+@inproceedings{winstein2013stochastic,
+  author    = {Winstein, Keith and Sivaraman, Anirudh and Balakrishnan, Hari},
+  title     = {Stochastic Forecasts Achieve High Throughput and Low Delay over Cellular Networks},
+  booktitle = {Proc. 10th USENIX Symp. Networked Systems Design and Implementation (NSDI)},
+  address   = {Lombard, IL, USA},
+  publisher = {USENIX Association},
+  pages     = {459--471},
+  month     = apr,
+  year      = {2013},
+  isbn      = {978-1-931971-00-3},
+  url       = {https://www.usenix.org/conference/nsdi13/technical-sessions/presentation/winstein}
+}
+
+% (f) IEEE 802.11ax trigger-based uplink OFDMA and TWT; IEEE 802.11be restricted TWT
+@article{khorov2019tutorial,
+  author  = {Khorov, Evgeny and Kiryanov, Anton and Lyakhov, Andrey and Bianchi, Giuseppe},
+  title   = {A Tutorial on {IEEE} 802.11ax High Efficiency {WLANs}},
+  journal = {IEEE Communications Surveys \& Tutorials},
+  volume  = {21},
+  number  = {1},
+  pages   = {197--216},
+  year    = {2019},
+  doi     = {10.1109/COMST.2018.2871099}
+}
+
+@standard{ieee80211ax2021,
+  author       = {{IEEE}},
+  title        = {{IEEE} Standard for Information Technology--Telecommunications and Information Exchange between Systems Local and Metropolitan Area Networks--Specific Requirements Part 11: Wireless {LAN} Medium Access Control ({MAC}) and Physical Layer ({PHY}) Specifications Amendment 1: Enhancements for High-Efficiency {WLAN}},
+  organization = {IEEE},
+  type         = {IEEE Std},
+  number       = {802.11ax-2021},
+  month        = may,
+  year         = {2021},
+  doi          = {10.1109/IEEESTD.2021.9442429}
+}
+
+% Board approval 2024-09-26; publication 2025-07-22 (IEEE SA page). No DOI on the IEEE SA page.
+@standard{ieee80211be2024,
+  author       = {{IEEE}},
+  title        = {{IEEE} Standard for Information Technology--Telecommunications and Information Exchange between Systems Local and Metropolitan Area Networks--Specific Requirements Part 11: Wireless {LAN} Medium Access Control ({MAC}) and Physical Layer ({PHY}) Specifications Amendment 2: Enhancements for Extremely High Throughput ({EHT})},
+  organization = {IEEE},
+  type         = {IEEE Std},
+  number       = {802.11be-2024},
+  month        = jul,
+  year         = {2025},
+  url          = {https://standards.ieee.org/ieee/802.11be/7516/}
+}
+
+@article{adame2021tsn,
+  author  = {Adame, Toni and Carrascosa-Zamacois, Marc and Bellalta, Boris},
+  title   = {Time-Sensitive Networking in {IEEE} 802.11be: On the Way to Low-Latency {WiFi} 7},
+  journal = {Sensors},
+  volume  = {21},
+  number  = {15},
+  pages   = {4954},
+  year    = {2021},
+  doi     = {10.3390/s21154954}
+}
+
+% (g) Age of information (kaul2012real is in Section 1)
+@article{yates2021age,
+  author  = {Yates, Roy D. and Sun, Yin and Brown, D. Richard and Kaul, Sanjit K. and Modiano, Eytan and Ulukus, Sennur},
+  title   = {Age of Information: An Introduction and Survey},
+  journal = {IEEE Journal on Selected Areas in Communications},
+  volume  = {39},
+  number  = {5},
+  pages   = {1183--1210},
+  month   = may,
+  year    = {2021},
+  doi     = {10.1109/JSAC.2021.3065072}
+}
+
+% AoI of digital twins (verified work for the AoI row of Table I)
+@article{li2024aoi,
+  author  = {Li, Jing and Guo, Song and Liang, Weifa and Wang, Jianping and Chen, Quan and Xu, Zichuan and Xu, Wenzheng},
+  title   = {{AoI}-Aware User Service Satisfaction Enhancement in Digital Twin-Empowered Edge Computing},
+  journal = {IEEE/ACM Transactions on Networking},
+  volume  = {32},
+  number  = {2},
+  pages   = {1677--1690},
+  month   = apr,
+  year    = {2024},
+  doi     = {10.1109/TNET.2023.3324704}
+}
+
+% (h) DT verification and fidelity
+@article{kapteyn2021probabilistic,
+  author  = {Kapteyn, Michael G. and Pretorius, Jacob V. R. and Willcox, Karen E.},
+  title   = {A Probabilistic Graphical Model Foundation for Enabling Predictive Digital Twins at Scale},
+  journal = {Nature Computational Science},
+  volume  = {1},
+  number  = {5},
+  pages   = {337--347},
+  month   = may,
+  year    = {2021},
+  doi     = {10.1038/s43588-021-00069-0}
+}
+
+@book{nasem2024foundational,
+  author    = {{National Academies of Sciences, Engineering, and Medicine}},
+  title     = {Foundational Research Gaps and Future Directions for Digital Twins},
+  publisher = {The National Academies Press},
+  address   = {Washington, DC, USA},
+  year      = {2024},
+  doi       = {10.17226/26894}
+}
+
+% (i) Digital twin networks
+@article{wu2021digital,
+  author  = {Wu, Yiwen and Zhang, Ke and Zhang, Yan},
+  title   = {Digital Twin Networks: A Survey},
+  journal = {IEEE Internet of Things Journal},
+  volume  = {8},
+  number  = {18},
+  pages   = {13789--13804},
+  month   = sep,
+  year    = {2021},
+  doi     = {10.1109/JIOT.2021.3079510}
+}
+
+% (j) Hidden terminals
+@article{tobagi1975packet,
+  author  = {Tobagi, Fouad A. and Kleinrock, Leonard},
+  title   = {Packet Switching in Radio Channels: Part {II}--The Hidden Terminal Problem in Carrier Sense Multiple-Access and the Busy-Tone Solution},
+  journal = {IEEE Transactions on Communications},
+  volume  = {23},
+  number  = {12},
+  pages   = {1417--1433},
+  month   = dec,
+  year    = {1975},
+  doi     = {10.1109/TCOM.1975.1092767}
+}
+
+%% ===================== Section 3: replacements for weak v1 entries =====================
+
+% Peer-reviewed source for the Platypus airboat platform (replaces or complements the
+% product page "platypus").
+@incollection{valada2014development,
+  author    = {Valada, A. and Velagapudi, P. and Kannan, B. and Tomaszewski, C. and Kantor, G. and Scerri, P.},
+  title     = {Development of a Low Cost Multi-Robot Autonomous Marine Surface Platform},
+  booktitle = {Field and Service Robotics: Results of the 8th International Conference},
+  series    = {Springer Tracts in Advanced Robotics},
+  volume    = {92},
+  publisher = {Springer},
+  address   = {Berlin, Heidelberg},
+  pages     = {643--658},
+  year      = {2014},
+  doi       = {10.1007/978-3-642-40686-7_43}
+}
+
+% Video modes of the ZED camera (replaces the 2016 Stereolabs blog post "zed", which
+% announces the SDK 1.0 and states no video mode or data rate). The page lists the
+% side-by-side uncompressed output, e.g., 1344x376 at 100, 60, 30, or 15 fps.
+@misc{stereolabs2026zedmodes,
+  author       = {{Stereolabs}},
+  title        = {Camera Controls: Selecting a Resolution},
+  howpublished = {ZED SDK Documentation},
+  year         = {2026},
+  url          = {https://www.stereolabs.com/docs/video/camera-controls},
+  note         = {Accessed: Oct. 15, 2026}
+}
+
+@article{chung2023pohang,
+  author  = {Chung, Dongha and Kim, Jonghwi and Lee, Changyu and Kim, Jinwhan},
+  title   = {Pohang Canal Dataset: A Multimodal Maritime Dataset for Autonomous Navigation in Restricted Waters},
+  journal = {The International Journal of Robotics Research},
+  volume  = {42},
+  number  = {12},
+  pages   = {1104--1114},
+  year    = {2023},
+  doi     = {10.1177/02783649231191145}
+}

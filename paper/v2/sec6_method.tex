@@ -1,0 +1,65 @@
+\section{Experimental Methodology}\label{sec:method}
+
+The experiments run the software of Fleet-DT without changes on emulated hosts over an emulated IEEE~802.11 channel, so the emulator records the ground truth of every frame and every clock. This section states the hypotheses (Section~\ref{subsec:hyp}), the testbed and its validation (Section~\ref{subsec:testbed}), the scenarios and the methods (Section~\ref{subsec:scen}), the metrics (Section~\ref{subsec:metrics}), and the procedure and the statistics (Section~\ref{subsec:proc}). A tagged commit of the repository holds the hypotheses, the thresholds, the seeds, and the analysis scripts before the first evaluation run (Section~\ref{subsec:proc}).
+
+\subsection{Research Questions and Hypotheses}\label{subsec:hyp}
+
+Table~\ref{tab:hyp} maps each hypothesis to the element of the model that it tests, to the experiments of Table~\ref{tab:exp}, and to its threshold.
+
+\begin{table}[t]
+\caption{Hypotheses, the element of the model that each hypothesis tests, and the threshold of each hypothesis.}\label{tab:hyp}
+\centering\footnotesize
+\begin{tabular}{@{}lp{1.3cm}p{4.9cm}l@{}}
+\toprule
+& Element & Hypothesis and threshold & Exp. \\
+\midrule
+H1 & Assumption~\ref{as:clock} & After the convergence of the clocks, $|\theta_i(t)| \leq \varepsilon$ in every probe sample of every vessel, and the demands miss phase~1 in at most $10^{-3}$ of the pairs $(t, i)$ of the steps without external interference, pooled over the runs of each scenario. & all \\
+H2 & Defs.~\ref{def:capacity}, \ref{def:busy}; Lemma~\ref{lem:delivery} & The values of $\kappa(t)$ and $b(t)$ that the AS computes from the monitor differ from the ground truth by at most $0.01$ at the 99th percentile; every step with $X(t) \leq \kappa(t)\,T_W$ in the ground truth has $f(t) = 0$ unless a table or a report is lost. & E1 \\
+H3 (RQ.II) & Eq.~\eqref{eq:pred} & On the evaluation runs, the prediction~\eqref{eq:pred} has a lower mean absolute error of $\kappa(t)$ than persistence ($\hat{\kappa}(t) = \kappa(t-1)$), exponential smoothing of $\kappa$, and the mean of the calibration runs, and, with ACI at the same $\beta$, a larger utilization $\nu$. & E2 \\
+H4 (RQ.I) & Theorem~\ref{thm:aci} & Inequality~\eqref{eq:thm} holds at every prefix of every run, and $\bar{f} \leq \beta + 0.02$ in every run with $F_{\mathcal{R}}(T) = 0$. & E2, E3 \\
+H5 (RQ.III) & Algorithm~\ref{alg:admission} & For $\rho \geq 1.5$, Fleet-DT delivers within their steps a larger fraction of the bytes of the needed units, and misses fewer states, than B1, B2, B3, B5, and the overlay TDMA. & E3 \\
+H6 & Def.~\ref{def:whatif} & The what-if evaluation, from the DTA of E1 ($M = 4$, $T_{\mathrm{s}} = 125$~ms), predicts $\bar{f}$ within $0.02$ and $\nu$ within $0.05$ for the configurations of E4. & E4 \\
+H7 & Section~\ref{subsec:window} & The delay and the age of information of the states stay within the bounds of Corollary~\ref{cor:state} in every step that meets the hypothesis of Lemma~\ref{lem:delivery}. & E4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Testbed}\label{subsec:testbed}
+
+Each vessel and the GS run in one KVM virtual machine with Debian~13, one virtual CPU, and their own clock, and each machine runs the programs of Section~\ref{sec:platform} without changes: Mosquitto~2.1.2 with the patches of the repository, the vessel regulator, the sources of the topics, chrony, and, at the GS, the AS and the operation control software. The data interface of each machine reaches the emulator over a UDP pair. The emulator runs ns-3.48 in real time [nsnam2020wifi]: one AP for the GS and one station per vessel, IEEE~802.11g ERP-OFDM with EDCA on a spectrum channel, and a relay that carries the Ethernet frames of each machine as the IP packets of its Wi-Fi node, which is the role of the radio of Section~\ref{sec:platform}. The relay maps the DSCP value EF to UP~6, and the AP uses for its own AC\_BE the AIFS and the contention window of Table~\ref{tab:param} (PR7). The emulator acts as the monitor of the AP (PR6) and publishes the busy time and the records of the frames, with group-addressed frames in $T_{\mathrm{own}}$, to the broker of the GS every 5~ms and 2.5~ms after the end of $Q(t)$ and of $W(t)$. The hosts mark the packets of the clock synchronization with DSCP EF (AC\_VO). The emulator also writes the ground truth: every transmission and reception of every node, with its time, duration, size, rate, and outcome. A probe reads the clock of each machine over vsock every 100~ms and records its offset to the clock of the host.
+
+Table~\ref{tab:valid} gives the validation of the testbed. The saturation throughput of the emulator for $n = 1, \dots, 16$ stations agrees with the reference of ns-3 within 0.93\% and with~\eqref{eq:eff} within 1.6\% under the EDCA parameters of Table~\ref{tab:param}. The values of $b(t)$ from the monitor agree with the ground truth within 0.0055 at the 99th percentile and the values of $\kappa(t)$ within $1.2 \times 10^{-4}$. The lag of the real-time scheduler stays below 0.3~ms at the 99th percentile in S1 and S3 to S5 and below 0.6~ms in S2 for $M \leq 4$; the analysis discards the steps in which the lag exceeds 1~ms and reports their number, and a run with more than 1\% of such steps repeats once. With $M = 8$ or $T_{\mathrm{s}} = 250$~ms, more than 1\% of the steps exceed 1~ms of lag on the host of the experiments, so E4 holds $M = 2$ and $T_{\mathrm{s}} = 62.5$~ms, the latter with the YansWifiPhy model of ns-3, whose $\kappa(t)$ and $b(t)$ differ from the spectrum model by a Kolmogorov--Smirnov distance below 0.034 in S2, and Section~\ref{sec:results} reports the what-if predictions for $M = 8$ and $T_{\mathrm{s}} = 250$~ms without a measured counterpart.
+
+\subsection{Scenarios and Methods}\label{subsec:scen}
+
+\paragraph*{Sources} Each vessel runs the topics of Table~\ref{tab:topics}: six telemetry streams and one video topic of the kind output, whose output sizes replay, from a start that the seed sets, the JPEG sizes of 4500 stereo frames of the sequence \texttt{pohang00} of the Pohang Canal Dataset, a stereo recording of coastal water and a port from a vessel [chung2023pohang], with each eye cropped and resized to the image of the camera of the vessels and encoded side by side as the video source encodes it. The offered-load ratio $\rho$ divides the airtime cost~\eqref{eq:cost} of all units that the fleet offers per step by $\kappa\,T_W$ measured with a saturated fleet in the same scenario; the sources set $\rho$ through the rate and the quality of the video. The operation control software alternates every 10~s between a survey mode, with the video of one designated vessel in its $\mathcal{N}_i(t)$, and a transit mode, with no video in any $\mathcal{N}_i(t)$; $\mathcal{R} = \{\texttt{state}\}$.
+
+\paragraph*{Channel scenarios} S1 (clean): every node hears every node, fixed rate 24~Mb/s. S2 (external network): S1 plus a second BSS on the same channel whose station sends UDP bursts with an on/off schedule (CSMA). S3 (jammer): S1 plus a transmitter without carrier sense with a duty-cycle schedule. S4 (hidden vessels): a loss matrix in which two pairs of vessels do not hear each other and every vessel hears the AP. S5 (mobility): the vessels follow the trajectories of a survey mission over water at 100 to 800~m from the AP, with two-ray propagation, Nakagami fading ($m = 5$), and Minstrel rate adaptation over the OFDM rates of IEEE~802.11a, because the Minstrel model of ns-3 also probes the DSSS rates of IEEE~802.11g, which the radios of PR7 do not use.
+
+\paragraph*{Methods} Fleet-DT (Algorithm~\ref{alg:admission} with ACI), Fleet-DT with the slotted data window (Definition~\ref{def:tdma}), and six baselines: B1, one data bridge per vessel without regulation; B2, one data bridge per class with the DSCP values EF, AF41, and default, which EDCA maps to AC\_VO, AC\_VI, and AC\_BE; B3, strict priority in the order $\sigma_t$ with the discard at the end of the step, without admission; B4, Algorithm~\ref{alg:admission} with a constant factor $Z$ in place of $Z_t(\alpha_t)$, per scenario the $\beta$-quantile of the scores of the calibration runs divided by the factor $c_S$ of the calibration (Section~\ref{subsec:proc}); B5, Fleet-DT without the policing and the discard of the regulator; and TDMA, an overlay TDMA with equal slots per vessel in $W(t)$ and no admission [djukic2009soft].
+
+\begin{table}[t]
+\caption{Experiments. Each cell runs 12 seeds; each run lasts 1200 steps.}\label{tab:exp}
+\centering\footnotesize
+\begin{tabular}{@{}lp{6.3cm}r@{}}
+\toprule
+& Factors & Runs \\
+\midrule
+E0 & Calibration: Fleet-DT; S1 to S5; $\rho \in \{1, 1.5, 2\}$; $M = 4$; 4 seeds of their own. Sets $\lambda$, $\gamma$, the initial scores per scenario, and $Z$ of B4. & 60 \\
+E1 & Measurement: Fleet-DT; S1 to S5; $\rho = 1.5$; $M = 4$. & 60 \\
+E2 & Prediction: Fleet-DT with~\eqref{eq:pred}, persistence, exponential smoothing of $\kappa$, and the calibration mean; S1 to S5; $\rho = 1.5$; $M = 4$. & 240 \\
+E3 & Allocation: the eight methods; S1, S2, S4, S5; $\rho \in \{1, 1.5, 2\}$; $M = 4$. & 1152 \\
+E4 & Scale and step: Fleet-DT, B1, B3; S2; $\rho = 1.5$; $M = 2$ with $T_{\mathrm{s}} = 125$~ms, and $M = 4$ with $T_{\mathrm{s}} = 62.5$~ms. & 72 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Metrics}\label{subsec:metrics}
+
+The failure fraction $\bar{f}$, the coverage of the bound, the mean absolute error of $\hat{\kappa}$, the ratio of accepted to released bytes per edge, the utilization $\nu$, and the age of information follow Definition~\ref{def:fidelity}, with $\kappa(t)$ from the ground truth. The needed-data delivery ratio $D_{\mathcal{N}}$ divides the bytes of the units of $\mathcal{N}_i(t)$ that the GS accepts within their step by the bytes of the units of $\mathcal{N}_i(t)$ that the sources release, summed over the vessels and the steps of a run. The state miss ratio divides the number of the pairs $(t, i)$ in which the GS misses the state of vessel $i$ within step $t$ by the number of the pairs. The deadline miss ratio $\mu$ is the fraction of the released messages that reach the GS after their step. The work $X(t)$ of Lemma~\ref{lem:delivery} comes from the ground truth: the airtime of the exchanges of the data bridges from $w(t)$ until the data bridges hold no byte of step $t$ or of an earlier step.
+
+\subsection{Procedure and Statistics}\label{subsec:proc}
+
+The calibration runs (E0) use seeds of their own and set: $\lambda$, the gain of~\eqref{eq:pred} with the smallest mean absolute error of $\hat{\kappa}$ in a replay of the E0 runs; the initial scores of each scenario, the scores of its E0 runs; and $\gamma$, the smallest value of $\{0.001, 0.005, 0.01, 0.02, 0.05\}$ for which a replay of~\eqref{eq:aci} on the scores of each E0 run, with the scores of the other E0 runs of its scenario as initial scores and the failure model $f(t) = \mathbb{1}[z(t) < c_S\,Z_t(\alpha_t)]$ with $c_S$ fitted per scenario to the observed failures, gives $\bar{f} \leq \beta + 0.02$ in every run and $|\bar{f} - \beta| \leq 0.02$ in every run in which $\alpha_t = 1$ yields $\bar{f} \geq \beta$. The evaluation runs (E1 to E4) use 12 seeds, and each seed fixes the trajectories, the fading, the interference schedule, the release times and sizes of the sources, and the schedule of the operation control software, so the methods of one cell face the same channel and the same data. A script randomizes the order of the runs. Each run discards its first 240 steps. The tagged commit holds Table~\ref{tab:hyp}, Table~\ref{tab:exp}, the seeds, the parameters of Table~\ref{tab:param}, and the analysis scripts before the first evaluation run, and the archive of the tagged commit and of the data of every run carries a DOI.
+
+The run is the unit of analysis. The comparisons of H3 and H5 pair the runs of one seed and use the Wilcoxon signed-rank test with the Holm correction over all comparisons of the hypothesis, and report the Hodges--Lehmann estimate of the paired difference with its 95\% confidence interval [hollander2013nonparametric, holm1979simple]; with 12 pairs, the smallest two-sided $p$-value is $2^{-11}$, below the Holm threshold of the largest family, the 40 comparisons of one metric of H5. The confidence interval of $\bar{f}$ within a run uses batch means over 40 batches of 24 steps. H2, H4, and H7 hold for every step or every run, so one counterexample rejects them.

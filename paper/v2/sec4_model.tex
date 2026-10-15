@@ -1,0 +1,208 @@
+\section{The Digital Twin Model}\label{sec:dt}
+
+The DBA of Fleet-DT solves Problem~\ref{prob:alloc} in each step $t$ with four activities: (1) each vessel sends to the GS the demand of its units, the bytes that its data bridge holds, and the report of step $t-1$; (2) the AS predicts the capacity $\kappa(t)$ and computes the budget $K(t)$ from the prediction and from the level of adaptive conformal inference (ACI); (3) the AS admits the units of step $t$ in the order $\pi_t$ within $K(t)$ and sends to each vessel its table; and (4) the vessel regulator of each vessel releases the admitted units to the data bridge and withholds the other units. Sections~\ref{subsec:window} to~\ref{subsec:admission} define these activities, and Section~\ref{subsec:dts} maps them to the constructs of the DT.
+
+\subsection{Phases and Data Window}\label{subsec:window}
+
+\begin{definition}[Phases of a step]\label{def:phases}
+Step $t$ comprises phase~1 (request), phase~2 (grant), and phase~3 (data), in this order, with the durations $T_1 > 0$, $T_2 > 0$, and $T_3 = T_{\mathrm{s}} - T_1 - T_2 > 0$. Phase~1 holds the activity (1), phase~2 holds the activities (2) and (3), and phase~3 holds the activity (4). Each host starts each phase on its own clock.
+\end{definition}
+
+\begin{assumption}[Clock offset]\label{as:clock}
+In every step $t$, the offset $\theta_i(t)$ of the clock of each vessel $i$ to the clock of the GS satisfies $|\theta_i(t)| \leq \varepsilon$.
+\end{assumption}
+
+\begin{definition}[Data window]\label{def:window}
+The data window of step $t$ is the interval $W(t) = [w(t),\ t_0 + t\,T_{\mathrm{s}} - g)$ of the clock of the GS, with $w(t) = t_0 + (t-1)\,T_{\mathrm{s}} + T_1 + T_2 + \varepsilon$, $g = \varepsilon + d_{\mathrm{rx}}$, and the duration $T_W = T_3 - 2\varepsilon - d_{\mathrm{rx}}$, where $d_{\mathrm{rx}}$ bounds the time from the end of an exchange at the radio of the GS to the delivery of its message by the broker of the GS.
+\end{definition}
+
+By Assumption~\ref{as:clock}, each vessel starts phase~3 of step $t$ no later than $w(t)$ and ends step $t$ no earlier than the end of $W(t)$ on the clock of the GS. A message of step $t$ reaches its regulator no earlier than the start of phase~3 of step $t-1$ on the clock of its vessel (Section~\ref{subsec:protocol}), so the GS accepts a message of step $t$ within step $t$ at most $T_{\mathrm{s}} + T_3 + \varepsilon$ after its release. The fraction $(T_1 + T_2 + 2\varepsilon + d_{\mathrm{rx}})/T_{\mathrm{s}}$ of each step carries no data of the step, so a shorter step lowers this delay and raises this overhead.
+
+The broker of the GS also opens one control bridge to the broker of each vessel over a second TCP connection. The control bridge carries the topic \texttt{demand} (uplink) and the topics \texttt{levels} and \texttt{goals} (downlink). The hosts give the packets of the control bridge the IEEE~802.11 user priority~6 (AC\_VO) and the packets of the data bridge the user priority~0 (AC\_BE), so a table of phase~1 or~2 waits behind no frame of a data bridge in the queues of the radios and contends for the channel with the EDCA parameters of AC\_VO (Section~\ref{subsec:cong}).
+
+The set $\mathcal{M}(t)$ holds the $m(t)$ vessels whose demand of step $t$ reaches the GS in phase~1 of step $t$; the GS accepts a demand of step $t$ that arrives up to $\varepsilon$ before the start of step $t$.
+
+\subsection{Request--Grant Protocol and Vessel Regulator}\label{subsec:protocol}
+
+Let $v_i(t)$ be the start of phase~3 of step $t$ on the clock of vessel $i$. The collection window of step $t$ of vessel $i$ is $C_i(t) = [v_i(t-1), v_i(t))$, and the messages of step $t$ of vessel $i$ are the messages of the stream topics that reach the regulator of vessel $i$ in $C_i(t)$ and the messages of the outputs whose last message reaches the regulator in $C_i(t)$. At the start of phase~1 of step $t$, the regulator holds the messages of step $t$ that arrived in the first $T_3$ of $C_i(t)$.
+
+\begin{definition}[Demand, held bytes, and report]\label{def:demand}
+In phase~1 of step $t$, at the offset $i\,(T_1 - g_1)/(M+1)$ from the start of phase~1, with $g_1 = \varepsilon + 2T_{\mathrm{tick}}$, which spreads the demands of the $M$ vessels over phase~1 and leaves $g_1$ for the last demand to reach the AS, the DTI program of vessel $i$ publishes on the topic \texttt{demand}:
+(a) for each unit $u$ of vessel $i$, the demand $x_u(t) = x^{\mathrm{h}}_u + x^{\mathrm{a}}_u$, $n_u(t) = n^{\mathrm{h}}_u + n^{\mathrm{a}}_u$, where $(x^{\mathrm{h}}_u, n^{\mathrm{h}}_u)$ counts the bytes and the messages of $u$ that the regulator holds and $(x^{\mathrm{a}}_u, n^{\mathrm{a}}_u)$ bounds the bytes and the messages of $u$ that arrive in the remaining $T_1 + T_2$ of $C_i(t)$, with at most $\lceil r_\ell\,(T_1 + T_2 + J_\ell) \rceil$ outputs of topic $\ell$, each with at most $n_\ell$ messages of at most $s_\ell$ bytes;
+(b) the held bytes $B_i(t)$, the bytes and the messages of the data bridge of vessel $i$ that the GS has not acknowledged, split by QoS;
+(c) the report of step $t-1$: the number of the messages of each admitted unit that the regulator released, the number of the messages of admitted units that the regulator discarded, and whether the table of step $t-1$ reached the vessel.
+\end{definition}
+
+The part $(x^{\mathrm{h}}_u, n^{\mathrm{h}}_u)$ of the demand is exact, and the part $(x^{\mathrm{a}}_u, n^{\mathrm{a}}_u)$ is the arrival curve of topic $\ell$ (Section~\ref{subsec:dba}) at the duration $T_1 + T_2$, so $x_u(t)$ exceeds the bytes of $u$ by at most the bytes of the outputs that the arrival curve allows in $T_1 + T_2$.
+
+\begin{definition}[Table of a vessel]\label{def:table}
+The table of vessel $i$ in step $t$ is $(t, p_{i,\cdot}(t), k_{i,\cdot}(t))$, where $p_{i,\ell}(t) \in \{0, 1, 2\}$ is the level of topic $\ell$ of vessel $i$ and $k_{i,\ell}(t)$ is the number of the admitted outputs of topic $\ell$ of vessel $i$. Level~2 marks the admitted topics of $\mathcal{N}_i(t)$, level~1 the other admitted topics, and level~0 the withheld topics. The default table admits the units of $\mathcal{R}$ alone.
+\end{definition}
+
+\begin{definition}[Vessel regulator]\label{def:regulator}
+The vessel regulator of vessel $i$ runs in the MQTT broker of vessel $i$ and holds the messages of step $t$ until $v_i(t)$. From $v_i(t)$ to the end of step $t$ on the clock of vessel $i$, the regulator releases to the data bridge the messages of the admitted units of vessel $i$, first the units of level~2 and then the units of level~1, each in the order $\pi_t$; for a stream topic, up to the demand of its unit; for an output topic, the first $k_{i,\ell}(t)$ complete outputs of step $t$, each up to the demand of its unit. In each tick of period $T_{\mathrm{tick}}$, the regulator releases the next message only while the unsent bytes of the socket of the data bridge plus the bytes that the regulator released in the tick stay below $L_{\mathrm{w}}$. The regulator writes the messages of the topics of $\mathcal{R}$ with QoS~2 and the other messages with QoS~0, each with the index of its step and its sequence number in its topic, and withholds the other messages. At the end of step $t$ on its own clock, the regulator discards the messages of step $t$ that it did not release. A vessel without its table of step $t$ at $v_i(t)$ applies the default table, with the arrival-curve bound over $T_{\mathrm{s}}$ as the demand of each unit, ignores a table of step $t$ that arrives later, and reports the table as not received.
+\end{definition}
+
+Let $d_{\mathrm{m}}$ bound the time from the release of a message to its write by the broker, and let $L_{\mathrm{w}} \geq R_{\max}\,(T_{\mathrm{tick}} + d_{\mathrm{m}})/8$, with $R_{\max}$ the largest PHY rate of the radios. After each tick in which the regulator holds an unreleased admitted message, the vessel holds at least $L_{\mathrm{w}}$ bytes of the data bridge that its radio has not transmitted, in the broker, the socket, or the queues below the socket, and the radio transmits at most $R_{\max}(T_{\mathrm{tick}} + d_{\mathrm{m}})/8$ bytes before the next tick. Hence, while the regulator holds an unreleased admitted message, the data bridge of the vessel holds bytes. At the end of step $t$, the socket holds at most $L_{\mathrm{w}}$ plus one message of unsent bytes of step $t$, and $B_i(t+1)$ counts these bytes. The programs of the GS discard each message of step $t$ that arrives after step $t$ and each repeated message, so each message of step $t$ has a firm deadline at the end of step $t$ [kopetz2011real] and reaches the applications of the GS at most once, also when the data bridge reconnects.
+
+\subsection{Prediction of the Capacity}\label{subsec:pred}
+
+The monitor of the AP records, for each frame that the AP sends or receives, its time, its size, its PHY rate, and its station, and records the busy time of the channel with a resolution of $1~\mu$s (Section~\ref{subsec:plat_gs}). The quiet interval $Q(t)$ runs from the end of $W(t-1)$ to the start of phase~2 of step $t$ on the clock of the GS. In $Q(t)$, the vessels send the tables of phase~1 and the bytes that the data bridges hold from step $t-1$.
+
+\begin{definition}[External busy fraction]\label{def:busy}
+The external busy fraction of step $t$ is $b(t) = \big(T_{\mathrm{busy}}(Q(t)) - T_{\mathrm{own}}(Q(t))\big)/|Q(t)|$, where $T_{\mathrm{busy}}(Q(t))$ is the busy time of the channel in $Q(t)$ and $T_{\mathrm{own}}(Q(t))$ is the time in which the channel carries, in $Q(t)$, the successful frames that the AP exchanges with the vessels, their MAC acknowledgments, and the beacons of the AP.
+\end{definition}
+
+The fraction $b(t)$ counts the frames of the transmitters outside the fleet and the collisions of the fleet in $Q(t)$, and $b(t)$ uses only samples of $Q(t)$, which precedes $W(t)$. With the efficiency $\eta(n)$ of~\eqref{eq:eff}, computed with the EDCA parameters of AC\_BE of the stations, the PHY rate of the DTP, and the mean frame of the data bridges, which is the mean of $T_{\mathrm{succ}}$ over the frames that the topics of the DTP produce at their rates, weighted by the number of frames, the AS predicts the capacity of step $t$ with
+\begin{equation}
+\hat{\kappa}(t) = \big(1 - \hat{b}(t)\big)\,\eta(M + 1), \qquad \hat{b}(t) = (1 - \lambda)\,\hat{b}(t-1) + \lambda\, b(t),
+\label{eq:pred}
+\end{equation}
+where $\lambda \in (0, 1]$ is the gain of the exponential smoothing (Section~\ref{subsec:aci}), $\hat{b}(t) = \hat{b}(t-1)$ when the monitor provides no $b(t)$, and $M + 1$ counts the $M$ vessels, which release at least the units of $\mathcal{R}$ in every step, and the AP, which sends the TCP acknowledgments. Model~\eqref{eq:eff} assumes stations with one frame size and one rate that hear each other and that offer frames in every slot, and the AP of Fleet-DT sends the acknowledgments of every vessel, the AP uses a shorter AIFS and a smaller contention window than the stations (PR7), the vessels use different rates, and two vessels can be hidden from each other; the scores below measure the error of~\eqref{eq:pred} under these conditions.
+
+The score of step $t$ is $z(t) = \kappa(t)/\hat{\kappa}(t)$, for each step with $e(t) - w(t) \geq T_{\min}$ in which the GS obtains $e(t)$. With the $N^z_t$ scores of the DTA and of the steps before $t$ sorted as $z_{(1)} \leq \dots \leq z_{(N^z_t)}$, the factor $Z_t(\alpha) = z_{(\lceil \alpha N^z_t \rceil)}$ for $\alpha \in (0, 1]$, $Z_t(\alpha) = 1$ for $\alpha > 0$ when $N^z_t = 0$, and $Z_t(\alpha) = 0$ for $\alpha \leq 0$ is nondecreasing in $\alpha$. The DTA provides the initial scores of an operation.
+
+\begin{definition}[Failure indicator and level]\label{def:aci}
+The failure indicator $f(t) \in \{0, 1\}$ of step $t$ is $1$ when, for some vessel, the GS accepts within step $t$ fewer messages of an admitted unit than the vessel reports as released, the vessel reports a discarded message of an admitted unit, or a vessel of $\mathcal{M}(t)$ reports that its table of step $t$ did not reach it; or when a vessel of $\mathcal{M}(t)$ sends no report of step $t$ in phase~1 of step $t+1$. Otherwise $f(t) = 0$. With the target $\beta \in (0, 1)$, the step $\gamma \in (0, 1)$, and the initial level $\alpha_1 \in [0, 1]$, the AS computes in phase~2 of step $t+1$ the level
+\begin{equation}
+\alpha_{t+1} = \min\Big\{1,\ \max\big\{-\gamma(1 - \beta),\ \alpha_t + \gamma\,(\beta - f(t))\big\}\Big\}.
+\label{eq:aci}
+\end{equation}
+\end{definition}
+
+Equation~\eqref{eq:aci} is the update of ACI (Section~\ref{subsec:aci}) with the event ``the GS misses a message of an admitted unit'' in place of the miscoverage event, projected on $[-\gamma(1-\beta), 1]$. A step with $f(t) = 1$ lowers the level by $\gamma(1 - \beta)$, a step with $f(t) = 0$ raises the level by $\gamma\beta$, and the projection bounds the number of steps that the level needs to cross $[0, 1]$ after a change of the channel.
+
+\subsection{Admission Control and Guarantee}\label{subsec:admission}
+
+For a vessel $i \notin \mathcal{M}(t)$, the AS uses as held bytes $\bar{B}_i(t) = \min\{\bar{B}_i(t-1) + x^{\mathrm{adm}}_i(t-1),\ B_{\mathrm{cap}}\}$, where $x^{\mathrm{adm}}_i(t-1)$ holds, for each QoS, the content and the PUBLISH headers of the units that the AS admitted for vessel $i$ in step $t-1$ and, for QoS~2, $h_{\mathrm{A}}$ bytes per message for the PUBREL packet, and $B_{\mathrm{cap}}$ is the send buffer of the data bridge; $\bar{B}_i(t) = B_i(t)$ for $i \in \mathcal{M}(t)$, and $\bar{B}_i(t) = 0$ while the broker of the GS reports the data bridge of vessel $i$ as disconnected. The cost $c^B_i(t)$ of the held bytes applies $a_i$ to $\bar{B}_i(t)$ with the QoS of each part, plus the QoS~2 control packets of the messages of step $t-1$ whose PUBREL has not reached the broker of the GS, which the AS counts as the QoS~2 messages that vessel $i$ released in step $t-1$ minus the QoS~2 messages that the GS accepted minus the QoS~2 messages of $B_i(t)$.
+
+\begin{definition}[Budget and order of the units]\label{def:grant}
+The budget of step $t$ is
+\begin{equation}
+K(t) = Z_t(\alpha_t)\,\hat{\kappa}(t)\,T_W - \sum_{i=1}^{M} c^B_i(t),
+\label{eq:grant}
+\end{equation}
+where the sum runs over the vessels whose data bridge is connected. The order $\pi_t$ sorts the units of step $t$ by the key $\big(\mathbb{1}[\ell \notin \mathcal{R}],\ \mathbb{1}[\ell \notin \mathcal{N}_i(t)],\ \mathrm{rank}_{\sigma_t}(\ell),\ k,\ (i - t) \bmod M\big)$ in increasing lexicographic order.
+\end{definition}
+
+The order $\pi_t$ places the units of $\mathcal{R}$ first, then the needed units, then the topics by rank, then the outputs by index, and rotates the vessels by one position per step, so, among the vessels with the same need of topic $\ell$, output $k$ of every vessel precedes output $k+1$ of any vessel.
+
+\begin{algorithm}[t]
+\caption{Admission control of phase~2 of step $t$}\label{alg:admission}
+\begin{algorithmic}[1]
+\Require demands, $B_i(t)$, and reports of the vessels of $\mathcal{M}(t)$; $b(t)$; $\mathcal{N}_i(t)$, $\sigma_t$; $\hat{b}(t-1)$, $\alpha_{t-1}$, $f(t-1)$, the scores, $\bar{B}_i(t-1)$; $\lambda$, $\gamma$, $\beta$, $T_W$
+\Ensure $\hat{\kappa}(t)$, $\alpha_t$, $K(t)$, $A(t)$, the tables of the vessels of $\mathcal{M}(t)$
+\State $\hat{b}(t)$ and $\hat{\kappa}(t)$ by~\eqref{eq:pred}; $\alpha_t$ by~\eqref{eq:aci}; $K(t)$ by~\eqref{eq:grant}
+\State $A \gets$ the units of the topics of $\mathcal{R}$ of the vessels with a connected data bridge, with the arrival-curve bound over $T_{\mathrm{s}}$ as the demand of each vessel outside $\mathcal{M}(t)$
+\State $c_A \gets \sum_{u \in A} c_u(t)$
+\For{each unit $u = (i, \ell, k) \notin A$ of a vessel $i \in \mathcal{M}(t)$ with a connected data bridge, in the order $\pi_t$}
+  \If{$c_A + c_u(t) \leq K(t)$ and ($k = 1$ or $(i, \ell, k-1) \in A$)}\label{alg:test}
+    \State $A \gets A \cup \{u\}$; $c_A \gets c_A + c_u(t)$
+  \EndIf
+\EndFor
+\State $p_{i,\ell}(t) \gets 2$ if $(i,\ell,1) \in A$ and $\ell \in \mathcal{N}_i(t)$; $1$ if $(i,\ell,1) \in A$ and $\ell \notin \mathcal{N}_i(t)$; $0$ otherwise
+\State $k_{i,\ell}(t) \gets |\{k : (i, \ell, k) \in A\}|$; publish the table of each vessel $i \in \mathcal{M}(t)$ on its topic \texttt{levels}
+\end{algorithmic}
+\end{algorithm}
+
+The test of line~\ref{alg:test} admits an output only after the previous output of the same topic and vessel, so the admitted outputs of each topic of each vessel form a prefix, and the count $k_{i,\ell}(t)$ identifies them.
+
+\begin{lemma}\label{lem:greedy}
+Algorithm~\ref{alg:admission} returns the set $A(t)$ of Problem~\ref{prob:alloc} for the budget $K(t)$, among the sets whose admitted outputs of each topic of each vessel form a prefix.
+\end{lemma}
+\begin{proof}
+Let $\mathcal{F}$ be the family of the sets of units that hold the units of $\mathcal{R}$, satisfy~\eqref{eq:feas}, and hold a prefix of the outputs of each topic of each vessel. If the units of $\mathcal{R}$ exceed $K(t)$, the test of line~\ref{alg:test} fails for every unit, and $A(t)$ holds the units of $\mathcal{R}$ alone. Otherwise, $\mathcal{F}$ is nonempty, and the key of $\pi_t$ orders the units totally, so the lexicographically largest set $A^* \in \mathcal{F}$ exists and is unique. Let $u_j$ be the $j$-th unit of the loop and $A_j$ the set after iteration $j$, and assume that $A_{j-1}$ holds exactly the units of $A^*$ among $\mathcal{R}$ and $u_1, \dots, u_{j-1}$, which holds for $j = 1$. If $u_j \in A^*$, then $A_{j-1} \cup \{u_j\} \subseteq A^*$; the costs are nonnegative and the outputs of $A^*$ that precede $u_j$ in its topic are in $A_{j-1}$, so the test holds and the algorithm admits $u_j$. If $u_j \notin A^*$, then $A_{j-1} \cup \{u_j\}$ agrees with $A^*$ before $u_j$ and holds $u_j$, so it is lexicographically larger than $A^*$ and does not belong to $\mathcal{F}$, and the test fails. By induction on $j$, the algorithm returns $A^*$.
+\end{proof}
+
+Lemma~\ref{lem:greedy} is the lexicographic optimality of the greedy selection over a family that is closed under the removal of the last admitted unit of a topic.
+
+Let the work $X(t)$ of step $t$ be the sum of $T_{\mathrm{succ}}$ over every exchange that the data bridges need, from $w(t)$ on, to deliver the bytes that they hold at $w(t)$ and every message of the units of $A(t)$: the segments, their TCP acknowledgments, the QoS~2 control packets, the retransmissions, and the window updates.
+
+\begin{lemma}\label{lem:delivery}
+Under Assumption~\ref{as:clock}, if $X(t) \leq \kappa(t)\,T_W$, the regulators release every message of every unit of $A(t)$, the GS accepts each of them within step $t$, and $B_i(t+1) = 0$ for every vessel $i$.
+\end{lemma}
+\begin{proof}
+Suppose that a data bridge holds bytes at the end of $W(t)$. Then $e(t)$ is the end of $W(t)$ by Definition~\ref{def:capacity}, so the data bridges complete in $W(t)$ exchanges with the airtime $T_{\mathrm{fleet}}([w(t), e(t))) = \kappa(t)\,T_W \geq X(t)$, all of them part of the work $X(t)$, and the exchanges that remain make the work larger than $X(t)$, a contradiction. Hence every data bridge completes its exchanges, including the PUBREL packets of the messages of QoS~2, before the end of $W(t)$. A regulator that holds an unreleased admitted message keeps bytes in its data bridge (Section~\ref{subsec:protocol}), so every regulator releases every admitted message before the end of $W(t)$, which, by Assumption~\ref{as:clock}, precedes the end of step $t$ on the clock of the vessel, and discards no admitted message. By Definition~\ref{def:window}, the broker of the GS delivers each message no later than $d_{\mathrm{rx}}$ after its exchange, before the end of step $t$. The GS acknowledges every byte of the data bridges before the end of $W(t)$, and the regulators release nothing until $v_i(t+1)$, so $B_i(t+1) = 0$.
+\end{proof}
+
+Lemma~\ref{lem:delivery} follows from Definition~\ref{def:capacity} and from the pacing of the regulator, and its hypothesis is the operational content: the work satisfies $X(t) \leq \sum_{u \in A(t)} c_u(t) + \sum_{i} c^B_i(t) \leq Z_t(\alpha_t)\,\hat{\kappa}(t)\,T_W$ when the bound of Definition~\ref{def:cost} holds, so the hypothesis holds when $Z_t(\alpha_t)\,\hat{\kappa}(t) \leq \kappa(t)$. The grant charges the held bytes $c^B_i(t)$, so the condition of Lemma~\ref{lem:delivery} involves step $t$ alone, and a step that satisfies it after a shortfall delivers its units and empties the data bridges.
+
+\begin{theorem}\label{thm:aci}
+For every realization of the channel, of the demands, and of the predictions, and for every $T \geq 1$,
+\begin{equation}
+\frac{1}{T}\sum_{t=1}^{T} f(t) \;\leq\; \beta + \frac{\alpha_1}{\gamma T} + \frac{(1 - \beta)\,\big(1 + F_{\mathcal{R}}(T)\big)}{T},
+\label{eq:thm}
+\end{equation}
+where $F_{\mathcal{R}}(T)$ is the number of the steps $t \leq T$ with $\alpha_t \leq 0$ and $f(t) = 1$.
+\end{theorem}
+\begin{proof}
+Let $D(t) = \alpha_{t+1} - \alpha_t - \gamma(\beta - f(t))$ be the correction of the projection in~\eqref{eq:aci}. Summing $\alpha_{t+1} = \alpha_t + \gamma(\beta - f(t)) + D(t)$ over $t = 1, \dots, T$ gives
+\[
+\frac{1}{T}\sum_{t=1}^{T} f(t) = \beta + \frac{\alpha_1 - \alpha_{T+1} + \sum_{t=1}^{T} D(t)}{\gamma T}.
+\]
+The projection gives $\alpha_{T+1} \geq -\gamma(1 - \beta)$. The upper limit gives $D(t) \leq 0$. The lower limit gives $D(t) > 0$ only when $\alpha_t + \gamma(\beta - f(t)) < -\gamma(1-\beta)$, which requires $f(t) = 1$ and $\alpha_t < 0$, and then $D(t) = -\gamma(1-\beta) - \alpha_t + \gamma(1-\beta) = -\alpha_t \leq \gamma(1 - \beta)$, because $\alpha_t \geq -\gamma(1-\beta)$. Hence $\sum_{t=1}^{T} D(t) \leq \gamma(1-\beta) F_{\mathcal{R}}(T)$, and $\alpha_1 - \alpha_{T+1} + \sum_t D(t) \leq \alpha_1 + \gamma(1-\beta)(1 + F_{\mathcal{R}}(T))$, which gives~\eqref{eq:thm}.
+\end{proof}
+
+The proof follows Gibbs and Cand\`es [gibbs2021adaptive] on the lower side of the level. In ACI, a level below zero yields the whole space as prediction set and forces $\mathrm{err}_t = 0$; in Fleet-DT, a level $\alpha_t \leq 0$ yields $Z_t(\alpha_t) = 0$ and $K(t) \leq 0$, so Algorithm~\ref{alg:admission} admits the units of $\mathcal{R}$ alone, and $f(t)$ can still be $1$. The term $F_{\mathcal{R}}(T)$ counts these steps, and the AS observes $F_{\mathcal{R}}(T)$ in every step.
+
+\begin{corollary}\label{cor:minimal}
+Under Assumption~\ref{as:clock}, $F_{\mathcal{R}}(T) \leq H_{\mathcal{R}}(T)$, where $H_{\mathcal{R}}(T)$ counts the steps $t \leq T$ in which the AS admits the units of $\mathcal{R}$ alone and $X(t) > \kappa(t)\,T_W$, or a table or a report of step $t$ is lost.
+\end{corollary}
+\begin{proof}
+In a step counted by $F_{\mathcal{R}}(T)$, $A(t)$ holds the units of $\mathcal{R}$ alone and $f(t) = 1$. If no table and no report of step $t$ is lost, $f(t) = 1$ means that the GS misses a released message or a regulator discards an admitted message, and both cases contradict the conclusion of Lemma~\ref{lem:delivery}, so $X(t) > \kappa(t)\,T_W$.
+\end{proof}
+
+\begin{corollary}\label{cor:state}
+Let the topic \texttt{state} belong to $\mathcal{R}$, with one output per step whose release stays more than $J_{\mathrm{state}}$ away from $v_i(t)$. In every step $t$ that satisfies the hypothesis of Lemma~\ref{lem:delivery}, the GS accepts within step $t$, exactly once, the state of step $t$ of every vessel of $\mathcal{M}(t)$, at most $T_{\mathrm{s}} + T_3 + \varepsilon$ after its arrival at the regulator, and over a sequence of such steps the age of information of the state of each vessel at the GS, counted from the arrival at the regulator, stays below $2T_{\mathrm{s}} + T_3 + \varepsilon$. The fraction of the steps $t \leq T$ in which the GS misses the state of a vessel of $\mathcal{M}(t)$ is at most the right side of~\eqref{eq:thm}.
+\end{corollary}
+\begin{proof}
+Algorithm~\ref{alg:admission} admits the units of $\mathcal{R}$ of every vessel in every step, the release condition places one state in each collection window, Lemma~\ref{lem:delivery} gives the acceptance within step $t$, the programs of the GS discard the repeated messages, and Section~\ref{subsec:window} gives the delay. Just before the acceptance of the state of step $t+1$, no later than $t_0 + (t+1)\,T_{\mathrm{s}}$, the newest accepted state is the state of step $t$, which arrived at its regulator no earlier than $v_i(t-1) \geq t_0 + (t-2)\,T_{\mathrm{s}} + T_1 + T_2 - \varepsilon$ on the clock of the GS, which gives the age bound; the delay from the source to the regulator adds to both bounds. A step in which the GS misses a state has $f(t) = 1$, and Theorem~\ref{thm:aci} bounds the fraction of these steps.
+\end{proof}
+
+\begin{definition}[Slotted data window]\label{def:tdma}
+In the slotted variant of Fleet-DT, the AS divides $W(t)$ into a shared slot followed by one slot per vessel of $\mathcal{M}(t)$ in the rotated order of $\pi_t$. In the shared slot, every vessel sends the units of $\mathcal{R}$ and its held bytes, and the shared slot lasts the cost of these units and bytes divided by $Z_t(\alpha_t)\hat{\kappa}(t)$. The slot of vessel $i$ lasts the cost of its admitted units outside $\mathcal{R}$ divided by $Z_t(\alpha_t)\hat{\kappa}_2(t)$, where $\hat{\kappa}_2(t)$ is~\eqref{eq:pred} with $\eta(2)$, plus a guard of $2\varepsilon$ plus the airtime of the largest exchange. The vessel regulator releases the messages of the admitted units of vessel $i$ outside $\mathcal{R}$ only in the slot of vessel $i$, and the radio of vessel $i$ holds at most one frame of the data bridge in its queue.
+\end{definition}
+
+In the slotted variant, Algorithm~\ref{alg:admission} admits a unit when the duration of the shared slot plus the durations of the slots of the vessels, with the unit, stays within $T_W$; this duration grows with every admitted unit, so Lemma~\ref{lem:greedy} holds for the slotted variant. In each slot of a vessel, one vessel and the AP contend. The capacity $\kappa_j(t)$ of slot $j$ follows Definition~\ref{def:capacity} with the slot in place of $W(t)$, and Lemma~\ref{lem:delivery} applies to each slot with $\kappa_j(t)$, the duration of the slot, and the work of the slot. Section~\ref{sec:method} compares the slotted variant with Fleet-DT.
+
+\subsection{Digital Twin of the Network}\label{subsec:dts}
+
+Fleet-DT twins the network of Section~\ref{subsec:network} with the DTP, the DTI, and the DTA of Grieves and Vickers and with a DTE that holds the application space (AS) and the virtual environment (VE).
+
+\begin{definition}[Physical unit]\label{def:pu}
+The physical unit (PU) is the network that carries the messages of one operation: the channel, the radios, the MQTT brokers, and the data bridge and the control bridge of each vessel.
+\end{definition}
+
+\begin{definition}[Graph of the network]\label{def:graph}
+The graph of the network in step $t$ is the attributed directed multigraph $G(t) = (V(t), E(t))$ with the vertices $V(t) = \{0, 1, \dots, M\}$, where vertex~$0$ is the GS, and the edges $E(t) = \{(i, \ell)\}$ from vertex $i$ to vertex~$0$ for $i \in \{1, \dots, M\}$ and $\ell \in \{1, \dots, L\}$. The edge $(i, \ell)$ carries the demand of the units of topic $\ell$ of vessel $i$, $p_{i,\ell}(t)$, $k_{i,\ell}(t)$, the released and the discarded messages, and the bytes $d_{i,\ell}(t)$ that the GS accepts within step $t$. Vertex $i$ carries $R_i(t)$, $R_{0,i}(t)$, $\bar{B}_i(t)$, and the membership of $i$ in $\mathcal{M}(t)$. Vertex~$0$ carries $b(t)$, $\hat{b}(t)$, $\hat{\kappa}(t)$, $\kappa(t)$, $e(t)$, $z(t)$, $\alpha_t$, $K(t)$, and $f(t)$.
+\end{definition}
+
+\begin{definition}[DTP]\label{def:dtp}
+The DTP is the model of the architecture of the network without the values of any step: the roles of the hosts; the PHY and EDCA parameters of the channel; the two bridges of each vessel with their user priorities; the uplink topics with $r_\ell$, $J_\ell$, $n_\ell$, $s_\ell$, the kind, and the QoS; the required set $\mathcal{R}$; the downlink topic \texttt{goals} with its rate and size bound; the cost function $a_i$ (Section~\ref{subsec:costplat}); $T_{\mathrm{s}}$, $T_1$, $T_2$, $\varepsilon$, $d_{\mathrm{rx}}$, $d_{\mathrm{m}}$, $T_{\mathrm{tick}}$, $L_{\mathrm{w}}$, $B_{\mathrm{cap}}$, $T_{\min}$; $\beta$; the initial order and needed sets; and the types of the vertices, the edges, and the attributes of $G(t)$.
+\end{definition}
+
+\begin{definition}[DTI]\label{def:dti}
+The DTI is the instance of the DTP linked to the PU, and the DTI holds the state of the network in each step $t$ as the graph $G(t)$ with the values of its attributes. The DTI program of each vessel computes and publishes the values of Definition~\ref{def:demand} in phase~1, and the GS holds the other values of the DTI.
+\end{definition}
+
+\begin{definition}[DTA]\label{def:dta}
+The DTA is the aggregation of the DTIs of the past operations and of the emulated runs, one sequence of graphs $G(t)$ per operation and per run.
+\end{definition}
+
+\begin{definition}[DTE]\label{def:dte}
+The DTE is the set of the programs of the GS that operate on the DTI and on the DTA. The AS holds the models of the network: the efficiency model~\eqref{eq:eff} and the prediction~\eqref{eq:pred}, the level~\eqref{eq:aci} and the budget~\eqref{eq:grant}, Algorithm~\ref{alg:admission}, the fidelity of the DT (Definition~\ref{def:fidelity}), and the what-if evaluation (Definition~\ref{def:whatif}). The VE draws $G(t)$ for the operator in each step.
+\end{definition}
+
+The DTI mirrors the values that the PU measures (the demands, $\bar{B}_i$, the reports, the PHY rates, $b$, $\kappa$, $e$, and $d_{i,\ell}$) and holds the values that the AS predicts or decides ($\hat{\kappa}$, $\alpha_t$, $K$, $A$, and the tables). The PU and the DTI exchange data in both directions in every step (Table~\ref{tab:exchanges}). In the terms of Zhou et al.~[zhou2026ndt], the DTI and the DTA hold the data of the NDT, the AS holds the models, the control bridges and the monitor of the AP realize the mapping, and the broker of the GS realizes the interface to the operation control software, which provides $\mathcal{N}_i(t)$ and $\sigma_t$ and stays outside the DT of the network.
+
+\subsection{Fidelity and What-If Evaluation}\label{subsec:fidelity}
+
+\begin{definition}[Fidelity of the DT]\label{def:fidelity}
+Let $S$ be a set of steps of the DTA. The fidelity of the DT on $S$ comprises: (i) the failure fraction $\bar{f} = \frac{1}{|S|}\sum_{t\in S} f(t)$ against $\beta$; (ii) the coverage of the bound, the fraction of the steps $t \in S$ with $\kappa(t) \geq Z_t(\alpha_t)\,\hat{\kappa}(t)$; (iii) the mean absolute error of $\hat{\kappa}(t)$ against $\kappa(t)$; (iv) the ratio of $d_{i,\ell}(t)$ to the released bytes of each edge with $p_{i,\ell}(t) \geq 1$; (v) the utilization $\nu = \sum_{t \in S}\sum_{u \in A(t)} c_u(t) \big/ \sum_{t\in S} \kappa(t)\,T_W$; and (vi) the age of information of the state of each vessel at the GS [kaul2012real].
+\end{definition}
+
+\begin{definition}[What-if evaluation]\label{def:whatif}
+For a configuration of the network, given by $M$, the PHY rates, the topics, $T_{\mathrm{s}}$, and $\beta$, the AS predicts $\bar{f}$ and $\nu$ by replaying the scores and the external busy fractions of the DTA through~\eqref{eq:pred}, \eqref{eq:aci}, and Algorithm~\ref{alg:admission} with the efficiency $\eta$ of the configuration, under the assumption that the scores and the external busy fractions of the DTA hold for the configuration.
+\end{definition}
+
+Fig.~\ref{fig:loop} summarizes Section~\ref{sec:dt} as a closed loop. In the inner loop, once per step, the DTI receives the demands, the held bytes, the reports, and the records of the monitor of the AP, and the AS computes $\hat{\kappa}(t)$, $\alpha_t$, $K(t)$, and $A(t)$ and sends the tables to the regulators. In the outer loop, between operations, the AS sets $\lambda$, $\gamma$, and the initial scores from the DTA, evaluates configurations with Definition~\ref{def:whatif}, and measures the fidelity of the DT with Definition~\ref{def:fidelity}; $\gamma$ stays fixed within an operation, as Theorem~\ref{thm:aci} requires.

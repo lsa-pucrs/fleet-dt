@@ -1,0 +1,66 @@
+\section{Problem Statement}\label{sec:problem}
+
+\subsection{Network}\label{subsec:network}
+
+\begin{definition}[Fleet]\label{def:fleet}
+The fleet comprises the vessels $i \in \{1, \dots, M\}$, with $M \geq 2$, and one ground station (GS) with the index $0$. The vessels and the GS are hosts of one IEEE~802.11 basic service set: the radio of the GS is the access point (AP), and the radio of each vessel is a station associated with the AP. The uplink carries the messages from the vessels to the GS, and the downlink carries the messages in the opposite direction.
+\end{definition}
+
+Each vessel and the GS run one MQTT broker. The broker of the GS opens one data bridge to the broker of each vessel over one TCP connection, and the data bridge carries the $L$ uplink topics of the vessel. Every vessel has the same $L$ uplink topics.
+
+\begin{definition}[Uplink topic]\label{def:topic}
+Uplink topic $\ell \in \{1, \dots, L\}$ has one source in each vessel. The source releases $r_\ell$ outputs per second with a release jitter of at most $J_\ell$, and each output comprises at most $n_\ell$ messages of at most $s_\ell$ bytes of content. Topic $\ell$ is of the kind \emph{stream} when the consumer of topic $\ell$ at the GS uses each message alone, and of the kind \emph{output} when the consumer uses only complete outputs, each output usable without the other outputs.
+\end{definition}
+
+Table~\ref{tab:topics} gives $r_\ell$, $J_\ell$, $n_\ell$, $s_\ell$, and the kind of the $L = 7$ uplink topics of the experiments. The six telemetry topics are streams with $n_\ell = 1$, and each output of the video topic is one intra-coded image, which its source splits into at most $n_\ell$ messages.
+
+\begin{definition}[Required set]\label{def:required}
+The required set $\mathcal{R} \subseteq \{1, \dots, L\}$ holds the uplink topics whose consumers at the GS require the messages of every vessel in every step. The messages of the topics of $\mathcal{R}$ cross the data bridge with MQTT QoS~2, and the messages of the other topics cross the data bridge with MQTT QoS~0.
+\end{definition}
+
+The applications of the vessels and of the GS fix $\mathcal{R}$ and the QoS level of $\mathcal{R}$, and Fleet-DT receives both as data. The downlink topic \texttt{goals} carries the goals of each vessel in the operation, with a rate and a size bound that the DTP declares (Section~\ref{subsec:dts}).
+
+\subsection{Steps and Airtime}\label{subsec:steps}
+
+\begin{definition}[Step]\label{def:step}
+Step $t \in \{1, 2, \dots\}$ is the interval $[t_0 + (t-1)\,T_{\mathrm{s}},\ t_0 + t\,T_{\mathrm{s}})$ of the clock of the GS, where $t_0$ is the start of the operation and $T_{\mathrm{s}}$ is the duration of a step.
+\end{definition}
+
+The source of the topic \texttt{state} releases $r_{\mathrm{state}} = 8$ outputs per second in the experiments, and $T_{\mathrm{s}} = 1/r_{\mathrm{state}} = 125$~ms, so each step carries one state of each vessel. Section~\ref{subsec:window} gives the overhead of the phases and the delay of a state as functions of $T_{\mathrm{s}}$, and Section~\ref{sec:method} varies $T_{\mathrm{s}}$.
+
+Each IP packet crosses the channel in one IEEE~802.11 frame, and the receiver of the frame answers with a MAC acknowledgment. The airtime $T_{\mathrm{succ}}(s, R)$ of a successful exchange of an IP packet of $s$ bytes at the PHY rate $R$ comprises the PHY preamble and header, the MAC header and the $s$ bytes at the rate $R$, SIFS, the MAC acknowledgment at the control response rate of $R$, and the arbitration interframe space (AIFS) of the access category of the frame [bianchi2000performance, ieee80211std2020]. The backoff slots and the collisions stay outside $T_{\mathrm{succ}}$.
+
+\begin{definition}[Airtime cost]\label{def:cost}
+The airtime cost $a_i(x, n, q)$ of $n$ MQTT messages of QoS $q$ with $x$ bytes of content in total, sent by vessel $i$ over its data bridge, is an upper bound on the sum of $T_{\mathrm{succ}}$ over the frames of the TCP segments that carry these messages, the frames of the TCP acknowledgments of these segments, and the frames of the MQTT control packets of QoS $q$ with their TCP acknowledgments, at the PHY rate $R_i$ for the frames of vessel $i$ and at the PHY rate $R_{0,i}$ for the frames of the AP to vessel $i$.
+\end{definition}
+
+The bound of Definition~\ref{def:cost} holds when the PHY rates do not fall below $R_i$ and $R_{0,i}$ and TCP retransmits no segment; Section~\ref{subsec:costplat} gives its closed form.
+
+\subsection{Allocation Problem}\label{subsec:alloc}
+
+The vessels and the GS contend for the channel with the DCF (Section~\ref{subsec:cong}), so the frames of one vessel in a step reduce the airtime that the channel gives to the other vessels in the step. The TCP connection of the data bridge of each vessel sends the bytes of the $L$ uplink topics in the order of their arrival at the socket (Section~\ref{subsec:cong}). When the vessels offer in a step more frames than the channel carries in the step, the excess bytes wait in the send buffers and in the radio queues, and the messages that the GS needs wait behind the other messages (head-of-line blocking).
+
+\begin{definition}[Admission unit]\label{def:unit}
+An admission unit of step $t$ is a triple $u = (i, \ell, k)$. For a stream topic $\ell$, the unit $(i, \ell, 1)$ holds the messages of topic $\ell$ of vessel $i$ in step $t$. For an output topic $\ell$, the unit $(i, \ell, k)$ holds the messages of output $k$ of topic $\ell$ of vessel $i$ in step $t$. The demand $(x_u(t), n_u(t))$ of unit $u$ bounds the bytes of content and the number of the messages of $u$, and the cost of $u$ is $c_u(t) = a_i(x_u(t), n_u(t), q_\ell)$, where $q_\ell$ is the QoS of topic $\ell$.
+\end{definition}
+
+In each step $t$, the applications of the GS provide, for each vessel $i$, the set $\mathcal{N}_i(t) \supseteq \mathcal{R}$ of the uplink topics that these applications need from vessel $i$ in step $t$, and the order $\sigma_t$, a permutation of $\{1, \dots, L\}$ that ranks the uplink topics by need, with the topics of $\mathcal{R}$ first. Section~\ref{subsec:admission} extends $\sigma_t$ to an order $\pi_t$ of the units of step $t$. A set $A$ of units is lexicographically larger than a set $A'$ in the order $\pi_t$ when the first unit of $\pi_t$ that belongs to exactly one of the two sets belongs to $A$.
+
+The data window $W(t)$ is the part of step $t$ in which the vessels send the messages of step $t$, with the start $w(t)$ and the duration $T_W$ (Section~\ref{subsec:window}). The fleet sends in $W(t)$ the frames of its data bridges and of the bytes that the data bridges hold from earlier steps. A data bridge holds bytes at the end of $W(t)$ when the AP records a frame of the data bridge from the end of $W(t)$ to the end of step $t$ or the vessel reports held bytes in step $t+1$ (Section~\ref{subsec:protocol}). Let $e(t)$ be the end of $W(t)$ when a data bridge holds bytes at the end of $W(t)$, the end of the last successful exchange of a frame of a data bridge in $W(t)$ otherwise, and $w(t)$ when the data bridges exchange no frame in $W(t)$. Let $T_{\mathrm{fleet}}(I)$ be the sum of $T_{\mathrm{succ}}$ over the successful exchanges of the frames of the data bridges in the interval $I$, where an exchange that crosses a boundary of $I$ counts in proportion to its overlap with $I$.
+
+\begin{definition}[Capacity]\label{def:capacity}
+The capacity of step $t$ with $e(t) > w(t)$ is $\kappa(t) = T_{\mathrm{fleet}}([w(t), e(t)))/(e(t) - w(t))$, the fraction of the busy period of the fleet in $W(t)$ in which the channel carries successful exchanges of the data bridges.
+\end{definition}
+
+The AP exchanges every frame of the data bridges, so the GS obtains $e(t)$ and $\kappa(t)$ in phase~1 of step $t+1$ for every step in which the fleet sends a frame in $W(t)$. The capacity $\kappa(t)$ accounts for the backoff slots, the collisions, the frames of the transmitters outside the fleet and of the traffic outside the data bridges, and the idle time of a TCP connection that waits for an acknowledgment or a retransmission timeout, and $\kappa(t)$ depends on the units that the GS admits.
+
+\begin{problem}[Allocation of the channel]\label{prob:alloc}
+In each step $t$, before $W(t)$, choose the airtime budget $K(t)$ and the set $A(t)$ of admitted units such that $A(t)$ holds the units of the topics of $\mathcal{R}$ and is the lexicographically largest set in the order $\pi_t$ among the sets that hold these units and satisfy
+\begin{equation}
+\sum_{u \in A(t)} c_u(t) \leq K(t),
+\label{eq:feas}
+\end{equation}
+or holds the units of $\mathcal{R}$ alone when no such set exists, and such that, for a target $\beta \in (0, 1)$ and for every realization of the channel, the fraction of the steps $t \leq T$ in which the GS misses within step $t$ a message of a unit of $A(t)$ exceeds $\beta$ by at most a term that vanishes with $T$ and a term that counts the steps in which the channel does not carry the units of $\mathcal{R}$ alone.
+\end{problem}
+
+The GS decides $K(t)$ and $A(t)$ before $W(t)$, so the GS knows $\kappa(t)$ only after step $t$. Section~\ref{sec:dt} chooses $K(t)$ from a prediction of $\kappa(t)$ corrected by adaptive conformal inference and solves Problem~\ref{prob:alloc}.

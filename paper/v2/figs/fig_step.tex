@@ -1,0 +1,32 @@
+% Fig. 2 (v2): step t on the clock of the GS (M = 4 vessels shown in the stagger).
+\begin{tikzpicture}[x=0.66mm,y=1mm,font=\scriptsize,
+  ev/.style={-{Latex[length=1.5mm]},semithick}]
+\newcommand{\bx}[5]{\draw[fill=#5] (#1,#2) rectangle (#3,#4); \node at ($(#1,#2)!0.5!(#3,#4)$) {\phantom{x}};}
+% axis
+\draw[->] (-10,0) -- (133,0) node[right] {GS clock};
+\foreach \x/\l/\d in {0/{$t_0+(t-1)T_{\mathrm{s}}$}/0,20/{$+T_1$}/3.2,30/{$+T_1+T_2$}/0,125/{$t_0+tT_{\mathrm{s}}$}/0} {\draw (\x,-1) -- (\x,1); \node[below] at (\x,-1-\d) {\l};}
+% lane labels
+\node[anchor=east] at (-11,31) {GS (phases 1, 2, 3)};
+\node[anchor=east] at (-11,20) {Vessel $i$};
+\node[anchor=east] at (-11,8) {Channel};
+% GS phases
+\draw[fill=red!12] (0,29) rectangle (20,33); \node at (10,31) {1};
+\draw[fill=orange!18] (20,29) rectangle (30,33); \node at (25,31) {2};
+\draw[fill=blue!8] (30,29) rectangle (125,33); \node at (77.5,31) {3};
+% vessel phases (clock offset theta_i)
+\draw[fill=red!12] (1.5,18) rectangle (21.5,22); \node at (11.5,20) {1};
+\draw[fill=orange!18] (21.5,18) rectangle (31.5,22); \node at (26.5,20) {2};
+\draw[fill=blue!8] (31.5,18) rectangle (126.5,22); \node at (80,20) {3: release of the admitted units, paced by the radio};
+\draw[<->] (0,23.2) -- (1.5,23.2); \node[above] at (0.75,23.2) {$\theta_i$};
+% demands (stagger) and tables
+\foreach \k in {1,2,3,4} { \pgfmathsetmacro{\xx}{1.5+\k*16/5} \draw[ev,red!65!black] (\xx,22) -- (\xx,29); }
+\node[red!65!black,anchor=east,align=right] at (-0.5,26) {demands at\\ $i(T_1{-}g_1)/(M{+}1)$};
+\draw[ev,orange!65!black] (26,29) -- (26,22); \node[orange!65!black,anchor=west] at (26.5,26) {tables};
+% channel
+\draw[fill=gray!12] (-10,6) rectangle (21.5,10); \node at (5.75,8) {$Q(t)$};
+\draw[fill=green!12] (32,6) rectangle (121,10); \node at (64,8) {data window $W(t)$};
+\draw[dashed,thick] (100,5) -- (100,11); \node[above] at (100,11) {$e(t)$};
+\draw[<->] (30,12) -- (32,12); \node[above] at (31,12) {$\varepsilon$};
+\draw[<->] (121,12) -- (125,12); \node[above] at (123,12) {$g$};
+\draw[<->] (32,4) -- (121,4); \node[below] at (76.5,4) {$T_W = T_3 - 2\varepsilon - d_{\mathrm{rx}}$};
+\end{tikzpicture}

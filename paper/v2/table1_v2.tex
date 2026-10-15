@@ -1,0 +1,46 @@
+% Table I of Fleet-DT v2. Requires \usepackage{booktabs,tabularx}.
+% Citation keys follow the [key] convention of the revision files; replace by \cite{key} in the IEEE source.
+% Every value comes from the cited work (checked 2026-10-15, see REFS_REPORT.md); n.r. marks a value
+% that the cited work does not report or that could not be checked. Vehicle DTs without a channel
+% allocation (Kremer, Mtowe, Xu, Yan, Zhang, Baniqued, Hartwell) stay in the text of Section II-A/II-B.
+\begin{table*}[t]
+\caption{Comparison of Fleet-DT with the standards and the research systems closest to it.}
+\label{tab:related}
+\centering\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabularx}{\textwidth}{@{}p{3.0cm}p{2.3cm}p{2.5cm}XXp{2.6cm}@{}}
+\toprule
+Work & Layer & Allocation unit & Guarantee & Prediction & Validation \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{Standards}} \\
+IEEE 802.11 EDCA [ieee80211std2020] & MAC & Access category & Priority by AIFS, contention window, and TXOP; no bound & None & Standard \\
+IEEE 802.11 HCCA [ieee80211std2020] & MAC & Flow (TSPEC) & Admission by the AP; polled transmissions; delay bound declared in the TSPEC & None & Standard \\
+IEEE 802.11ax [ieee80211ax2021, khorov2019tutorial] & MAC and PHY & Resource unit per trigger frame; TWT service period & Uplink schedule of the AP & None & Standard \\
+IEEE 802.11be [ieee80211be2024, adame2021tsn] & MAC & Restricted TWT service period & Service periods reserved for latency-sensitive traffic & None & Standard \\
+IEEE 802.16 [ieee80216std2017] & MAC & Uplink grant per frame (UL-MAP) & Request--grant per frame & None & Standard \\
+ETSI DCC [etsi2018dcc] & Access layer & Transmissions of a station & Channel load limited from the CBR measured over 100~ms & None (reacts to the CBR) & Standard \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{Research systems: medium allocation and admission control}} \\
+Kramer et al.\ [kramer2002ipact], 2002 & MAC (EPON) & Window per ONU per polling cycle & Grant capped at a maximum window (limited service) & None (reported queue) & Simulation \\
+Rao and Stoica [rao2005overlay], 2005 & Overlay above the IEEE 802.11 MAC & Equal time slot per node & Slots allocated by a distributed algorithm & None & Simulation and Click testbed \\
+Yang and Kravets [yang2005contention], 2005 & Network (ad hoc) & Flow & Admission when the nodes in carrier-sensing range have the consumed bandwidth & Available bandwidth from the idle time (moving average) & Analysis and ns-2 simulation \\
+Leith et al.\ [leith2005tcp], 2005 & MAC (EDCA parameters) & Traffic class of the AP and of the stations & TCP upload and download fairness & None & Testbed and NS simulation \\
+Sarr et al.\ [sarr2008bandwidth], 2008 & Network (ad hoc) & Flow & Admission when the estimate covers the rate of the flow & Available bandwidth from idle overlap and collision probability & n.r. \\
+Djukic and Mohapatra [djukic2009soft], 2009 & Software TDMA over commodity IEEE 802.11 & TDMA slot & Clocks synchronized within microseconds; arbitrary TDMA schedule & None & Multi-hop testbed \\
+Winstein et al.\ [winstein2013stochastic], 2013 & Transport (end to end) & Bytes per forecast interval & Bounded risk of a delay beyond a target & Stochastic forecast of the link deliveries & Traces of four LTE and 3G networks \\
+Wei et al.\ [wei2013rtwifi], 2013 & MAC (TDMA on the IEEE 802.11 TSF) & TDMA slot & Slots at fixed instants & None & Testbed \\
+H{\o}iland-J{\o}rgensen et al.\ [hoiland2017ending], 2017 & MAC queues of the AP (Linux) & Airtime per station & Airtime fairness & None & Testbed \\
+Shahri et al.\ [shahri2022Extending], 2022 & Application (MQTT) over SDN & MQTT flow & SDN bandwidth reservation; period and deadline per flow & None & Mininet emulation \\
+Jaiswal et al.\ [jaiswal2023wiros], 2023 & Application (ROS 2) and EDCA parameters & ROS 2 topic & Desired QoS in a static traffic scenario & None & n.r. \\
+\midrule
+\multicolumn{6}{@{}l}{\emph{Research systems: network digital twins and digital twin synchronization}} \\
+Rusek et al.\ [rusek2020routenet], 2020 & Model of a wired network & Path & None & Delay, jitter, and loss per path (GNN) & Packet-level simulation (OMNeT++) \\
+Almasan et al.\ [almasan2022network], 2022 & NDT of a wired network & Routing configuration & None & Delay per path (RouteNet-E) in what-if analysis & Case study against OMNeT++ \\
+Almeida et al.\ [almeida2023position], 2023 & NDT of an IEEE 802.11 network (ns-3) & Link & None & Throughput in ns-3 with a learned propagation loss & ns-3 against testbed \\
+Li et al.\ [li2024aoi], 2024 & Edge computing & Twin of an object & $1/4$ approximation (static); competitive ratio (dynamic) & None (AoI computed) & Simulation \\
+An et al.\ [an2025enabling], 2025 & Application (MQTT) & Update of a UAV twin & None (AoI measured) & None & Simulation \\
+\midrule
+Fleet-DT & Application (MQTT brokers) above the IEEE 802.11 EDCA & Admission unit (vessel, topic, output) per step & Failure fraction at most $\beta + \alpha_1/(\gamma T) + (1-\beta)(1 + F_{\mathcal{R}}(T))/T$ for every realization of the channel (Theorem~\ref{thm:aci}) & $\hat{\kappa}(t) = (1 - \hat{b}(t))\,\eta(M+1)$ with ACI on the budget & Emulation (ns-3 real time, KVM hosts) \\
+\bottomrule
+\end{tabularx}
+\end{table*}

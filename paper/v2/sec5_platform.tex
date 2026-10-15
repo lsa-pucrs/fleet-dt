@@ -1,0 +1,68 @@
+\section{Platform Requirements}\label{sec:platform}
+
+This section maps the components of Section~\ref{sec:dt} to the programs and the devices of a platform of Fleet-DT and states the minimum requirements that these programs and devices meet. Fig.~\ref{fig:deploy} shows the programs and the devices as a UML deployment diagram, and Table~\ref{tab:req} lists the requirements with the element of Section~\ref{sec:dt} that each requirement serves.
+
+\begin{table}[t]
+\caption{Minimum requirements of a platform of Fleet-DT.}\label{tab:req}
+\centering\footnotesize
+\begin{tabular}{@{}lp{5.4cm}l@{}}
+\toprule
+& Requirement & Serves \\
+\midrule
+PR1 & The MQTT broker of each vessel runs a plugin that receives each published message, republishes a message, wakes at the period $T_{\mathrm{tick}}$ and at given instants, and reads the unsent and the unacknowledged bytes of the socket of the data bridge. & Defs.~\ref{def:demand}, \ref{def:regulator} \\
+PR2 & The DTP declares, for each topic, $r_\ell$, $J_\ell$, $n_\ell$, $s_\ell$, the kind, and the QoS. & Defs.~\ref{def:topic}, \ref{def:demand} \\
+PR3 & The DTI program of each vessel publishes the values of Definition~\ref{def:demand} before the end of phase~1. & Def.~\ref{def:demand} \\
+PR4 & The clock of each vessel and of the radio of the GS follows the clock of the GS with an offset of at most $\varepsilon$, with slew and without backward steps. & Assumption~\ref{as:clock} \\
+PR5 & The broker of the GS opens, for each vessel, one data bridge and one control bridge over their own TCP connections, and the hosts give UP~6 to the packets of the control bridge. & Section~\ref{subsec:window} \\
+PR6 & The radio of the GS is the AP, and its driver reports the busy time of the channel with a resolution of $1~\mu$s and the time, the size, the PHY rate, and the station of each frame that the AP sends or receives. & Defs.~\ref{def:capacity}, \ref{def:busy} \\
+PR7 & The radios use EDCA and OFDM rates, send each IP packet in one frame without aggregation, and the AP uses for its own AC\_BE a shorter AIFS and a smaller contention window than the stations. & Def.~\ref{def:cost}, \eqref{eq:pred} \\
+PR8 & The TCP connections of the bridges send without the Nagle algorithm on both ends, keep the congestion window across phases~1 and~2, and use a minimum retransmission timeout of at most $T_3/4$. & Def.~\ref{def:cost}, Def.~\ref{def:capacity} \\
+PR9 & The MQTT brokers write each forwarded message to the socket of the bridge without a limit on the messages in flight. & Def.~\ref{def:regulator} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Vessel}\label{subsec:plat_vessel}
+Each vessel carries a computer and a radio that connect through a network interface. The computer runs the vessel MQTT broker, the sources of the uplink topics, and the DTI program, each with its own MQTT client. The sources publish on the local namespace \texttt{boat/b$i$/raw}, which no bridge forwards, and the vessel regulator, a plugin of the vessel MQTT broker (PR1), republishes each released message on the namespace \texttt{boat/b$i$/tx}, which the data bridge forwards. The regulator finds the socket of the data bridge by the local port of the socket, because the data bridge connects to a dedicated listener port of the vessel MQTT broker. In each tick (the event \texttt{MOSQ\_EVT\_TICK} of the plugin interface, with the next wake-up at most $T_{\mathrm{tick}}$ later), the regulator reads with \texttt{SIOCOUTQNSD} the unsent bytes of this socket and releases messages while these bytes plus the bytes released in the tick stay below $L_{\mathrm{w}}$ (Definition~\ref{def:regulator}). In phase~1, the regulator reads with \texttt{SIOCOUTQ} the bytes of this socket that the GS has not acknowledged and, from the offsets of the messages that it released, the number of these messages and their QoS. A source of an output topic splits each output into messages of at most $s_\ell$ bytes, and the content of each message starts with a header of 8 bytes that holds the index of the output, the index of the message in the output, and the number of messages of the output. The operating system runs the vessel MQTT broker and the DTI program with a real-time scheduling priority.
+
+\subsection{Ground Station}\label{subsec:plat_gs}
+The GS consists of a computer and a radio that connect through a network interface. The computer runs the GS MQTT broker, the Fleet-DT program, which holds the DTP, the part of the DTI at the GS, and the DTA and runs the AS and the VE, and the operation control software, which publishes $\mathcal{N}_i(t)$ and $\sigma_t$ in phase~1 on the topic \texttt{fleet/order}. The Fleet-DT program publishes the table of each vessel of $\mathcal{M}(t)$ with QoS~1 on the topic \texttt{levels} of the vessel. The computer of the GS is the time server of the vessels (PR4). The monitor of the AP runs on the radio of the GS, which exchanges every data frame of the fleet, and publishes, at the end of $Q(t)$ and at the end of $W(t)$, the busy time of the channel and the records of the frames of the interval (PR6). Each record carries the access category of the frame, so the AS separates the frames of the data bridges (AC\_BE) from the frames of the control bridges (AC\_VO). From these records, the AS computes $b(t)$, $e(t)$, $\kappa(t)$, and the PHY rates $R_i(t)$ and $R_{0,i}(t)$ of the last frames of each vessel; an exchange that starts in an interval and ends after it counts in proportion to its overlap with the interval. The AS receives the frames of the data bridges in a client and a thread of their own, so the load of the AS stays outside $d_{\mathrm{rx}}$.
+
+\subsection{Network and Airtime Cost}\label{subsec:costplat}
+The data bridge subscribes with QoS~2, so each message keeps the QoS of its topic (Definition~\ref{def:required}), and the control bridge subscribes with QoS~1. Both bridges connect with a clean session, so a reconnection resends no message of an earlier step. The vessel regulator writes in the first 6 bytes of the payload of each released message the index of its step (u32) and its sequence number in its topic and step (u16).
+
+With the OFDM PHY of IEEE~802.11, the frame of an IP packet of $s$ bytes occupies $T_{\mathrm{PRE}} + T_{\mathrm{SIG}} + T_{\mathrm{SYM}}\lceil (22 + 8(h_{\mathrm{MAC}} + s))/N_{\mathrm{DBPS}} \rceil + T_{\mathrm{SE}}$, where $h_{\mathrm{MAC}}$ holds the MAC header with the three-address format of an infrastructure BSS and the QoS control field, LLC, and FCS, $N_{\mathrm{DBPS}}$ is the number of data bits per symbol of the rate $R = N_{\mathrm{DBPS}}/T_{\mathrm{SYM}}$, and $T_{\mathrm{SE}}$ is the signal extension of ERP-OFDM [ieee80211std2020]. Bounding the ceiling by its argument plus one gives
+\begin{equation}
+T_{\mathrm{succ}}(s, R) \leq T_{\mathrm{oh}}(R) + 8s/R,
+\label{eq:tsucc}
+\end{equation}
+where $T_{\mathrm{oh}}(R) = T_{\mathrm{PRE}} + T_{\mathrm{SIG}} + T_{\mathrm{SYM}} + (22 + 8h_{\mathrm{MAC}})/R + T_{\mathrm{SE}} + \mathrm{SIFS} + T_{\mathrm{ACK}}(R) + \mathrm{AIFS}$, $T_{\mathrm{ACK}}(R)$ is the duration of the MAC acknowledgment at the control response rate of $R$, and AIFS is the AIFS of AC\_BE of the stations, which is not shorter than the AIFS of the AP (PR7).
+
+Let $h_{\mathrm{T}}$ be the largest TCP and IP header of one segment, with the options of the connection, $h_{\mathrm{P}}$ the largest PUBLISH header among the uplink topics plus the 6 bytes of step index and sequence number, and $h_{\mathrm{A}} = 4$ the bytes of one MQTT QoS~2 control packet (PUBREC, PUBREL, or PUBCOMP). The regulator writes each message with one call, and TCP sends without the Nagle algorithm (PR8), so $n$ messages of topic $\ell$ with $x$ bytes of content occupy at most $N_{\mathrm{seg}}(x, n) = \min\{n + (x + n h_{\mathrm{P}})/\mathrm{MSS},\ n\,\lceil (s_\ell + h_{\mathrm{P}})/\mathrm{MSS} \rceil\}$ segments, and the GS answers each segment with at most one TCP acknowledgment. With~\eqref{eq:tsucc}, the airtime cost of Definition~\ref{def:cost} is
+\begin{equation}
+\begin{aligned}
+a_i(x, n, q) ={}& N_{\mathrm{seg}}(x, n)\,\big[T_{\mathrm{oh}}(R_i) + 8h_{\mathrm{T}}/R_i + T_{\mathrm{oh}}(R_{0,i}) + 8h_{\mathrm{T}}/R_{0,i}\big] + 8\,(x + n h_{\mathrm{P}})/R_i \\
+&+ \mathbb{1}[q = 2]\; n\,\big[3\,T_{\mathrm{oh}}(R_{0,i}) + 3\,T_{\mathrm{oh}}(R_i) + 8(3h_{\mathrm{T}} + 2h_{\mathrm{A}})/R_{0,i} + 8(3h_{\mathrm{T}} + h_{\mathrm{A}})/R_i\big],
+\end{aligned}
+\label{eq:cost}
+\end{equation}
+where the second line holds the PUBREC and the PUBCOMP of the GS, the PUBREL of the vessel, and the TCP acknowledgment of each of them. A rate in $W(t)$ below $R_i(t)$ or $R_{0,i}(t)$, a TCP window update, or a retransmission adds work outside~\eqref{eq:cost}, and the frames of the clock synchronization, the MQTT keepalive packets, ARP, the beacons, and the goals in $W(t)$ lower $\kappa(t)$; $f(t)$ and the scores record both effects. The hosts set UP~6 on the packets of the control bridge with the socket priority 262 (256 plus the UP), which the Linux IEEE~802.11 stack maps to the UP of the frame (PR5).
+
+\subsection{Bidirectional Exchange and Synchronization}\label{subsec:exchange}
+The PU and the DTI exchange data in both directions in every step without an action of the operator (Table~\ref{tab:exchanges}). In content, every datum carries the index $t$ of its step, the AS assigns each datum to the graph $G(t)$ of its step, and the programs of the GS discard each datum whose index differs from the current step, except a demand of step $t$ that arrives up to $\varepsilon$ before step $t$, and each repeated datum. In time, each host starts each phase on its own clock, which follows the clock of the GS (PR4), and the DTI lags the PU by at most one step. A lost or late datum leaves the exchange in the state of the last column of Table~\ref{tab:exchanges}, and the next step starts the exchange from this state.
+
+\begin{table}[t]
+\caption{Exchanges between the PU and the DTI in step $t$.}\label{tab:exchanges}
+\centering\footnotesize
+\begin{tabular}{@{}p{1.7cm}p{2.0cm}p{1.6cm}p{2.1cm}@{}}
+\toprule
+Datum & From, to, topic & Time & If missing \\
+\midrule
+Demand, $B_i(t)$, report of $t-1$ & DTI program of $i$ to AS, \texttt{demand} & phase 1 & $i \notin \mathcal{M}(t)$, $\bar{B}_i(t)$ from step $t-1$, $f(t-1) = 1$ \\
+Busy time, frames of $Q(t)$ & monitor to AS & start of phase 2 & $\hat{b}(t) = \hat{b}(t-1)$ \\
+Frames of $W(t)$ & monitor to AS & end of step $t$ & no score of step $t$ \\
+Accepted bytes $y_{i,\ell}(t)$ & data bridge of $i$ to AS & $W(t)$ & no bytes \\
+Table of $i$ & AS to regulator of $i$, \texttt{levels} & phase 2 & default table \\
+\bottomrule
+\end{tabular}
+\end{table}
