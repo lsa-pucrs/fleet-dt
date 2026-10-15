@@ -48,6 +48,9 @@ METHODS = {
     "b4": ("fleetdt", "b4"),
     "b5": ("b5", "b5"),
     "tdma": ("tdma", "tdma"),
+    # addendum: B6, IPACT with limited service; the regulator of the slotted variant releases R at once and
+    # the other admitted units inside the slot of the vessel
+    "b6": ("slotted", "ipact"),
 }
 RUN = "/tmp/fdt-run"
 MONITOR_LAG = 0.0025

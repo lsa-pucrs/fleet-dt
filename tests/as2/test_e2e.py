@@ -89,7 +89,7 @@ def test_e2e_four_vessels(tmp_path):
     assert tm["pub_ms"]["p50"] < d.T2 * 1e3
 
 
-@pytest.mark.parametrize("mode", ["slotted", "b4", "b1", "tdma"])
+@pytest.mark.parametrize("mode", ["slotted", "b4", "b1", "tdma", "ipact"])
 def test_e2e_modes(tmp_path, mode):
     steps = 12
     d, svc, fleet, recs = run_fleet(tmp_path, 3, steps, mode=mode)
@@ -100,7 +100,7 @@ def test_e2e_modes(tmp_path, mode):
         assert got == 0
     else:
         assert got >= 3 * (steps - 2)
-    if mode in ("slotted", "tdma"):
+    if mode in ("slotted", "tdma", "ipact"):
         sl = [(r["t"], s) for r in asr for s in r["slot"].values()]
         assert sl
         for t, (s0, s1) in sl:

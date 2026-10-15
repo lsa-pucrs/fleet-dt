@@ -1,5 +1,6 @@
 """Admission control of phase 2 (Section IV-D): units, order pi_t (Def. grant), Algorithm 1 with the
-units of R forced and the prefix rule, tables, held bytes B-bar, and the slotted variant (Def. tdma).
+units of R forced and the prefix rule, tables, held bytes B-bar, the slotted variant (Def. tdma), and the
+baseline B6 (IPACT with limited service).
 
 Topic indices l are 0-based (DTP order); output indices k are 1-based.
 """
@@ -284,3 +285,45 @@ def tdma_slots(dtp, t: int) -> Dict[int, Tuple[int, int]]:
     d = (wend - w) / dtp.M
     return {i: (int(round((w + k * d) * 1e6)), int(round((w + (k + 1) * d) * 1e6)))
             for k, i in enumerate(dtp.vessels)}
+
+
+# ---------------------------------------------------------------------- B6: IPACT with limited service
+def ipact(dtp, t: int, forced: List[Unit], cand: List[Unit], cB: float, guard: Dict[int, float],
+          eta_all: float, eta_one: float, Mt: Iterable[int]):
+    """B6: interleaved polling with limited service (IPACT, Kramer et al. 2002) on the data window W(t).
+
+    The units of R (forced) and the held bytes take a shared slot of (c_R + c_B) / eta_all from w(t), as in
+    the slotted variant. The rest of W(t) gives every vessel the same maximum window
+    W_max = (T_W - shared) / M, and vessel i receives the units of its demand in the order pi_t, with the
+    prefix rule, while their cost fits in eta_one (W_max - guard_i) (limited service: the grant is the
+    smaller of the request and the maximum window). The windows follow one another in the rotated order
+    (i - t) mod M, each with the duration of its grant plus its guard, so an unused part of a window
+    moves the next window earlier. The capacities eta_all = eta(M + 1) and eta_one = eta(2) are the DCF
+    efficiencies without a measurement of the channel: IPACT knows the line rate and predicts nothing.
+
+    Returns (A, slots in us, end of the shared slot in us)."""
+    w, wend = dtp.window(t)
+    T_W = wend - w
+    cR = sum(u.c for u in forced)
+    shared = min(T_W, (cR + cB) / eta_all) if eta_all > 0 else T_W
+    win = (T_W - shared) / dtp.M
+    A = list(forced)
+    adm = set(u.uid for u in forced)
+    ci: Dict[int, float] = {}
+    for u in cand:
+        if u.uid in adm or not (u.k == 1 or (u.i, u.l, u.k - 1) in adm):
+            continue
+        G = eta_one * max(0.0, win - guard[u.i])
+        if ci.get(u.i, 0.0) + u.c <= G:
+            A.append(u)
+            adm.add(u.uid)
+            ci[u.i] = ci.get(u.i, 0.0) + u.c
+    out: Dict[int, Tuple[int, int]] = {}
+    cur = w + shared
+    for i in sorted(Mt, key=lambda i: dtp.rot(i, t)):
+        if i not in ci:
+            continue
+        d = ci[i] / eta_one + guard[i]
+        out[i] = (int(round(cur * 1e6)), int(round(min(cur + d, wend) * 1e6)))
+        cur += d
+    return A, out, int(round(min(w + shared, wend) * 1e6))

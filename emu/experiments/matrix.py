@@ -5,6 +5,7 @@
   python3 emu/experiments/matrix.py pilot --calib C.json --out DIR    pilot (Section 9 of the task)
   python3 emu/experiments/matrix.py e0    --calib C.json --out DIR    E0 (needs "sat" in C.json)
   python3 emu/experiments/matrix.py eval  --calib C.json --out DIR    E1 to E4 (needs "sat" and "e0")
+  python3 emu/experiments/matrix.py b6    --calib C.json --out DIR    E5, addendum: B6 (IPACT) on the cells of E3
   options: --steps 1200 --order-seed 20261015 --only E3 (eval: a subset of the experiments)
            --yans E4 (the cells of these experiments use YansWifiPhy instead of SpectrumWifiPhy; scenarios
            without the jammer only; emu/README.md, "Yans and Spectrum": same kappa and b distributions,
@@ -23,6 +24,10 @@ Table exp (each cell 12 evaluation seeds, 4 calibration seeds; 1200 steps per ru
 | E2 | Fleet-DT with eq. (pred), persistence, ES of kappa, calibration mean | S1-S5 | 1.5 | 4 | 125 | 4 x 5 x 12 = 240 |
 | E3 | Fleet-DT, slotted, B1, B2, B3, B4, B5, TDMA | S1, S2, S4, S5 | 1, 1.5, 2 | 4 | 125 | 8 x 4 x 3 x 12 = 1152 |
 | E4 | Fleet-DT, B1, B3 | S2 | 1.5 | 2 (Ts 125, spectrum); 4 (Ts 62.5, yans) | | 3 x 2 x 12 = 72 |
+| E5 (addendum) | B6 (IPACT with limited service) | S1, S2, S4, S5 | 1, 1.5, 2 | 4 | 125 | 4 x 3 x 12 = 144 |
+
+E5 uses the seeds and the run files of the E3 cells (same channel and data), so its runs pair with the E3
+runs of the same seed (emu/experiments/addendum/ADDENDUM.md).
 
 A seed fixes the scenario (trajectories, fading and backoff draws of ns-3, interference schedule), the
 release instants and sizes of the sources and the schedule of the operation control stub, so every method
@@ -220,6 +225,11 @@ def cells(cmd, only=None):
             for rho in RHOS:
                 for seed in CAL_SEEDS:
                     out.append(("E0", "fleetdt", "eq", sid, 4, 0.125, rho, seed))
+    elif cmd == "b6":
+        for seed in EVAL_SEEDS:
+            for sid in E3_SCEN:
+                for rho in RHOS:
+                    out.append(("E5", "b6", "eq", sid, 4, 0.125, rho, seed))
     elif cmd == "eval":
         exps = only or ("E1", "E2", "E3", "E4")
         for seed in EVAL_SEEDS:
@@ -244,7 +254,7 @@ def cells(cmd, only=None):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("cmd", choices=("sat", "pilot", "e0", "eval"))
+    ap.add_argument("cmd", choices=("sat", "pilot", "e0", "eval", "b6"))
     ap.add_argument("--out", required=True)
     ap.add_argument("--calib", default=None)
     ap.add_argument("--steps", type=int, default=1200)
@@ -255,7 +265,7 @@ def main():
                     help="override of the guard g1 = eps + 2 T_tick of the phase 1 offsets i (T1 - g1) / (M + 1)")
     a = ap.parse_args()
     cal = load_json(a.calib) if a.calib else None
-    if a.cmd == "eval" and cal and cal.get("e0"):
+    if a.cmd in ("eval", "b6") and cal and cal.get("e0"):
         os.makedirs(os.path.join(a.out, "init"), exist_ok=True)
         e0 = cal["e0"]
         for sid, preds in e0["init_scores"].items():
@@ -264,7 +274,7 @@ def main():
                     json.dump({"scores": v, "b_hat": e0.get("b_hat0", {}).get(sid, 0.0)}, f)
     if a.cmd != "sat" and not (cal and cal.get("sat")):
         raise SystemExit("%s needs --calib with the saturation results (emu/experiments/calibrate.py sat)" % a.cmd)
-    if a.cmd == "eval" and not cal.get("e0"):
+    if a.cmd in ("eval", "b6") and not cal.get("e0"):
         raise SystemExit("eval needs the E0 calibration (emu/experiments/calibrate.py e0)")
     steps = 600 if a.cmd == "sat" and a.steps == 1200 else a.steps
     os.makedirs(os.path.join(a.out, "specs"), exist_ok=True)

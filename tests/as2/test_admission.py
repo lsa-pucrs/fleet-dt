@@ -8,7 +8,7 @@ import pytest
 
 from fleetdt.as2 import dtp as D
 from fleetdt.as2.admission import (AdditiveBudget, Demand, HeldBytes, SlotBudget, Unit, algorithm1, arrival_units,
-                                   build_units, slots, tables, unit_key)
+                                   build_units, ipact, slots, tables, unit_key)
 
 
 def small_dtp(M):
@@ -211,3 +211,43 @@ def test_slots_layout():
     assert [i for i, _ in seq] == sorted(sl, key=lambda i: d.rot(i, 4))
     for (a, (s1, e1)), (b_, (s2, e2)) in zip(seq, seq[1:]):
         assert e1 <= s2 + 1
+
+
+def test_ipact_limited_service():
+    """B6: R forced; each vessel at most eta_one (W_max - guard) of cost outside R; prefix rule; windows in
+    the rotated order, back to back from the end of the shared slot, each with its grant plus its guard."""
+    d = small_dtp(3)
+    t = 5
+    guard = {i: 0.001 for i in d.vessels}
+    eta_all, eta_one = 0.5, 0.8
+    forced = [Unit(i, 0, 1, 0, 1, 2, c=0.002, inR=True) for i in d.vessels]
+    cB = 0.004
+    shared = (3 * 0.002 + cB) / eta_all
+    win = (d.T_W - shared) / d.M
+    G = eta_one * (win - 0.001)
+    # vessel 1 asks for far more than its window; vessel 2 for less; vessel 3 for nothing outside R
+    cand = [Unit(1, 2, k, 0, 1, 0, c=G / 3.5) for k in range(1, 7)] + [Unit(2, 1, 1, 0, 1, 0, c=G / 4)]
+    for u in cand:
+        u.key = (1, 1, u.l, u.k, d.rot(u.i, t))
+    cand.sort(key=lambda u: u.key)
+    A, sl, sh_end = ipact(d, t, forced, cand, cB, guard, eta_all, eta_one, d.vessels)
+    got = {}
+    for u in A:
+        if not u.inR:
+            got.setdefault(u.i, []).append(u.k)
+    assert got[1] == [1, 2, 3] and got[2] == [1] and 3 not in got
+    assert all(u in A for u in forced)
+    w, we = d.window(t)
+    assert sh_end == round((w + shared) * 1e6)
+    assert set(sl) == {1, 2}
+    seq = sorted(sl.items(), key=lambda kv: kv[1][0])
+    assert [i for i, _ in seq] == sorted(sl, key=lambda i: d.rot(i, t))
+    assert abs(seq[0][1][0] - sh_end) <= 1
+    for (a, (s1, e1)), (b, (s2, e2)) in zip(seq, seq[1:]):
+        assert abs(e1 - s2) <= 1
+    assert sl[1][1] - sl[1][0] == pytest.approx((3 * G / 3.5 / eta_one + 0.001) * 1e6, abs=2)
+    assert sl[2][1] - sl[2][0] == pytest.approx((G / 4 / eta_one + 0.001) * 1e6, abs=2)
+    assert max(e for _, e in sl.values()) <= round(we * 1e6)
+    # the grant of a vessel does not depend on the requests of the other vessels (limited service)
+    A2, _, _ = ipact(d, t, forced, [u for u in cand if u.i == 1], cB, guard, eta_all, eta_one, d.vessels)
+    assert sorted(u.k for u in A2 if u.i == 1 and not u.inR) == [1, 2, 3]

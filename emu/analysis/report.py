@@ -15,6 +15,7 @@ DIR/tab_*.tex (booktabs) and DIR/fig_*.pdf (matplotlib, one axis per figure).
 | H5 | E3, rho in {1.5, 2}: Fleet-DT against B1, B2, B3, B5, TDMA in S1, S2, S4, S5: D_N (Fleet-DT larger) and the state miss ratio (Fleet-DT smaller); Wilcoxon with Holm over the 40 comparisons of each metric |
 | H6 | E4: the what-if evaluation (fleetdt/as2/whatif.py) of the DTA of the E1 run of the same seed (S2, M = 4, Ts = 125 ms) for the measured E4 cells (M = 2; Ts = 62.5 and 250 ms) against the measured Fleet-DT runs: |delta f_bar| <= 0.02 and |delta nu| <= 0.05; M = 8 (--whatif DIR, the DTPs that matrix.py writes) is reported as a prediction without a measured counterpart |
 | H7 | E4 Fleet-DT runs: no state delay above Ts + T3 + eps and no age above 2 Ts + T3 + eps in the steps that meet the hypothesis of Lemma 2 |
+| H8 (addendum) | E3 Fleet-DT runs against the E5 runs (B6, IPACT with limited service) of the same seed, rho in {1.5, 2}, S1, S2, S4, S5: D_N (Fleet-DT larger) and the state miss ratio (Fleet-DT smaller); Wilcoxon two-sided with Holm over the 8 comparisons of each metric; the slotted variant against B6 as additional analysis |
 """
 import argparse
 import csv
@@ -36,7 +37,7 @@ BASELINES_H5 = ("b1", "b2", "b3", "b5", "tdma")
 ALT_PRED = ("persist", "es", "calmean")
 NAMES = {"fleetdt": "Fleet-DT", "slotted": "Slotted", "b1": "B1", "b2": "B2", "b3": "B3", "b4": "B4", "b5": "B5",
          "tdma": "TDMA", "eq": "Eq. (pred)", "persist": "Persistence", "es": "ES of $\\kappa$",
-         "calmean": "Calibration mean"}
+         "calmean": "Calibration mean", "b6": "B6 (IPACT)"}
 
 
 def load(paths):
@@ -329,14 +330,15 @@ def figures(runs, out):
     import matplotlib.pyplot as plt
     plt.rcParams.update({"font.size": 9, "axes.grid": True, "grid.alpha": 0.3, "figure.figsize": (3.4, 2.4),
                          "savefig.bbox": "tight"})
-    e3 = [m for m in runs if m.get("exp") == "E3"]
+    # E5 (addendum, B6) shares the cells and the seeds of E3
+    e3 = [m for m in runs if m.get("exp") in ("E3", "E5")]
     for metric, ylab in (("D_N", "$D_{\\mathcal{N}}$"), ("state_miss", "State miss ratio")):
         for sc in ("S1", "S2", "S4", "S5"):
             rr = [m for m in e3 if m["scenario"] == sc]
             if not rr:
                 continue
             fig, ax = plt.subplots()
-            for meth in ("fleetdt", "slotted", "b1", "b2", "b3", "b4", "b5", "tdma"):
+            for meth in ("fleetdt", "slotted", "b1", "b2", "b3", "b4", "b5", "tdma", "b6"):
                 xs, ys, lo, hi = [], [], [], []
                 for rho in (1.0, 1.5, 2.0):
                     v = [m.get(metric) for m in rr if m["method"] == meth and m["rho"] == rho and m.get(metric) is not None]
@@ -407,6 +409,29 @@ def figures(runs, out):
         plt.close(fig)
 
 
+def h8(runs):
+    """Addendum (emu/experiments/addendum/ADDENDUM.md): Fleet-DT (E3) against B6 (E5), paired by seed."""
+    rr = [m for m in runs if (m.get("rho") or 0) >= 1.5 and
+          ((m.get("exp") == "E3" and m.get("method") in ("fleetdt", "slotted")) or
+           (m.get("exp") == "E5" and m.get("method") == "b6"))]
+    out = {"additional_slotted": {}}
+    for metric, fn, better in (("D_N", lambda m: m.get("D_N"), "larger"),
+                               ("state_miss", lambda m: m.get("state_miss"), "smaller")):
+        for a_meth, dest in (("fleetdt", out), ("slotted", out["additional_slotted"])):
+            comps = []
+            for s in ("S1", "S2", "S4", "S5"):
+                for rho in (1.5, 2.0):
+                    xa, xb = paired(rr, lambda m: m["scenario"] == s and m["rho"] == rho and m["method"] == a_meth,
+                                    lambda m: m["scenario"] == s and m["rho"] == rho and m["method"] == "b6",
+                                    lambda m: m["seed"], fn)
+                    comps.append(("%s rho=%g %s-b6" % (s, rho, a_meth), xa, xb))
+            dest[metric] = family(comps, better)
+    out["holds"] = bool(out.get("D_N")) and all(r["n"] > 0 and r["supports"] for k in ("D_N", "state_miss")
+                                                 for r in out[k])
+    out["runs_b6"] = sum(1 for m in rr if m.get("method") == "b6")
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("results", nargs="+")
@@ -417,7 +442,7 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     runs = load(a.results)
     hyp = {"H1": h1(runs), "H2": h2(runs), "H3": h3(runs), "H4": h4(runs), "H5": h5(runs), "H6": h6(runs, a.whatif),
-           "H7": h7(runs)}
+           "H7": h7(runs), "H8": h8(runs)}
     with open(os.path.join(a.out, "hypotheses.json"), "w") as f:
         json.dump(hyp, f, indent=1, default=float)
     keys = ["name", "exp", "method", "predictor", "scenario", "M", "Ts", "rho", "seed", "n_steps", "lag_discarded"]
@@ -439,6 +464,9 @@ def main():
     if hyp["H5"].get("D_N"):
         family_table(os.path.join(a.out, "tab_h5_dn.tex"), "H5: $D_{\\mathcal{N}}$, Fleet-DT against the baselines.", "tab:h5dn", hyp["H5"]["D_N"])
         family_table(os.path.join(a.out, "tab_h5_miss.tex"), "H5: state miss ratio, Fleet-DT against the baselines.", "tab:h5miss", hyp["H5"]["state_miss"])
+    if hyp["H8"].get("runs_b6"):
+        family_table(os.path.join(a.out, "tab_h8_dn.tex"), "H8: $D_{\\mathcal{N}}$, Fleet-DT against B6.", "tab:h8dn", hyp["H8"]["D_N"])
+        family_table(os.path.join(a.out, "tab_h8_miss.tex"), "H8: state miss ratio, Fleet-DT against B6.", "tab:h8miss", hyp["H8"]["state_miss"])
     figures(runs, a.out)
     print(json.dumps({k: v.get("holds") for k, v in hyp.items()}))
 

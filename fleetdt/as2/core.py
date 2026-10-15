@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from .aci import ACI
-from .admission import (AdditiveBudget, Demand, HeldBytes, SlotBudget, Unit, algorithm1, build_units, slots,
-                        tables, tdma_slots)
+from .admission import (AdditiveBudget, Demand, HeldBytes, SlotBudget, Unit, algorithm1, build_units, ipact,
+                        slots, tables, tdma_slots)
 from .airtime import Cost, Phy
 from .bianchi import EtaTable
 from .failure import Acceptor, EdgeAcc, indicator
@@ -23,7 +23,9 @@ from .predictor import Predictor, Scores
 
 ADMISSION_MODES = ("fleetdt", "b4", "oracle", "slotted", "b5")
 PASS_MODES = ("b1", "b2", "b3", "tdma")
-MODES = ADMISSION_MODES + PASS_MODES
+# B6 (addendum to the frozen protocol): IPACT with limited service, per-vessel grants without prediction
+GRANT_MODES = ("ipact",)
+MODES = ADMISSION_MODES + PASS_MODES + GRANT_MODES
 # point predictors of kappa(t) (experiment E2): eq. (pred), persistence kappa_hat(t) = kappa(t-1),
 # exponential smoothing of kappa with the gain pred_gain, and the mean of the calibration runs
 PREDICTORS = ("eq", "persist", "es", "calmean")
@@ -305,6 +307,9 @@ class ASCore:
                 w0, w1 = dtp.window(t)
                 sh = budget.shared()
                 shared_end = us(min(w1, w0 + sh)) if math.isfinite(sh) else us(w1)
+        elif mode == "ipact":
+            guard = {i: 2 * dtp.eps + self.phy.t_succ(dtp.mss + dtp.h_T, rates[i][0]) for i in dtp.vessels}
+            A, slot, shared_end = ipact(dtp, t, forced, cand, sum_cB, guard, eta, self.eta(2), Mt)
         else:
             A = forced + cand
         tabs: Dict[int, Dict] = {}
