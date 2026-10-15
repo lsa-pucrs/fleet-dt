@@ -1,0 +1,36 @@
+#!/bin/bash
+# Inside the builder VM (Debian 13, user fdt with sudo): packages of the Fleet-DT stack, patched
+# Mosquitto 2.1.2 + cJSON 1.7.19 (mosquitto/build.sh), the guest services of the emulator, IPv6 off.
+#   provision-base.sh <dir with mosquitto-2.1.2.tar.gz, cJSON-1.7.19.tar.gz> <dir with mosquitto/ and emu/vm/guest/>
+set -euo pipefail
+DIST=$(realpath "$1"); SRC=$(realpath "$2")
+export DEBIAN_FRONTEND=noninteractive
+sudo -E apt-get update -q > /dev/null
+echo "iperf3 iperf3/start_daemon boolean false" | sudo debconf-set-selections
+sudo -E apt-get install -y -q --no-install-recommends build-essential pkg-config python3 python3-paho-mqtt \
+	python3-numpy chrony nftables iproute2 iperf3 rsync ethtool tcpdump iputils-ping procps jq \
+	linux-perf ca-certificates > /dev/null
+sudo -E apt-get purge -y -q unattended-upgrades systemd-timesyncd > /dev/null 2>&1 || true
+sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer fstrim.timer 2>/dev/null || true
+[ -x /opt/mosquitto-2.1/sbin/mosquitto ] || bash "$SRC/mosquitto/build.sh" "$DIST" /opt/mosquitto-2.1
+for b in /opt/mosquitto-2.1/bin/* /opt/mosquitto-2.1/sbin/*; do sudo ln -sf "$b" /usr/local/bin/; done
+sudo install -d /usr/local/lib/fdt /etc/fleetdt /etc/chrony/conf.d
+sudo install -m 755 "$SRC"/emu/vm/guest/*.py /usr/local/lib/fdt/
+sudo install -m 644 "$SRC"/emu/vm/guest/*.service /etc/systemd/system/
+sudo install -m 644 "$SRC/emu/vm/guest/chrony.conf" /etc/chrony/chrony.conf
+sudo rm -f /etc/chrony/sources.d/* /etc/chrony/conf.d/*
+sudo systemctl daemon-reload
+sudo systemctl enable fdt-netsetup.service fdt-clockinit.service fdt-clockd.service chrony.service
+echo ptp_kvm | sudo tee /etc/modules-load.d/ptp_kvm.conf > /dev/null
+# IPv6 off (SPEC_v2 Section 7), quiet console, no predictable-name surprises are needed (MAC lookup)
+echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT ipv6.disable=1"' | sudo tee /etc/default/grub.d/90-fdt.cfg > /dev/null
+sudo update-grub > /dev/null 2>&1
+# the mosquitto service of the distribution is not installed (source build); the stack starts its brokers
+sudo sed -i 's/^#\?MaxRetentionSec=.*/MaxRetentionSec=1week/' /etc/systemd/journald.conf
+{ /opt/mosquitto-2.1/sbin/mosquitto -h 2>&1 || true; } | head -1
+python3 -c "import paho.mqtt; print('paho-mqtt', paho.mqtt.__version__)"
+iperf3 --version | head -1
+/usr/sbin/chronyd --version
+sudo cloud-init clean --logs --machine-id --seed > /dev/null
+sudo rm -f /etc/ssh/ssh_host_*
+echo provision-base: done

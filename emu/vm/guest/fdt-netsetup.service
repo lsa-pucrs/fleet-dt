@@ -1,0 +1,14 @@
+[Unit]
+Description=Fleet-DT emulator: data NIC, static neighbors, TCP route options
+After=systemd-udevd.service network-pre.target cloud-init.service cloud-init-network.service
+Before=network-online.target chrony.service
+Wants=network-pre.target
+ConditionPathExists=/etc/fleetdt/emu-host.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/fdt/fdt-netsetup.py
+
+[Install]
+WantedBy=multi-user.target

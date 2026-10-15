@@ -1,0 +1,53 @@
+#!/usr/sbin/nft -f
+# Fleet-DT v2: IEEE 802.11 user priority of the control bridge (paper PR5, Section V-C;
+# SPEC_v2.md Section 5). Load on every vessel and on the GS:  nft -f /etc/fleetdt/nftables-fdt.nft
+#
+# Control bridge (TCP port 1883; the GS connects to port 1883 of each vessel):
+#   meta priority set 0:106   skb->priority = 0x106 = 262 = 256 + 6. cfg80211_classify8021d()
+#                             (net/wireless/util.c) returns skb->priority - 256 for 256..263 before it
+#                             looks at the DSCP, so mac80211 sends the frame with UP 6 (AC_VO).
+#                             The classid notation major:minor is hexadecimal: "nft --debug=netlink"
+#                             shows "immediate reg 1 0x00000106" for 0:106.
+#   ip dscp set ef            DSCP 46 in the IP header, for hops that classify by DSCP (the ns-3
+#                             emulator maps the IP TOS to the UP). The UP of EF depends on the mapping:
+#                             UP 5 with the precedence mapping (DSCP >> 3: ns-3 default, cfg80211
+#                             before RFC 8325), UP 6 with RFC 8325 (recent cfg80211). The emulator
+#                             therefore must map EF to UP 6, or FDT_CTL_DSCP can be set to cs6 (48 -> UP 6).
+# Both directions: each host marks the packets it sends, the vessel with source port 1883, the GS
+# with destination port 1883. Loopback traffic (local programs of the vessel) stays unmarked.
+#
+# Mode b2 (one data bridge per class, plugin_opt_mode b2): DSCP only, by listener port of the vessel:
+#   1884 BE (unmarked), 1885 AF41, 1886 EF.
+#
+# The data bridge (port 1884) stays at skb->priority 0 and DSCP 0 (UP 0, AC_BE).
+
+define FDT_CTL_PORT = 1883
+define FDT_CTL_PRIO = 0:106
+define FDT_CTL_DSCP = ef
+define FDT_B2_AF41_PORT = 1885
+define FDT_B2_EF_PORT = 1886
+
+table inet fleetdt {
+	chain output {
+		type filter hook output priority mangle; policy accept;
+		oifname "lo" accept
+
+		# control bridge, both directions
+		tcp dport $FDT_CTL_PORT meta priority set $FDT_CTL_PRIO
+		tcp sport $FDT_CTL_PORT meta priority set $FDT_CTL_PRIO
+		meta nfproto ipv4 tcp dport $FDT_CTL_PORT ip dscp set $FDT_CTL_DSCP
+		meta nfproto ipv4 tcp sport $FDT_CTL_PORT ip dscp set $FDT_CTL_DSCP
+		meta nfproto ipv6 tcp dport $FDT_CTL_PORT ip6 dscp set $FDT_CTL_DSCP
+		meta nfproto ipv6 tcp sport $FDT_CTL_PORT ip6 dscp set $FDT_CTL_DSCP
+
+		# baseline b2: data bridges per class
+		meta nfproto ipv4 tcp sport $FDT_B2_AF41_PORT ip dscp set af41
+		meta nfproto ipv4 tcp dport $FDT_B2_AF41_PORT ip dscp set af41
+		meta nfproto ipv4 tcp sport $FDT_B2_EF_PORT ip dscp set ef
+		meta nfproto ipv4 tcp dport $FDT_B2_EF_PORT ip dscp set ef
+		meta nfproto ipv6 tcp sport $FDT_B2_AF41_PORT ip6 dscp set af41
+		meta nfproto ipv6 tcp dport $FDT_B2_AF41_PORT ip6 dscp set af41
+		meta nfproto ipv6 tcp sport $FDT_B2_EF_PORT ip6 dscp set ef
+		meta nfproto ipv6 tcp dport $FDT_B2_EF_PORT ip6 dscp set ef
+	}
+}

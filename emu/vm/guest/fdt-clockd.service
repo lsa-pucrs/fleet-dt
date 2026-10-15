@@ -1,0 +1,11 @@
+[Unit]
+Description=Fleet-DT emulator: vsock clock server for the host probe
+After=fdt-clockinit.service
+
+[Service]
+ExecStart=/usr/local/lib/fdt/fdt-clockd.py
+Restart=always
+Nice=-10
+
+[Install]
+WantedBy=multi-user.target

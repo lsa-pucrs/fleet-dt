@@ -1,0 +1,80 @@
+{
+ "name": "tworay-minstrel-m2",
+ "M": 2,
+ "seed": 1,
+ "rate": {
+  "manager": "minstrel",
+  "non_unicast": "OfdmRate6Mbps"
+ },
+ "edca": {
+  "aifsn_ap": 1,
+  "cwmin_ap": 7,
+  "cwmax_ap": 1023,
+  "aifsn_sta": 3,
+  "cwmin_sta": 15,
+  "cwmax_sta": 1023
+ },
+ "tx_power_dbm": 20,
+ "mac_queue": {
+  "packets": 100,
+  "max_delay_ms": 500
+ },
+ "monitor_period_ms": 5,
+ "beacon_tu": 100,
+ "prio": {
+  "dscp": {
+   "46": 6,
+   "34": 5
+  },
+  "tcp_ports": {
+   "1883": 6
+  }
+ },
+ "channel": {
+  "model": "tworay",
+  "frequency_hz": 2412000000.0,
+  "nakagami": {
+   "m0": 1.5,
+   "m1": 0.75,
+   "m2": 0.75,
+   "d1": 80,
+   "d2": 200
+  },
+  "positions": {
+   "gs": [
+    0,
+    0,
+    6
+   ],
+   "v1": [
+    [
+     0,
+     100,
+     0,
+     1.5
+    ],
+    [
+     300,
+     600,
+     0,
+     1.5
+    ]
+   ],
+   "v2": [
+    [
+     0,
+     -150,
+     50,
+     1.5
+    ],
+    [
+     300,
+     -150,
+     400,
+     1.5
+    ]
+   ]
+  }
+ },
+ "standard": "11a"
+}

@@ -1,11 +1,47 @@
---- a/src/bridge.c	2026-10-06 19:58:54.554562065 -0300
-+++ b/src/bridge.c	2026-10-06 19:58:54.556427742 -0300
-@@ -93,6 +93,8 @@
- 	new_context->transport = mosq_t_tcp;
- 	new_context->bridge = bridge;
- 	new_context->is_bridge = true;
-+	/* PATCH: apply set_tcp_nodelay to the outgoing bridge sockets too */
-+	new_context->tcp_nodelay = db.config->set_tcp_nodelay;
+--- a/src/bridge.c
++++ b/src/bridge.c
+@@ -229,6 +229,28 @@
+ 	return MOSQ_ERR_SUCCESS;
+ }
  
- 	new_context->username = bridge->remote_username;
- 	new_context->password = bridge->remote_password;
++
++/* Disable Nagle's algorithm on the bridge socket when set_tcp_nodelay is
++ * true, as is already done for the sockets accepted by the listeners. Small
++ * QoS 1/2 PUBLISH and acknowledgement packets of a bridge then leave the host
++ * without waiting for the acknowledgement of previous segments. */
++static int bridge__set_tcp_nodelay(struct mosquitto *context)
++{
++	int flag = 1;
++
++	if(!db.config->set_tcp_nodelay || context->sock == INVALID_SOCKET){
++		return MOSQ_ERR_SUCCESS;
++	}
++#ifdef WIN32
++	if(setsockopt(context->sock, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(int)) != 0){
++#else
++	if(setsockopt(context->sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(int)) != 0){
++#endif
++		log__printf(NULL, MOSQ_LOG_WARNING, "Warning: Unable to set TCP_NODELAY on bridge %s.", context->bridge->name);
++	}
++	return MOSQ_ERR_SUCCESS;
++}
++
+ #ifdef WITH_TCP_USER_TIMEOUT
+ 
+ 
+@@ -427,6 +449,7 @@
+ 	if(bridge__set_tcp_keepalive(context) != MOSQ_ERR_SUCCESS){
+ 		return MOSQ_ERR_UNKNOWN;
+ 	}
++	bridge__set_tcp_nodelay(context);
+ #ifdef WITH_TCP_USER_TIMEOUT
+ 	if(bridge__set_tcp_user_timeout(context)){
+ 		return MOSQ_ERR_UNKNOWN;
+@@ -610,6 +633,7 @@
+ 	if(bridge__set_tcp_keepalive(context) != MOSQ_ERR_SUCCESS){
+ 		return MOSQ_ERR_UNKNOWN;
+ 	}
++	bridge__set_tcp_nodelay(context);
+ #ifdef WITH_TCP_USER_TIMEOUT
+ 	if(bridge__set_tcp_user_timeout(context)){
+ 		return MOSQ_ERR_UNKNOWN;

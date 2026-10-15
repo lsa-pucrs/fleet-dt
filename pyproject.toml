@@ -16,9 +16,13 @@ fleetdt-ve = "fleetdt.ve.__main__:main"
 fleetdt-outer = "fleetdt.outer:main"
 fleetdt-analysis = "fleetdt.analysis:main"
 fleetdt-gsconf = "fleetdt.gsconf:main"
+fleetdt-as2 = "fleetdt.as2.service:main"
+fleetdt-opctl = "fleetdt.as2.opctl:main"
+fleetdt-as2-analysis = "fleetdt.as2.analysis:main"
+fleetdt-whatif = "fleetdt.as2.whatif:main"
 
 [tool.setuptools]
-packages = ["fleetdt", "fleetdt.ve"]
+packages = ["fleetdt", "fleetdt.ve", "fleetdt.as2"]
 
 [tool.setuptools.package-data]
 "fleetdt.ve" = ["static/*.html"]

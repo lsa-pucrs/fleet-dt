@@ -1,16 +1,35 @@
-diff --git a/src/plugin_tick.c b/src/plugin_tick.c
-index a00c95b..6b9705b 100644
 --- a/src/plugin_tick.c
 +++ b/src/plugin_tick.c
-@@ -50,6 +50,11 @@ static void plugin__handle_tick_single(struct mosquitto__security_options *opts)
+@@ -46,10 +46,31 @@
+ 
+ 			cb_base->data.next_tick.tv_sec = event_data.now_s + event_data.next_s;
+ 			cb_base->data.next_tick.tv_nsec = event_data.now_ns + 1000000*event_data.next_ms;
+-			if(cb_base->data.next_tick.tv_nsec > 1000000000){
++			/* Carry: tv_nsec must stay in [0, 1e9). next_ms may exceed 999. */
++			while(cb_base->data.next_tick.tv_nsec >= 1000000000){
  				cb_base->data.next_tick.tv_nsec -= 1000000000;
  				cb_base->data.next_tick.tv_sec += 1;
  			}
 +		}else{
-+			/* PATCH: keep the pending tick deadline in the poll timeout */
-+			long rem_ms = (long)((cb_base->data.next_tick.tv_sec - event_data.now_s)*1000
-+				+ (cb_base->data.next_tick.tv_nsec - event_data.now_ns)/1000000) + 1;
-+			loop__update_next_event(rem_ms > 0 ? rem_ms : 1);
++			/* The loop woke up before the deadline of this callback (another
++			 * event arrived). The main loop resets next_event_ms on every
++			 * iteration, so the deadline is kept and the loop is asked to wake
++			 * up again when it is reached (rounded up to the next
++			 * millisecond, at least 1 ms). Without this the callback waits for
++			 * an unrelated event or for the default timeout. */
++			time_t rem_s = cb_base->data.next_tick.tv_sec - event_data.now_s;
++			long rem_ns = cb_base->data.next_tick.tv_nsec - event_data.now_ns;
++			time_t rem_ms;
++
++			if(rem_ns < 0){
++				rem_ns += 1000000000;
++				rem_s -= 1;
++			}
++			rem_ms = rem_s*1000 + (rem_ns + 999999)/1000000;
++			if(rem_ms < 1){
++				rem_ms = 1;
++			}
++			loop__update_next_event(rem_ms);
  		}
  	}
  }

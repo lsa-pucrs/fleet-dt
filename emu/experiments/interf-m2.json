@@ -1,0 +1,45 @@
+{
+ "name": "interf-m2",
+ "scenario": "emu/scenarios/interf-m2.json",
+ "sync": true,
+ "setup": [
+  {
+   "host": "vessels",
+   "cmd": "printf 'listener 1883\\nlistener 1884\\nallow_anonymous true\\nset_tcp_nodelay true\\nmax_inflight_messages 65534\\nmax_queued_messages 100000\\npersistence false\\nlog_dest file /tmp/fdt-run/mosquitto.log\\n' > /tmp/fdt-run/m.conf"
+  },
+  {
+   "host": "gs",
+   "cmd": "cd ~/fleet-dt && a=''; for i in {vessels}; do a=\"$a --vessel $i=10.10.0.$((10+i))\"; done; python3 -m fleetdt.gsconf gs $a > /tmp/fdt-run/m.conf && echo 'log_dest file /tmp/fdt-run/mosquitto.log' >> /tmp/fdt-run/m.conf"
+  }
+ ],
+ "start": [
+  {
+   "host": "vessels",
+   "cmd": "mosquitto -c /tmp/fdt-run/m.conf",
+   "log": "mosq"
+  },
+  {
+   "host": "gs",
+   "cmd": "mosquitto -c /tmp/fdt-run/m.conf",
+   "log": "mosq",
+   "sleep": 3
+  },
+  {
+   "host": "vessels",
+   "cmd": "python3 ~/fleet-dt/emu/tools/mqtt_load.py pub --topic boat/b{i}/tx/load --rate-bps 1e6 --size 1000 --duration 125",
+   "log": "pub"
+  },
+  {
+   "host": "gs",
+   "cmd": "python3 ~/fleet-dt/emu/tools/mqtt_load.py sub --topic 'boat/+/tx/#' --duration 128 --out /tmp/fdt-run/sub.json",
+   "log": "sub"
+  }
+ ],
+ "wait_s": 130,
+ "collect": [
+  {
+   "host": "all",
+   "path": "/tmp/fdt-run/"
+  }
+ ]
+}

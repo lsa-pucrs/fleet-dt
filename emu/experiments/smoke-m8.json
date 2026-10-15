@@ -1,0 +1,90 @@
+{
+ "name": "smoke-m8",
+ "sync": true,
+ "setup": [
+  {
+   "host": "vessels",
+   "cmd": "printf 'listener 1883\\nlistener 1884\\nallow_anonymous true\\nset_tcp_nodelay true\\nmax_inflight_messages 65534\\nmax_queued_messages 100000\\npersistence false\\nlog_dest file /tmp/fdt-run/mosquitto.log\\n' > /tmp/fdt-run/m.conf"
+  },
+  {
+   "host": "gs",
+   "cmd": "cd ~/fleet-dt && a=''; for i in {vessels}; do a=\"$a --vessel $i=10.10.0.$((10+i))\"; done; python3 -m fleetdt.gsconf gs $a > /tmp/fdt-run/m.conf && echo 'log_dest file /tmp/fdt-run/mosquitto.log' >> /tmp/fdt-run/m.conf"
+  },
+  {
+   "host": "all",
+   "cmd": "chronyc -n tracking > /tmp/fdt-run/chrony-before.txt; chronyc -n sources >> /tmp/fdt-run/chrony-before.txt"
+  }
+ ],
+ "start": [
+  {
+   "host": "vessels",
+   "cmd": "mosquitto -c /tmp/fdt-run/m.conf",
+   "log": "mosq"
+  },
+  {
+   "host": "gs",
+   "cmd": "mosquitto -c /tmp/fdt-run/m.conf",
+   "log": "mosq",
+   "sleep": 3
+  },
+  {
+   "host": "gs",
+   "cmd": "for i in {vessels}; do iperf3 -s -p $((5200+i)) -D --logfile /tmp/fdt-run/iperf-s$i.log; done",
+   "log": "iperfs"
+  },
+  {
+   "host": "gs",
+   "cmd": "python3 ~/fleet-dt/emu/tools/mqtt_load.py monsub --duration 30 --out /tmp/fdt-run/monsub.json",
+   "log": "monsub"
+  },
+  {
+   "host": "gs",
+   "cmd": "python3 ~/fleet-dt/emu/tools/mqtt_load.py sub --topic 'boat/+/tx/#' --duration 26 --out /tmp/fdt-run/sub.json",
+   "log": "sub",
+   "sleep": 1
+  },
+  {
+   "host": "vessels",
+   "cmd": "python3 ~/fleet-dt/emu/tools/mqtt_load.py pub --topic boat/b{i}/tx/load --rate-bps 1e+06 --size 1000 --duration 20",
+   "log": "pub"
+  }
+ ],
+ "steps": [
+  {
+   "at": 26,
+   "host": "gs",
+   "cmd": "for ip in {vessel_ips}; do echo $ip; ping -q -c 100 -i 0.02 $ip | tail -2; done"
+  },
+  {
+   "at": 32,
+   "host": "v1",
+   "cmd": "iperf3 -c 10.10.0.1 -p $((5200+{i})) -t 10 -J > /tmp/fdt-run/iperf-alone.json; jq -c '.end.sum_received.bits_per_second' /tmp/fdt-run/iperf-alone.json",
+   "timeout": 60
+  },
+  {
+   "at": 44,
+   "host": "vessels",
+   "cmd": "iperf3 -c 10.10.0.1 -p $((5200+{i})) -t 10 -J > /tmp/fdt-run/iperf-all.json; jq -c '.end.sum_received.bits_per_second' /tmp/fdt-run/iperf-all.json",
+   "timeout": 60
+  },
+  {
+   "at": 56,
+   "host": "all",
+   "cmd": "chronyc -n tracking > /tmp/fdt-run/chrony-after.txt; chronyc -n sourcestats >> /tmp/fdt-run/chrony-after.txt; cat /tmp/fdt-run/chrony-after.txt"
+  }
+ ],
+ "wait_s": 58,
+ "stop": [
+  {
+   "host": "gs",
+   "cmd": "pkill -u fdt iperf3; true",
+   "may_fail": true
+  }
+ ],
+ "collect": [
+  {
+   "host": "all",
+   "path": "/tmp/fdt-run/"
+  }
+ ]
+}

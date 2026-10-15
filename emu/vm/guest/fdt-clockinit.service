@@ -1,0 +1,14 @@
+[Unit]
+Description=Fleet-DT emulator: initial clock offset and frequency error (before chrony)
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service cloud-init.service cloud-init-network.service
+Before=chrony.service time-sync.target
+ConditionPathExists=/etc/fleetdt/emu-host.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/fdt/fdt-clockinit.py
+
+[Install]
+WantedBy=multi-user.target

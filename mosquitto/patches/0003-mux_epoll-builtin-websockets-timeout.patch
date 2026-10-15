@@ -1,0 +1,14 @@
+--- a/src/mux_epoll.c
++++ b/src/mux_epoll.c
+@@ -161,7 +161,10 @@
+ 	int event_count;
+ 
+ 	memset(&ev, 0, sizeof(struct epoll_event));
+-#if defined(WITH_WEBSOCKETS)
++#if defined(WITH_WEBSOCKETS) && WITH_WEBSOCKETS == WS_IS_LWS
++	/* libwebsockets needs to be serviced periodically. The builtin
++	 * websockets support is serviced from the events below and can use the
++	 * computed timeout, so that plugin ticks are not delayed by 100 ms. */
+ 	event_count = epoll_wait(db.epollfd, ep_events, MAX_EVENTS, 100);
+ #else
+ 	event_count = epoll_wait(db.epollfd, ep_events, MAX_EVENTS, db.next_event_ms);
