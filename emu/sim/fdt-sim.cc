@@ -1155,7 +1155,8 @@ class Conn
     uint64_t txqBytes = 0;
     MqttParser rx;
     std::function<void(const MqttMsg&)> onMsg;
-    uint32_t nextTx = 0; // NextTxSequence of the socket (trace)
+    uint32_t highTx = 0; // HighestSequence of the socket (trace): snd_nxt of Linux, which a retransmission
+                         // does not rewind
     bool up = false;
 
     void Attach(Ptr<Socket> s)
@@ -1164,12 +1165,12 @@ class Conn
         up = true;
         s->SetRecvCallback(MakeCallback(&Conn::OnRecv, this));
         s->SetSendCallback(MakeCallback(&Conn::OnSpace, this));
-        s->TraceConnectWithoutContext("NextTxSequence", MakeCallback(&Conn::OnNextTx, this));
+        s->TraceConnectWithoutContext("HighestSequence", MakeCallback(&Conn::OnHighTx, this));
     }
 
-    void OnNextTx(SequenceNumber32, SequenceNumber32 v)
+    void OnHighTx(SequenceNumber32, SequenceNumber32 v)
     {
-        nextTx = v.GetValue();
+        highTx = v.GetValue();
     }
 
     void Write(std::string bytes)
@@ -1234,11 +1235,38 @@ class Conn
         Ptr<TcpTxBuffer> tb = t->GetTxBuffer();
         uint32_t head = tb->HeadSequence().GetValue(), tail = tb->TailSequence().GetValue();
         outq = int64_t(uint32_t(tail - head));
-        uint32_t nx = nextTx;
+        uint32_t nx = highTx;
         nsd = (int32_t(tail - nx) > 0) ? int64_t(uint32_t(tail - nx)) : 0;
         acked = head >= 1 ? uint64_t(head - 1) : 0;
     }
 };
+
+// queue selection of the Wi-Fi devices of the fleet: the UP of a packet is its socket priority (the
+// control bridges set 6), else DSCP 46 -> 6 and 34 -> 5, else 0, as the relay of fdt-emu maps the
+// packets of the VMs (ns-3 SelectQueueByDSField would set UP = DS >> 5 and drop the socket priority)
+uint8_t
+FleetSelectQueue(Ptr<QueueItem> item)
+{
+    uint8_t prio = 0;
+    SocketPriorityTag t;
+    if (item->GetPacket()->PeekPacketTag(t))
+    {
+        prio = t.GetPriority() & 7;
+    }
+    else
+    {
+        uint8_t ds;
+        if (item->GetUint8Value(QueueItem::IP_DSFIELD, ds))
+        {
+            uint8_t dscp = ds >> 2;
+            prio = dscp == 46 ? 6 : (dscp == 34 ? 5 : 0);
+        }
+    }
+    SocketPriorityTag pt;
+    pt.SetPriority(prio);
+    item->GetPacket()->ReplacePacketTag(pt);
+    return uint8_t(QosUtilsMapTidToAc(prio));
+}
 
 // ---------------------------------------------------------------------------------------------
 // link to the AS driver (emu/sim/simrun.py): one JSON line per phase 2 on stdout, one reply on stdin
@@ -1251,7 +1279,6 @@ struct GsEvent
 
 std::vector<GsEvent> g_gsEv;          // events of the GS since the last phase 2 (demand, vlog, data)
 int64_t g_d0Us = 100, g_d1Us = 100, g_d2Us = 300; // GS broker -> AS: QoS 0, QoS 1, QoS 2 (PUBREL + 2 RTT)
-int64_t g_asDelayUs = 300;            // monitor batch -> AS (UDP, monitor bridge, MQTT)
 int64_t g_pubUs = 100;                // AS -> GS broker -> bridge
 FILE* g_proto = nullptr;              // protocol stream (stdout)
 FILE* g_protoIn = nullptr;            // replies (stdin)
@@ -1333,17 +1360,27 @@ class Vessel
     std::vector<SrcMsg> src;
     size_t srcPos = 0;
     uint16_t pidData = 0, pidCtl = 0;
-    int64_t deadlineUs = INT64_MAX; // instant that the regulator asked for
+    int64_t deadlineUs = 0; // instant that the regulator asked for (0: tick at the first iteration)
     EventId tickEv;
     std::string pfxTx;
     uint64_t pubErr = 0, rawCount = 0, levels = 0, goals = 0;
 
+    // plugin messages that the broker writes at its next loop iteration (Mosquitto 2.1.2:
+    // mosquitto_broker_publish() appends to db.plugin_msgs and sets the loop timeout to 1 ms; the next
+    // iteration runs queue_plugin_msgs() before plugin__handle_tick())
+    struct PendPub
+    {
+        std::string topic;
+        int qos;
+        std::string payload;
+    };
+
+    std::deque<PendPub> pend;
+
     static int IoPublish(void* ctx, const char* topic, int qos, const void* payload, size_t len)
     {
         Vessel* v = static_cast<Vessel*>(ctx);
-        std::string t(topic), p(static_cast<const char*>(payload), len);
-        // the broker queues the plugin message and writes it in the next iteration of its loop
-        Simulator::ScheduleNow(&Vessel::Deliver, v, t, qos, p);
+        v->pend.push_back({std::string(topic), qos, std::string(static_cast<const char*>(payload), len)});
         return 0;
     }
 
@@ -1514,28 +1551,36 @@ class Vessel
         }
     }
 
-    // MOSQ_EVT_TICK with patch 0001: the tick runs when its deadline has passed, at the first loop
-    // iteration after it; the loop sleeps at least 1 ms and whole milliseconds
-    void Tick()
+    // one iteration of the broker loop: the pending plugin messages go to the sockets, then MOSQ_EVT_TICK
+    // runs if its deadline has passed (patch 0001); the loop sleeps until the deadline rounded up to whole
+    // milliseconds (at least 1 ms), or 1 ms while plugin messages wait
+    void Iter()
     {
-        int64_t now = HostUs(NowNs());
-        int64_t next = fdt_reg_tick(&reg, now);
-        deadlineUs = next;
-        int64_t dly = next - HostUs(NowNs());
-        int64_t ms = dly <= 1000 ? 1 : (dly + 999) / 1000;
-        ms = std::min<int64_t>(ms, 1000);
-        Simulator::Cancel(tickEv);
-        tickEv = Simulator::Schedule(MilliSeconds(ms), &Vessel::Tick, this);
-    }
-
-    // an event of the broker loop (network, plugin message): the tick runs if its deadline has passed
-    void Activity()
-    {
+        while (!pend.empty())
+        {
+            PendPub m = std::move(pend.front());
+            pend.pop_front();
+            Deliver(m.topic, m.qos, m.payload);
+        }
         if (HostUs(NowNs()) >= deadlineUs)
         {
-            Simulator::Cancel(tickEv);
-            tickEv = Simulator::ScheduleNow(&Vessel::Tick, this);
+            deadlineUs = fdt_reg_tick(&reg, HostUs(NowNs()));
         }
+        int64_t dly = deadlineUs - HostUs(NowNs());
+        int64_t ms = dly <= 1000 ? 1 : (dly + 999) / 1000;
+        ms = std::min<int64_t>(ms, 1000);
+        if (!pend.empty())
+        {
+            ms = 1;
+        }
+        Simulator::Cancel(tickEv);
+        tickEv = Simulator::Schedule(MilliSeconds(ms), &Vessel::Iter, this);
+    }
+
+    // an input of the broker (MQTT packet of a bridge, raw message of a source) wakes the loop
+    void Activity()
+    {
+        Iter();
     }
 
     void AcceptData(Ptr<Socket> s, const Address& a)
@@ -2208,6 +2253,12 @@ main(int argc, char* argv[])
         }
         NeighborCacheHelper nch;
         nch.PopulateNeighborCache(fdevs);
+        for (uint32_t k = 0; k < fdevs.GetN(); k++)
+        {
+            Ptr<NetDeviceQueueInterface> q = fdevs.Get(k)->GetObject<NetDeviceQueueInterface>();
+            NS_ABORT_MSG_IF(!q, "no NetDeviceQueueInterface on a Wi-Fi device of the fleet");
+            q->SetSelectQueueCallback(MakeCallback(&FleetSelectQueue));
+        }
     }
     // ---- schedule of the sources and of the goals
     g_vessels.assign(g_M + 1, nullptr);
@@ -2290,7 +2341,7 @@ main(int argc, char* argv[])
         // the bridges of the GS connect 1 s into the run, the regulator ticks from 1.5 s, the sources follow
         // their schedule
         Simulator::Schedule(Seconds(1.0 + 0.002 * i), &GsConnect, int(i));
-        Simulator::Schedule(Seconds(1.5 + 0.0001 * i), &Vessel::Tick, v);
+        Simulator::Schedule(Seconds(1.5 + 0.0001 * i), &Vessel::Iter, v);
         if (!v->src.empty())
         {
             int64_t at = std::max<int64_t>(0, (v->src[0].atUs * 1000 - g_originNs));

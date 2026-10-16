@@ -248,6 +248,11 @@ def test_ipact_limited_service():
     assert sl[1][1] - sl[1][0] == pytest.approx((3 * G / 3.5 / eta_one + 0.001) * 1e6, abs=2)
     assert sl[2][1] - sl[2][0] == pytest.approx((G / 4 / eta_one + 0.001) * 1e6, abs=2)
     assert max(e for _, e in sl.values()) <= round(we * 1e6)
+    # the first unit that does not fit ends the grant of its vessel (a later, smaller unit stays out)
+    small = Unit(1, 3, 1, 0, 1, 0, c=G / 100)
+    small.key = (1, 1, 3, 1, d.rot(1, t))
+    A3, _, _ = ipact(d, t, forced, sorted(cand + [small], key=lambda u: u.key), cB, guard, eta_all, eta_one, d.vessels)
+    assert small not in [u for u in A3]
     # the grant of a vessel does not depend on the requests of the other vessels (limited service)
     A2, _, _ = ipact(d, t, forced, [u for u in cand if u.i == 1], cB, guard, eta_all, eta_one, d.vessels)
     assert sorted(u.k for u in A2 if u.i == 1 and not u.inR) == [1, 2, 3]

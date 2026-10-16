@@ -133,6 +133,12 @@ def main():
     if method not in METHODS:
         raise SystemExit("method %s is not simulated" % method)
     pmode, amode = METHODS[method]
+    src_opts = spec.get("source") or {}
+    unsupported = [k for k in ("median", "sigma") if src_opts.get(k) is not None] + \
+        (["scale"] if src_opts.get("scale", 1.0) != 1.0 else []) + \
+        [k for k in spec if k.startswith("p1_") and k.endswith("_us")] + list((spec.get("as") or {}).get("extra", []))
+    if unsupported:
+        raise SystemExit("spec options without a simulated counterpart: %s" % unsupported)
     with open(os.path.join(rd, "experiment.json"), "w") as f:
         json.dump(spec, f, indent=1)
     dtp_path = os.path.join(rd, "dtp.json")
@@ -214,9 +220,11 @@ def main():
         i, l, t, sq, at, c = r
         pend.append({"type": "acc", "i": i, "l": l, "t": t, "seq": sq, "at": at, "c": c})
 
+    # service.py defaults: --tab-unsent ignore (count_tab_unsent False), bridges connected until notified
     core = ASCore(dtp, mode=amode, z0=float(asa.get("z0", 1.0)), initial_scores=zs, b_hat0=bh or 0.0,
                   predictor=spec.get("predictor", "eq"), pred_gain=float(asa.get("pred_gain", 0.25)),
-                  cal_kappa=asa.get("cal_kappa"), acc_log=acc_line, out_log=line)
+                  cal_kappa=asa.get("cal_kappa"), acc_log=acc_line, out_log=line, count_tab_unsent=False,
+                  assume_connected=True)
 
     # ---- simulator
     flush = "--flush=%d:%d,%d" % (round(Ts * 1e6), round((T1 + MONITOR_LAG) * 1e6),

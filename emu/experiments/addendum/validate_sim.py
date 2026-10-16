@@ -67,10 +67,9 @@ def main():
             for k in KEYS:
                 if k in ("f_bar", "nu") and meth not in ADM:
                     continue
-                xs = [val(S[(meth, sid, s)], k) for s in seeds]
-                xe = [val(E[(meth, sid, s)], k) for s in seeds]
-                xs = [x for x in xs if x is not None]
-                xe = [x for x in xe if x is not None]
+                both = [s for s in seeds if val(S[(meth, sid, s)], k) is not None and val(E[(meth, sid, s)], k) is not None]
+                xs = [val(S[(meth, sid, s)], k) for s in both]
+                xe = [val(E[(meth, sid, s)], k) for s in both]
                 if not xs or not xe:
                     r[k] = None
                     ok = False
@@ -85,7 +84,9 @@ def main():
         for sid in ("S1", "S2"):
             for k in ("D_N", "state_miss"):
                 seeds = sorted(s for (mm, ss, s) in S if mm == "fleetdt" and ss == sid and (b, sid, s) in S
-                               and ("fleetdt", sid, s) in E and (b, sid, s) in E)
+                               and ("fleetdt", sid, s) in E and (b, sid, s) in E
+                               and None not in (val(S[("fleetdt", sid, s)], k), val(S[(b, sid, s)], k),
+                                                val(E[("fleetdt", sid, s)], k), val(E[(b, sid, s)], k)))
                 ds = [val(S[("fleetdt", sid, s)], k) - val(S[(b, sid, s)], k) for s in seeds]
                 de = [val(E[("fleetdt", sid, s)], k) - val(E[(b, sid, s)], k) for s in seeds]
                 if not ds:

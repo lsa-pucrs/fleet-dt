@@ -14,9 +14,10 @@ saturation seeds, 600 steps; calib writes the frozen calibration with the "sat" 
 for M >= 8 (key "sim_sat" holds every simulated value, M = 4 included, for the validation).
 E6a: the frozen E3 run files of S1 and S2 at rho = 1.5 of Fleet-DT, B1, B3 and TDMA, and the E5 run files
 of B6 for the same cells (12 evaluation seeds each), renamed E6a-<run>.
-E6b: Fleet-DT, B1, B3, B6, TDMA; S1, S2; M in {8, 16}; Ts = 125 ms, T1(M) and T2(M) of phases(); the 12
-evaluation seeds; every vessel keeps the sources of the M = 4 runs at rho = 1.5, so the offered load grows
-with M (spec_fixed_load). E6d (descriptive, in the same command): Fleet-DT and B1, S2, M = 32.
+E6b: Fleet-DT, B1, B3, B6, TDMA; S1, S2; M = 8; the phases of Table param; the 12 evaluation seeds; every
+vessel keeps the sources of the M = 4 runs at rho = 1.5, so the offered load grows with M (spec_fixed_load).
+E6d (descriptive, in the same command): Fleet-DT and B1, S2, M in {16, 32}, the phases of Table param.
+pilot2: the pilot of Fleet-DT with T1 = 40 ms and T2 = 30 ms (phase timing).
 pilot: Fleet-DT and B1, S2, M in {8, 16, 32}, seed 7001 (outside the evaluation seeds), 400 steps.
 """
 import argparse
@@ -36,8 +37,8 @@ import matrix as MX  # noqa: E402
 FROZEN = os.path.join(ROOT, "emu", "experiments", "frozen")
 SCEN = ("S1", "S2")
 MS = (8, 16, 32)          # pilots
-E6B_MS = (8, 16)          # E6b (H9)
-E6D_M = 32                # E6d (descriptive)
+E6B_MS = (8,)             # E6b (H9)
+E6D_MS = (16, 32)         # E6d (descriptive)
 E6_METHODS = ("fleetdt", "b1", "b3", "b6", "tdma")
 E6A_METHODS = ("fleetdt", "b1", "b3", "tdma")
 PILOT_SEED = 7001
@@ -50,12 +51,6 @@ def write(out, s, name=None):
     with open(os.path.join(out, "specs", name + ".json"), "w") as f:
         json.dump(s, f)
     return name
-
-
-def phases(M):
-    """Rule of addendum A2 for the phases of a fleet of M vessels (Ts = 125 ms), from the pilots (seed 7001):
-    T1(M) = 20 ms + 1.25 ms (M - 16)^+ and T2(M) = 10 ms + 0.9 ms (M - 4)^+; M = 4 keeps Table param."""
-    return 0.020 + 0.00125 * max(0, M - 16), 0.010 + 0.0009 * max(0, M - 4)
 
 
 def spec_fixed_load(exp, method, sid, M, seed, steps, cal, T1=None, T2=None):
@@ -168,14 +163,13 @@ def main():
             for seed in MX.EVAL_SEEDS:
                 for sid in SCEN:
                     for M in E6B_MS:
-                        T1, T2 = phases(M)
                         for meth in E6_METHODS:
-                            write(a.out, spec_fixed_load("E6b", meth, sid, M, seed, 1200, cal, T1=T1, T2=T2))
+                            write(a.out, spec_fixed_load("E6b", meth, sid, M, seed, 1200, cal))
                             n += 1
-                T1, T2 = phases(E6D_M)
-                for meth in ("fleetdt", "b1"):
-                    write(a.out, spec_fixed_load("E6d", meth, "S2", E6D_M, seed, 1200, cal, T1=T1, T2=T2))
-                    n += 1
+                for M in E6D_MS:
+                    for meth in ("fleetdt", "b1"):
+                        write(a.out, spec_fixed_load("E6d", meth, "S2", M, seed, 1200, cal))
+                        n += 1
         print("%d run files -> %s" % (n, a.out))
 
 

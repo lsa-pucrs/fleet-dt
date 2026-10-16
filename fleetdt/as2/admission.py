@@ -295,8 +295,9 @@ def ipact(dtp, t: int, forced: List[Unit], cand: List[Unit], cB: float, guard: D
     The units of R (forced) and the held bytes take a shared slot of (c_R + c_B) / eta_all from w(t), as in
     the slotted variant. The rest of W(t) gives every vessel the same maximum window
     W_max = (T_W - shared) / M, and vessel i receives the units of its demand in the order pi_t, with the
-    prefix rule, while their cost fits in eta_one (W_max - guard_i) (limited service: the grant is the
-    smaller of the request and the maximum window). The windows follow one another in the rotated order
+    prefix rule, until the first unit that does not fit in eta_one (W_max - guard_i) (limited service: the
+    grant is the smaller of the request and the maximum window, and the vessel sends its queue in order up
+    to the grant). The windows follow one another in the rotated order
     (i - t) mod M, each with the duration of its grant plus its guard, so an unused part of a window
     moves the next window earlier. The capacities eta_all = eta(M + 1) and eta_one = eta(2) are the DCF
     efficiencies without a measurement of the channel: IPACT knows the line rate and predicts nothing.
@@ -310,14 +311,17 @@ def ipact(dtp, t: int, forced: List[Unit], cand: List[Unit], cB: float, guard: D
     A = list(forced)
     adm = set(u.uid for u in forced)
     ci: Dict[int, float] = {}
+    full = set()
     for u in cand:
-        if u.uid in adm or not (u.k == 1 or (u.i, u.l, u.k - 1) in adm):
+        if u.i in full or u.uid in adm or not (u.k == 1 or (u.i, u.l, u.k - 1) in adm):
             continue
         G = eta_one * max(0.0, win - guard[u.i])
         if ci.get(u.i, 0.0) + u.c <= G:
             A.append(u)
             adm.add(u.uid)
             ci[u.i] = ci.get(u.i, 0.0) + u.c
+        else:
+            full.add(u.i)
     out: Dict[int, Tuple[int, int]] = {}
     cur = w + shared
     for i in sorted(Mt, key=lambda i: dtp.rot(i, t)):
