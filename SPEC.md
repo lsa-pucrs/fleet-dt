@@ -31,8 +31,8 @@ Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Ve
   "epoch": 1767225600.0,
   "Ts": 0.125, "T1": 0.020, "T2": 0.010,
   "alpha": 0.125, "U": 0.8, "C0": 300000,
-  "c_b": 1.06, "c_m": 180,
-  "R_PHY": 24000000, "h_W": 150,
+  "tcp": {"mss": 1448, "h_T": 80}, "mqtt": {"h_A": 4},
+  "R_PHY": 24000000, "h_W": 570.25, "T_DIFS": 0.000037, "T_bo": 0.0000675,
   "vessels": [1, 2],
   "topics": [
     {"name": "state", "rate": 8,  "bound": 48},
@@ -53,8 +53,10 @@ Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Ve
 | `epoch` | Unix time (GS clock) of the start of step 0 of the operation. Step t starts at `epoch + t*Ts`. With `null`, every program uses 1767225600 (2026-01-01T00:00:00Z), so t fits the u32 field until 2043. |
 | `Ts`, `T1`, `T2` | Step and phase durations in seconds; `T3 = Ts - T1 - T2` |
 | `alpha`, `U`, `C0` | Gain of eq. (2), target utilization, initial prediction (bytes per step) |
-| `c_b`, `c_m` | Coefficients of the bound c(x, n) = c_b x + c_m n of eq. (5) (channel bytes of n messages with x content bytes) |
-| `R_PHY`, `h_W` | Bit rate of the radios (bit/s) and fixed bytes per frame at R_PHY (DIFS, mean backoff, PHY preamble and header, MAC header, LLC, FCS, SIFS, MAC ACK) |
+| `c_b`, `c_m` | Optional coefficients of the bound c(x, n) = c_b x + c_m n of eq. (5) (channel bytes of n messages with x content bytes). Without them, the readers of the paper stack (`common/fdt_paper.c`, `fleetdt/as_model.py`, `vessel/publishers/video_layers.py`) compute the cost bound of the paper per topic: c_b = 1 + 2 (h_T + h_W) / MSS, c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W), h_P,l the PUBLISH header of boat/b\<V\>/tx/\<name\> (QoS 2). `dtp.json` gives none of them |
+| `tcp`, `mqtt` | MSS and h_T (largest TCP/IP header of a segment, options included; 1448, 80), h_A (bytes of one MQTT control packet; 4) |
+| `R_PHY`, `h_W` | Bit rate of the radios (bit/s) and fixed bytes per frame at R_PHY (DIFS or AIFS, mean backoff, PHY preamble and header, signal extension, MAC header, LLC, FCS, SERVICE and tail bits, mean OFDM padding, SIFS, MAC ACK); derivation in emu/README.md, "Fixed bytes per frame h_W" |
+| `T_DIFS`, `T_bo` | DIFS (AIFS[AC_BE] of the stations under EDCA) and mean backoff (CWmin/2 slots) inside h_W, s; the channel monitor charges h_W - R_PHY (T_DIFS + T_bo) / 8 per frame (Section 6) |
 | `topics` | Uplink topics in the DTP order (topic index l = position + 1); `rate` in messages per second, `bound` = largest content of one message in bytes (before the 6-byte step header) |
 | `order`, `needed` | Initial sigma and N of the AS (used until the first `fleet/order`) |
 
@@ -124,5 +126,8 @@ vessel regulator withholds every message of step t. A topic with no raw message 
 
 In each step: `Tb` = busy time of the channel in the step (survey), `To` = airtime at R_PHY of the
 frames that the GS radio receives and of the frames that it sends and the stations acknowledge,
-`To = 8 (B_rx + B_tx_acked) / R_PHY + (N_rx + N_tx_acked) * 8 h_W / R_PHY`, and
-`y(t) = R_PHY (Ts - Tb + To) / 8` bytes. With no survey of step t, the monitor publishes nothing.
+`To = 8 (B_rx + B_tx_acked) / R_PHY + (N_rx + N_tx_acked) * 8 h_W_busy / R_PHY`, with
+`h_W_busy = h_W - R_PHY (T_DIFS + T_bo) / 8` (only the busy part of each frame: the survey counts the
+DIFS and the backoff as idle time, so `Ts - Tb` holds them already), and
+`y(t) = R_PHY (Ts - Tb + To) / 8` bytes, clamped to [0, R_PHY Ts / 8]. With no survey of step t, the
+monitor publishes nothing.

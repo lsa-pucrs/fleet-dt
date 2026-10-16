@@ -9,6 +9,8 @@ import math
 import os
 import random
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -203,7 +205,7 @@ def test_r_il_charges_the_cost_of_d_il():
         asm.on_message("boat/b1/tx/imu", encode_step_header(3, s) + bytes(48), at=3 * 0.125 + 0.05)
     g = asm._finish(3)
     e = g.edge(1, l)
-    want = math.ceil(dtp.c_b * 5 * (48 + 6) + dtp.c_m * 5 - 1e-9)
+    want = math.ceil(dtp.c_b * 5 * (48 + 6) + dtp.topic_c_m(l) * 5 - 1e-9)
     assert e.n == 5 and e.x == 5 * 48
     assert abs(e.r - want) <= 1 and e.r == round(dtp.message_bytes(l, 240, 5))
 
@@ -220,12 +222,76 @@ def test_dtp_v2_without_cost_takes_the_paper_bound():
     d = DTP.from_dict(DTP2)
     assert d.c_b == pytest.approx(1 + 160 / 1448)
     assert publish_header(4, "state", 48) == 22
-    assert d.topic_c_m(1) == pytest.approx(d.c_b * 22 + 160 + 12)
+    # C6: c_m = c_b h_P + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W) with h_W = 0
+    assert d.topic_c_m(1) == pytest.approx(d.c_b * 22 + 160 + 492)
     assert d.specs[1].rate == 240 and d.specs[1].bound == 1400
     assert d.message_bytes(1, 48) == pytest.approx(d.c_b * 54 + d.topic_c_m(1))
     # a file with c_b and c_m keeps them
     k = DTP.from_dict(dict(DTP2, c_b=1.06, c_m=180))
     assert k.c_b == 1.06 and k.topic_c_m(2) == 180
+    # the values of tests/c/test_reg_paper.c with h_W = 570.25 (802.11g ERP-OFDM, emu/README.md)
+    w = DTP.from_dict(dict(DTP2, h_W=570.25))
+    assert w.c_b == pytest.approx(1 + 1300.5 / 1448)
+    assert w.topic_c_m(1) == pytest.approx(w.c_b * 22 + 1300.5 + 3913.5)
+
+
+def _build_pdtp_dump(tmp):
+    """tests/c/pdtp_dump.c with common/fdt_paper.c (cJSON of MOSQ); None when it does not build here"""
+    mq = next((p for p in (os.environ.get("MOSQ"), "/opt/mosquitto-2.1", "/opt/mosquitto-2.1.2-fleetdt")
+               if p and os.path.isdir(os.path.join(p, "include"))), None)
+    if not mq or not shutil.which("cc"):
+        return None
+    out = os.path.join(tmp, "pdtp_dump")
+    r = subprocess.run(["cc", "-O2", "-std=gnu11", "-I" + str(ROOT / "common"), "-I" + os.path.join(mq, "include"),
+                        "-o", out, str(ROOT / "tests" / "c" / "pdtp_dump.c"), str(ROOT / "common" / "fdt_paper.c"),
+                        str(ROOT / "common" / "fdt_common.c"), "-L" + os.path.join(mq, "lib"),
+                        "-Wl,-rpath," + os.path.join(mq, "lib"), "-lcjson", "-lm"],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    return out if r.returncode == 0 else None
+
+
+@pytest.mark.parametrize("vessel", [None, 1, 4])
+def test_cost_bound_c_equals_python(tmp_path, vessel):
+    """C6: the C reader (common/fdt_paper.c), fleetdt/as_model.py and video_layers.cost_bound give the same
+    c_b and c_m,l, and fdt_p_demand the same d_l as video_layers.channel_demand, on dtp.json (h_W of the
+    802.11g PHY, no "c_b"/"c_m" in the file) and on the per-vessel DTPs of video_layers.resolve_vessel."""
+    exe = _build_pdtp_dump(str(tmp_path))
+    if exe is None:
+        pytest.skip("pdtp_dump does not build here (cJSON of MOSQ)")
+    raw = root_dtp()
+    assert "c_b" not in raw and "c_m" not in raw and raw["h_W"] > 0
+    d = vl.resolve_vessel(raw, vessel) if vessel else raw
+    p = tmp_path / "dtp.json"
+    p.write_text(json.dumps(d))
+    J = 0.002
+    out = json.loads(subprocess.run([exe, str(p), str(J)], stdout=subprocess.PIPE, check=True, text=True).stdout)
+    dtp = DTP.from_dict(d)
+    assert out["c_b"] == pytest.approx(dtp.c_b, rel=1e-15)
+    assert out["c_b"] == pytest.approx(1 + 2 * (80 + 570.25) / 1448, rel=1e-15)
+    for l, t in enumerate(out["topics"], start=1):
+        assert t["name"] == dtp.topics[l - 1]
+        c_b, c_m = vl.cost_bound(d, t["name"])
+        assert t["c_m"] == pytest.approx(dtp.topic_c_m(l), rel=1e-15) == pytest.approx(c_m, rel=1e-15)
+        assert c_b == pytest.approx(out["c_b"], rel=1e-15)
+        h_P = publish_header(max(d["vessels"]), t["name"], dtp.specs[l - 1].bound)
+        assert t["c_m"] == pytest.approx(c_b * h_P + 2 * (80 + 570.25) + 3 * (4 + 2 * 80 + 2 * 570.25), rel=1e-15)
+        assert t["d"] == vl.channel_demand(d, t["name"], jitter_s=J)
+
+
+def test_paper_dtps_carry_h_W():
+    """C6/C7: every DTP of the repository that the paper stack reads carries h_W of the 802.11g ERP-OFDM PHY of
+    the emulator (emu/README.md, "Fixed bytes per frame h_W") and the DIFS and mean backoff inside it"""
+    for rel in ("dtp.json", "dtp_v2.json", "emu/experiments/dtp_base.json"):
+        d = json.loads((ROOT / rel).read_text())
+        assert d["h_W"] == 570.25 and d["T_DIFS"] == pytest.approx(37e-6) and d["T_bo"] == pytest.approx(67.5e-6), rel
+        assert DTP.from_dict(d).h_W_busy == pytest.approx(256.75), rel
+    # the derivation: AIFS[AC_BE] + mean backoff + PLCP preamble and SIGNAL + signal extension + SIFS + ACK
+    # at 24 Mb/s, then QoS MAC header, LLC/SNAP, FCS, SERVICE and tail bits and half an OFDM symbol of padding
+    slot, sifs = 9e-6, 10e-6
+    t_ack = 20e-6 + 4e-6 * math.ceil((16 + 6 + 8 * 14) / 96) + 6e-6
+    t_fixed = (sifs + 3 * slot) + 15 / 2 * slot + 20e-6 + 6e-6 + sifs + t_ack
+    h_W = 24e6 * t_fixed / 8 + (26 + 8 + 4) + (16 + 6 + 48) / 8
+    assert h_W == pytest.approx(570.25)
 
 
 # --------------------------------------------------------------------------- item 5

@@ -172,7 +172,7 @@ It publishes `{"t", "y", "Tb", "To"}` (QoS 0) on `fleet/throughput`, the format 
 
 Validation against the ground truth of the same run:
 `python3 emu/validation/counters_vs_gt.py RUN/emu/counters.jsonl RUN/emu/gt.bin --dtp RUN/dtp.json --y RUN/throughput.jsonl`
-compares y_cnt with y_model (exact busy time, 8 (MPDU bytes + h_W) / R_PHY of every acknowledged unique
+compares y_cnt with y_model (exact busy time, 8 (MPDU bytes + h_W_busy) / R_PHY of every acknowledged unique
 MPDU: the error of the counters), y_phy (exact busy time and measured airtime: Section V-B with the true
 durations) and y_step (y_phy over the nominal step). Offline, without VMs:
 
@@ -261,6 +261,38 @@ published) and `cJSON-1.7.19.tar.gz` = GitHub tag archive v1.7.19.
 | Phase batches | `--flush=TS_US:OFF_US,...`: extra monitor batches at the host times U + k TS + OFF (fleet runs: 2.5 ms after the end of Q(t) and of W(t)), so that the AS has every record of Q(t) at phase 2 |
 | nl80211 counters | `--cnt=TS_US:OFF_US[:JITTER_US]`: reads of the AP counters at U + k TS + OFF + U[0, JITTER] (own generator, `--cntSeed`), one JSON line each to `OUTDIR/counters.jsonl` (`--cntFile`) and as a UDP datagram to `--cntDst`; `--cntQuant`, `--cntHarvestMs` (see "y(t) of R6 from nl80211 counters"); `summary.json` `nl80211` |
 | Self test | `--selftest=RATE_BPS,SIZE` uplink and `--selftestDown=RATE_BPS,SIZE` downlink UDP sources (no VMs) |
+
+### Fixed bytes per frame h_W (DTP fields `h_W`, `T_DIFS`, `T_bo`)
+
+`h_W` converts the fixed time of one frame exchange of the emulated PHY into bytes at R_PHY, so the cost
+bound of the paper (C6: c_b = 1 + 2 (h_T + h_W) / MSS, c_m,l = c_b h_P,l + 2 (h_T + h_W) +
+3 (h_A + 2 h_T + 2 h_W)) and the saturation throughput C(t) of `replay_subsets.py` count channel bytes in
+one unit. The values are those of `fdt-emu` (802.11g ERP-OFDM, short slot, QoS/EDCA, constant rate 24 Mb/s
+for data and control, `edca` of the scenarios: stations AC_BE AIFSN 3, CWmin 15) for a data frame of a
+vessel on its data bridge (AC_BE) and its MAC ACK:
+
+| Part | Value | Source |
+|---|---|---|
+| AIFS[AC_BE] of the stations (DIFS of DCF: SIFS + 2 slots = 28 µs) | SIFS + 3 slots = 10 + 27 = 37 µs | `edca.aifsn_sta` 3, slot 9 µs, SIFS 10 µs (`eta.py edca`) |
+| mean backoff without collisions | CWmin/2 slots = 7.5 × 9 = 67.5 µs | `edca.cwmin_sta` 15 |
+| PLCP preamble and SIGNAL | 16 + 4 = 20 µs | ERP-OFDM |
+| signal extension | 6 µs | ERP-OFDM in 2.4 GHz |
+| SIFS | 10 µs | |
+| MAC ACK, 14 bytes at the control rate 24 Mb/s | 20 + 4 ⌈(16 + 6 + 112)/96⌉ + 6 = 34 µs | `rate.control` ErpOfdmRate24Mbps |
+| fixed time | 174.5 µs → 24·10⁶ × 174.5·10⁻⁶ / 8 = 523.5 bytes | |
+| QoS MAC header, LLC/SNAP, FCS | 26 + 8 + 4 = 38 bytes | `h_mac` of `dtp_v2.json` |
+| SERVICE and tail bits, mean OFDM padding | (16 + 6 + 48) / 8 = 8.75 bytes | half a symbol of 96 bits on average |
+| **h_W** | **570.25 bytes** | `dtp.json`, `dtp_v2.json`, `experiments/dtp_base.json` |
+
+`T_DIFS` = 37 µs (the AIFS above) and `T_bo` = 67.5 µs give the busy part of a frame that the channel monitor
+charges in T_fleet(t) (C7): h_W − R_PHY (T_DIFS + T_bo) / 8 = 570.25 − 313.5 = 256.75 bytes; the survey counts
+the AIFS and the backoff as idle time, so Ts − T_busy(t) holds them already. The AP sends with AIFSN 1 and
+CWmin 7 (its frames carry the TCP acknowledgments and the MQTT control packets of the GS); h_W takes the
+station values, the larger ones, for every frame. With 1500-byte IP packets, 1500 + h_W − 202.5 = 1867.75
+bytes (622.6 µs) match T_succ = 623 µs of `eta.py edca`. The per-message overhead is large: with h_T = 80 and
+h_A = 4, c_b = 1.898 and c_m,l ≈ 5.26 kB (a QoS 2 message costs 8 frames: PUBLISH, PUBREC, PUBREL, PUBCOMP and
+a TCP acknowledgment of each), so the telemetry of one vessel declares 85678 bytes per step
+(`tests/test_video_layers.py`).
 
 ### Monitor batch (PR6)
 

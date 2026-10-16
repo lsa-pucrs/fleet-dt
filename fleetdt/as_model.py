@@ -24,6 +24,25 @@ def publish_header(V: int, name: str, s: int) -> int:
     return 1 + _varint_bytes(rem) + 2 + tl + 2
 
 
+def cost_c_b(h_T: float, h_W: float, mss: float) -> float:
+    """c_b of the cost bound of the paper (C6): 1 + 2 (h_T + h_W) / MSS (a full segment of MSS content
+    bytes carries h_T + h_W bytes of headers and fixed frame time, and its TCP acknowledgment as many)."""
+    return 1.0 + 2.0 * (h_T + h_W) / mss
+
+
+def cost_c_m(c_b: float, h_P: float, h_T: float, h_W: float, h_A: float) -> float:
+    """c_m,l of the cost bound of the paper (C6), the expression of common/fdt_paper.c in the same order:
+    c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W). The last term charges three MQTT control packets
+    of h_A bytes (QoS 2: PUBREC, PUBREL, PUBCOMP; QoS 1 needs one, PUBACK), each in its own segment and
+    frame and with its own TCP acknowledgment."""
+    return c_b * h_P + 2.0 * (h_T + h_W) + 3.0 * (h_A + 2.0 * h_T + 2.0 * h_W)
+
+
+def h_W_busy(h_W: float, R_PHY: float, T_DIFS: float, T_bo: float) -> float:
+    """h_W^busy = h_W - R_PHY (T_DIFS + T_bo) / 8 (C7), the expression of fdt_dtp_parse in common/fdt_common.c."""
+    return h_W - R_PHY * (T_DIFS + T_bo) / 8.0
+
+
 @dataclass
 class TopicSpec:
     """Uplink topic of the DTP: source rate (messages per second), bound on the content of one message
@@ -52,6 +71,8 @@ class DTP:
     epoch: Optional[float] = None   # Unix time of the start of step 0 of the operation
     R_PHY: float = 24e6             # bit rate of the radios, bit/s
     h_W: float = 0.0                # bytes that the PHY sends at R_PHY in the fixed time of one frame
+    T_DIFS: float = 0.0             # DIFS (AIFS of AC_BE under EDCA) inside h_W, s (channel monitor, C7)
+    T_bo: float = 0.0               # mean backoff inside h_W, CWmin/2 slots, s (channel monitor, C7)
     order: List[str] = field(default_factory=list)    # initial order sigma of the AS
     needed: List[str] = field(default_factory=list)   # initial needed topics of the AS
     vessels: List[int] = field(default_factory=list)
@@ -69,6 +90,13 @@ class DTP:
     @property
     def L(self) -> int:
         return len(self.topics)
+
+    @property
+    def h_W_busy(self) -> float:
+        """Busy part of h_W (C7): h_W - R_PHY (T_DIFS + T_bo) / 8, the bytes of the fixed time of a frame
+        during which the medium is busy (preamble, headers, SIFS, MAC ACK); radio/channel_monitor/fdt_chmon.c
+        charges this per frame in T_fleet(t)."""
+        return h_W_busy(self.h_W, self.R_PHY, self.T_DIFS, self.T_bo)
 
     def channel_bytes(self, x: int, n: int) -> float:
         return self.c_b * x + self.c_m * n
@@ -93,11 +121,11 @@ class DTP:
     def from_dict(d: Dict) -> "DTP":
         """DTP of SPEC.md (topics with "rate" in messages per second and "bound") or DTP v2 of SPEC_v2.md
         (topics with "rate" in outputs per second, "n" messages per output and "s"; rate becomes n rate
-        and bound s). Without "c_b" (or "c_m") in the file, the cost bound of the paper applies, the rule
-        of common/fdt_paper.c: c_b = 1 + 2 (h_T + h_W) / MSS and, per topic,
-        c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_W), with MSS, h_T of "tcp" (1448, 80), h_A of
-        "mqtt" (4), h_W of the file (0) and h_P,l the PUBLISH header of boat/b<V>/tx/<name> (QoS 2, V the
-        largest vessel index)."""
+        and bound s). Without "c_b" (or "c_m") in the file, the cost bound of the paper (C6) applies, the
+        rule of common/fdt_paper.c: c_b = 1 + 2 (h_T + h_W) / MSS and, per topic,
+        c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W) (function cost_bound), with MSS, h_T
+        of "tcp" (1448, 80), h_A of "mqtt" (4, one MQTT control packet), h_W of the file (0) and h_P,l the
+        PUBLISH header of boat/b<V>/tx/<name> (QoS 2, V the largest vessel index)."""
         d = dict(d)
         specs = []
         topics = d.get("topics", [])
@@ -113,13 +141,12 @@ class DTP:
         h_W = float(d.get("h_W") or 0.0)
         h_T, mss, h_A = float(tcp.get("h_T", 80)), float(tcp.get("mss", 1448)), float(mqtt.get("h_A", 4))
         if d.get("c_b") is None:
-            d["c_b"] = 1.0 + 2.0 * (h_T + h_W) / mss
+            d["c_b"] = cost_c_b(h_T, h_W, mss)
         if d.get("c_m") is None:
             d.pop("c_m", None)
             V = max([int(v) for v in d.get("vessels") or []] or [1])
             for t in specs:
-                t.c_m = float(d["c_b"]) * publish_header(V, t.name, int(t.bound)) + 2.0 * (h_T + h_W) \
-                    + 3.0 * (h_A + 2.0 * h_W)
+                t.c_m = cost_c_m(float(d["c_b"]), publish_header(V, t.name, int(t.bound)), h_T, h_W, h_A)
         keys = {k: v for k, v in d.items() if k in DTP.__dataclass_fields__ and k != "specs"}
         dtp = DTP(**keys)
         dtp.specs = specs or [TopicSpec(name=n) for n in dtp.topics]

@@ -28,6 +28,10 @@ struct fdt_topic {
 
 struct fdt_dtp {
 	double epoch, Ts, T1, T2, alpha, U, C0, c_b, c_m, R_PHY, h_W;
+	/* DIFS (AIFS of AC_BE under EDCA) and mean backoff inside h_W, s ("T_DIFS", "T_bo", 0 when absent), and
+	 * the busy part of h_W, h_W_busy = h_W - R_PHY (T_DIFS + T_bo) / 8 (C7): the fixed bytes of a frame
+	 * during which the medium is busy, which the channel monitor charges per frame in T_fleet(t) */
+	double T_DIFS, T_bo, h_W_busy;
 	int L;
 	struct fdt_topic topic[FDT_L_MAX];
 	int n_order;

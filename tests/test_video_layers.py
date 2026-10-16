@@ -261,7 +261,7 @@ def forwarded_over_demand(d, vessel, scale, steps=600, seed=1001, delay_ms=3.0, 
             if not 0 <= t < steps:
                 continue
             for m in msgs:
-                c = vl.message_cost(r, len(m))
+                c = vl.message_cost(r, len(m), tp.name)
                 if acc[tp.name][t] + c <= dem[tp.name] + 1e-9:
                     acc[tp.name][t] += c
                 else:
@@ -270,7 +270,16 @@ def forwarded_over_demand(d, vessel, scale, steps=600, seed=1001, delay_ms=3.0, 
     return {n: sum(v[1:]) / ((steps - 1) * dem[n]) for n, v in acc.items()}, held
 
 
-CELLS = [(2, 1.5), (2, 2.0), (4, 1.5), (4, 2.0)]
+# Under the cost bound of the paper (C6) with h_W of the 802.11g PHY (570.25 bytes), a message costs
+# c_m,l = 5252 to 5263 channel bytes besides c_b (x + 6), c_b = 1.898, so the telemetry of one vessel declares
+# 85678 bytes per step (16 messages) and a layer topic at least about 5.3 kB. With M = 4 the telemetry alone
+# declares 342712 bytes > C = 320000 bytes per step, and with one message per layer the fleet declares about
+# 683 kB > 2 C: plan_for_rho finds no video setting, and b(t) = 48640 bytes does not even admit the telemetry
+# of a vessel (Algorithm 1 admits state, imu and gps). The M = 4 cells stay here as strict expected failures
+# until the experiment design changes (C, U, the telemetry rates, or a cost bound per QoS level).
+_M4 = pytest.mark.xfail(strict=True, raises=ValueError,
+                        reason="C6 cost bound: the M = 4 telemetry and one message per layer exceed rho C")
+CELLS = [(2, 1.5), (2, 2.0), pytest.param(4, 1.5, marks=_M4), pytest.param(4, 2.0, marks=_M4)]
 
 
 @pytest.mark.parametrize("M,rho", CELLS)
@@ -313,6 +322,20 @@ def test_cell_fill_and_use_of_the_demand(M, rho, capsys, tmp_path):
     assert np.mean(fv) >= FILL_MIN
     assert 1 <= n_layers < 16
     assert lo >= USE_MIN
+
+
+def test_m4_telemetry_exceeds_the_grant_limit():
+    """The numbers behind the M = 4 expected failures (C6 cost bound, h_W = 570.25 bytes)."""
+    d = base_dtp()
+    names = [t["name"] for t in d["topics"]]
+    tel = sum(vl.channel_demand(d, n, jitter_s=J_DTI) for n in TELEMETRY)
+    assert tel == 85678
+    dtp = DTP.from_dict(d)
+    b4 = grant_limit(C_STEP, dtp.U, dtp.T3, dtp.Ts, 4)
+    assert 4 * tel > C_STEP and tel > b4
+    D = {i: [vl.channel_demand(vl.resolve_vessel(d, i), n, jitter_s=J_DTI) for n in names] for i in range(1, 5)}
+    p = admission(D, [dtp.index(n) for n in dtp.order], [dtp.index(n) for n in dtp.needed], b4)
+    assert [n for n, v in zip(names, p) if v > 0] == ["state", "imu", "gps"]
 
 
 def test_dtp_json_default_cell_use():

@@ -165,8 +165,15 @@ int fdt_pdtp_parse(const char *text, size_t len, struct fdt_pdtp *d, char *err, 
 			long j = strtol(tp->name + bl + 1, &endp, 10);
 			tp->video = endp && !*endp && j >= 1 && j <= (long)vlayers;
 		}
+		/* cost bound of the paper (C6), per topic: the PUBLISH header at c_b, the TCP/IP header and the
+		 * fixed bytes of the frame of the last segment and of its TCP acknowledgment, 2 (h_T + h_W), and
+		 * three MQTT control packets of h_A bytes (PUBREC, PUBREL, PUBCOMP of QoS 2; PUBACK of QoS 1 is
+		 * one of them), each in its own segment and frame with its own TCP acknowledgment,
+		 * 3 (h_A + 2 h_T + 2 h_W). fleetdt/as_model.py (DTP.from_dict) and vessel/publishers/video_layers.py
+		 * (cost_bound) compute the same expression in the same order. */
 		tp->c_m = has_cm ? c_m
-		                 : d->c_b * publish_header(V, tp->name, tp->s) + 2.0 * (h_T + h_W) + 3.0 * (h_A + 2.0 * h_W);
+		                 : d->c_b * publish_header(V, tp->name, tp->s) + 2.0 * (h_T + h_W) +
+		                       3.0 * (h_A + 2.0 * h_T + 2.0 * h_W);
 		d->L++;
 	}
 	/* order (sigma of the DTP) and required: names of topics; unknown or repeated names are errors */

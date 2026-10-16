@@ -110,7 +110,13 @@ def stack(tmp_path):
 
 def test_stack(stack):
     tmp, spawn, logs = stack
-    raw = json.loads((ROOT / "dtp.json").read_text())
+    # dtp.json with smaller video (8 frames per second, frame cap 8000 bytes): under the cost bound of the
+    # paper (C6, h_W of the 802.11g PHY) a message costs about 5.3 kB of channel bytes besides its content,
+    # so the telemetry of a vessel takes about 86 kB per step and the layers of the full video never fit;
+    # with these stripes b(t) admits 3 layers at Y_HIGH and 1 at Y_LOW
+    sys.path.insert(0, str(ROOT / "vessel" / "publishers"))
+    import video_layers
+    raw = video_layers.with_video(json.loads((ROOT / "dtp.json").read_text()), fps=8.0, frame_cap=8000)
     raw["epoch"] = None
     raw["vessels"] = [1, 2]
     dtp_path = tmp / "dtp.json"

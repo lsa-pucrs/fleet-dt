@@ -105,7 +105,7 @@ def test_channel_monitor_replay(tmp_path):
                          capture_output=True, text=True, check=True).stdout.split("\n")
     got = [json.loads(l) for l in out if l]
     assert len(got) == 3
-    R, Ts, h = dtp.R_PHY, dtp.Ts, dtp.h_W
+    R, Ts, h = dtp.R_PHY, dtp.Ts, dtp.h_W_busy      # C7: the busy part of h_W per frame
     for g, (b, drx, nrx, dtx, ntx, nf) in zip(got, steps):
         Tb = b / 1000.0
         acked = ntx - nf

@@ -4,17 +4,21 @@
  * At each step boundary start(t+1) the monitor reads the counters of the radio and
  * publishes, for step t,
  *     y(t) = R_PHY (Ts - Tb + To) / 8      bytes,
- * on fleet/throughput of the GS broker: JSON {"t", "y", "Tb", "To"}.
- *   Tb  busy time of the channel in the step: survey of the channel in use
+ * on fleet/throughput of the GS broker: JSON {"t", "y", "Tb", "To"}; y(t) is clamped to
+ * [0, R_PHY Ts / 8].
+ *   Tb  T_busy(t), busy time of the channel in the step: survey of the channel in use
  *       (NL80211_SURVEY_INFO_TIME_BUSY over NL80211_SURVEY_INFO_TIME, scaled to Ts)
- *   To  airtime at R_PHY of the frames that the radio receives and of the frames that
- *       it sends and the stations acknowledge (station counters of every station):
- *       To = 8 (B_rx + B_tx_acked) / R_PHY + (N_rx + N_tx_acked) 8 h_W / R_PHY,
+ *   To  T_fleet(t), the busy airtime at R_PHY of the frames that the radio receives and of the
+ *       frames that it sends and the stations acknowledge (station counters of every station):
+ *       To = 8 (B_rx + B_tx_acked) / R_PHY + (N_rx + N_tx_acked) 8 h_W_busy / R_PHY,
+ *       h_W_busy = h_W - R_PHY (T_DIFS + T_bo) / 8 (C7: only the busy part of each frame, without
+ *       the DIFS and the backoff, during which the survey counts the medium idle),
  *       N_tx_acked = N_tx - N_tx_failed, B_tx_acked = B_tx N_tx_acked / N_tx,
  *       scaled to Ts by the interval between the two readings.
- * So y(t) counts the idle time of the step plus the time that Fleet-DT traffic took,
- * the throughput that the vessels could have used in the step. With no survey of the
- * step the monitor publishes nothing.
+ * So y(t) = R_PHY (Ts - (T_busy - T_fleet)) / 8 counts the idle time of the step plus the busy
+ * time that Fleet-DT traffic took, i.e. Ts minus the time of CBR_other(t), the throughput that
+ * the vessels could have used in the step. With no survey of the step the monitor publishes
+ * nothing.
  *
  * The nl80211 backend talks generic netlink directly (no libnl), so the program
  * needs only libmosquitto and cJSON on the radio. The replay backend reads recorded
@@ -294,7 +298,7 @@ static int compute(const struct fdt_dtp *d, const struct sample *a, const struct
 		return -1;
 	double txa = txp > txf ? txp - txf : 0;
 	double txba = txp > 0 ? txb * txa / txp : 0;
-	double To = (8.0 * (rxb + txba) + (rxp + txa) * 8.0 * d->h_W) / d->R_PHY * scale;
+	double To = (8.0 * (rxb + txba) + (rxp + txa) * 8.0 * d->h_W_busy) / d->R_PHY * scale;
 	double y = d->R_PHY * (Ts - Tb + To) / 8.0;
 	double ymax = d->R_PHY * Ts / 8.0;
 	r->y = y < 0 ? 0 : (y > ymax ? ymax : y);

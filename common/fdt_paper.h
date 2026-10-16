@@ -11,9 +11,13 @@
  *                               "c_b", "c_m"
  *   v2 (SPEC_v2.md):            topics [{"name", "rate" (outputs/s), "n" (messages/output), "s" (bytes),
  *                               "jitter" (s), ...}], "tcp": {"mss", "h_T"}, "mqtt": {"h_A"}
- * When the file holds no "c_b" (or no "c_m"), the reader computes the cost bound of the paper:
- *   c_b = 1 + 2 (h_T + h_W) / MSS,  c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_W)
- * with h_P,l the PUBLISH header of boat/b<V>/tx/<name> (QoS 2) and h_W the top-level "h_W" (0 when absent).
+ * When the file holds no "c_b" (or no "c_m"), the reader computes the cost bound of the paper (C6):
+ *   c_b = 1 + 2 (h_T + h_W) / MSS,  c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W)
+ * with h_P,l the PUBLISH header of boat/b<V>/tx/<name> (QoS 2), h_T the TCP/IP header of a segment
+ * ("tcp": "h_T", 80), h_A the bytes of one MQTT control packet ("mqtt": "h_A", 4) and h_W the top-level
+ * "h_W" (bytes that the PHY sends at R_PHY in the fixed time of one frame, 0 when absent; emu/README.md,
+ * "Fixed bytes per frame h_W"). Each control packet travels in its own segment and frame and gets its own
+ * TCP acknowledgment, hence 2 h_T + 2 h_W per control packet.
  *
  * The reader also keeps what the baseline modes of the regulator use (fdt_reg_paper.h): "U" and "C0"
  * (defaults 0.8 and 300000), the order "order" (topics left out go last, in file order), "required"

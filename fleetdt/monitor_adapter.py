@@ -72,6 +72,13 @@ class ChmonDTP:
     Ts: float
     R_PHY: float
     h_W: float
+    T_DIFS: float = 0.0
+    T_bo: float = 0.0
+
+    @property
+    def h_W_busy(self) -> float:
+        """h_W - R_PHY (T_DIFS + T_bo) / 8 of fdt_dtp_parse (C7): the busy part of the fixed bytes of a frame."""
+        return self.h_W - self.R_PHY * (self.T_DIFS + self.T_bo) / 8.0
 
     @property
     def epoch_us(self) -> int:
@@ -93,9 +100,12 @@ class ChmonDTP:
                 raise ValueError("DTP: field %s is not a number" % k)
             return float(v)
         d = ChmonDTP(epoch=num("epoch", DEFAULT_EPOCH), Ts=num("Ts", 0, True),
-                     R_PHY=num("R_PHY", 24e6), h_W=num("h_W", 0.0))
+                     R_PHY=num("R_PHY", 24e6), h_W=num("h_W", 0.0), T_DIFS=num("T_DIFS", 0.0),
+                     T_bo=num("T_bo", 0.0))
         if not d.Ts > 0:
             raise ValueError("DTP: Ts must be positive")
+        if d.h_W < 0 or d.T_DIFS < 0 or d.T_bo < 0 or d.h_W_busy < 0:
+            raise ValueError("DTP: h_W, T_DIFS, T_bo and h_W - R_PHY (T_DIFS + T_bo) / 8 must be >= 0")
         if not d.R_PHY > 0:
             raise ValueError("fdt_chmon: R_PHY must be positive")
         return d
@@ -213,7 +223,7 @@ def compute(d: ChmonDTP, a: Sample, b: Sample) -> Optional[Result]:
         return None
     txa = txp - txf if txp > txf else 0.0
     txba = txb * txa / txp if txp > 0 else 0.0
-    To = (8.0 * (rxb + txba) + (rxp + txa) * 8.0 * d.h_W) / d.R_PHY * scale
+    To = (8.0 * (rxb + txba) + (rxp + txa) * 8.0 * d.h_W_busy) / d.R_PHY * scale
     y = d.R_PHY * (Ts - Tb + To) / 8.0
     ymax = d.R_PHY * Ts / 8.0
     return Result(y=0.0 if y < 0 else (ymax if y > ymax else y), Tb=Tb, To=To)

@@ -320,20 +320,60 @@ def msgs_per_step(rate, Ts):
     return int(math.ceil(rate * Ts - 1e-9))
 
 
+def _varint_bytes(v):
+    return 1 if v < 128 else 2 if v < 16384 else 3 if v < 2097152 else 4
+
+
+def publish_header(V, name, s):
+    """h_P,l: PUBLISH header (QoS 2) of a message of s content bytes plus the 6-byte step header on
+    boat/b<V>/tx/<name> (common/fdt_paper.c, fleetdt/as_model.py)."""
+    tl = len(("boat/b%d/tx/%s" % (max(1, int(V)), name)).encode())
+    return 1 + _varint_bytes(2 + tl + 2 + 6 + int(s)) + 2 + tl + 2
+
+
+def cost_bound(dtp, name=None):
+    """(c_b, c_m,l) of topic `name` as the readers of the paper stack compute them (common/fdt_paper.c,
+    fleetdt/as_model.py; C6 of the paper): "c_b" and "c_m" of the file when present, else
+    c_b = 1 + 2 (h_T + h_W) / MSS and c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W), with MSS
+    and h_T of "tcp" (1448, 80), h_A of "mqtt" (4), h_W of the file (0) and h_P,l the PUBLISH header of
+    boat/b<V>/tx/<name> (V the largest index of "vessels"). The bound s of a v2 topic stands for its
+    "bound"."""
+    tcp, mqtt = dtp.get("tcp") or {}, dtp.get("mqtt") or {}
+    h_W = float(dtp.get("h_W") or 0.0)
+    h_T, mss, h_A = float(tcp.get("h_T", 80)), float(tcp.get("mss", 1448)), float(mqtt.get("h_A", 4))
+    c_b = float(dtp["c_b"]) if dtp.get("c_b") is not None else 1.0 + 2.0 * (h_T + h_W) / mss
+    if dtp.get("c_m") is not None:
+        return c_b, float(dtp["c_m"])
+    if name is None:
+        raise ValueError("c_m,l of the paper cost bound needs the topic")
+    t = [x for x in dtp["topics"] if x["name"] == name][0]
+    V = max([int(v) for v in dtp.get("vessels") or []] or [1])
+    h_P = publish_header(V, name, int(t["bound"] if "bound" in t else t["s"]))
+    return c_b, c_b * h_P + 2.0 * (h_T + h_W) + 3.0 * (h_A + 2.0 * h_T + 2.0 * h_W)
+
+
 def channel_demand(dtp, name, vessel_bound=None, jitter_s=0.0):
     """Demand of one step of a topic as the DTI program computes it (SPEC.md Section 5):
-    ceil(c_b (x + 6 n) + c_m n), n = ceil(r (Ts + J)), x = n s, with J the "jitter" of the topic, else
-    jitter_s (the --jitter-ms of fdt_dti; 0 gives n = ceil(r Ts))."""
+    ceil(c_b (x + 6 n) + c_m,l n), n = ceil(r (Ts + J)), x = n s, with J the "jitter" of the topic, else
+    jitter_s (the --jitter-ms of fdt_dti; 0 gives n = ceil(r Ts)); (c_b, c_m,l) of cost_bound."""
     t = [x for x in dtp["topics"] if x["name"] == name][0]
     J = float(t["jitter"]) if t.get("jitter") is not None else float(jitter_s)
     n = msgs_per_step(float(t["rate"]), float(dtp["Ts"]) + J)
     s = int(vessel_bound if vessel_bound is not None else t["bound"])
-    return int(math.ceil(float(dtp.get("c_b", 1.0)) * (n * s + 6 * n) + float(dtp.get("c_m", 0.0)) * n - 1e-9))
+    c_b, c_m = cost_bound(dtp, name)
+    return int(math.ceil(c_b * (n * s + 6 * n) + c_m * n - 1e-9))
 
 
-def message_cost(dtp, x):
-    """Channel bytes that the policing of the regulator charges one message of x content bytes."""
-    return float(dtp.get("c_b", 1.0)) * (x + 6) + float(dtp.get("c_m", 0.0))
+def message_cost(dtp, x, name=None):
+    """Channel bytes that the policing of the regulator charges one message of x content bytes of topic
+    `name`: c_b (x + 6) + c_m,l (fdt_p_cost of common/fdt_paper.c). Without `name`, the first layer topic
+    of the DTP (the layer topics of one DTP differ in c_m,l only through the length of the topic name and
+    of the PUBLISH remaining length, at most a few bytes)."""
+    if name is None and dtp.get("c_m") is None:
+        lay = layer_topics(dtp)
+        name = lay[0] if lay else dtp["topics"][0]["name"]
+    c_b, c_m = cost_bound(dtp, name)
+    return c_b * (x + 6) + c_m
 
 
 def split_sizes(size, bound):
@@ -381,7 +421,7 @@ def plan_for_rho(dtp, M, rho, C, frame_max, fps_options=(8, 16, 24, 32), jitter_
             return rec
         best = rec
     if best is None:
-        raise ValueError("rho %g with M %d: the telemetry alone exceeds rho C" % (rho, M))
+        raise ValueError("rho %g with M %d: the telemetry and one message per layer topic exceed rho C" % (rho, M))
     return best
 
 

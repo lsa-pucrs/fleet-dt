@@ -24,6 +24,8 @@ EPOCH = 1767225600.0
 TS = 0.125
 DTP = {"epoch": None, "Ts": TS, "T1": 0.020, "T2": 0.010, "R_PHY": 24e6, "h_W": 150,
        "topics": [{"name": "state", "rate": 8, "bound": 48}, {"name": "video", "rate": 30, "bound": 14000}]}
+# the PHY fields of dtp.json (C7): T_fleet(t) charges h_W_busy = h_W - R_PHY (T_DIFS + T_bo) / 8 per frame
+DTP_C7 = dict(DTP, h_W=570.25, T_DIFS=37e-6, T_bo=67.5e-6)
 
 
 @pytest.fixture(scope="module")
@@ -38,10 +40,11 @@ def chmon(tmp_path_factory):
     return str(out)
 
 
-@pytest.fixture(scope="module")
-def dtp_path(tmp_path_factory):
+@pytest.fixture(scope="module", params=["h_W", "C7"])
+def dtp_path(tmp_path_factory, request):
+    """the C and the Python monitor agree with h_W alone and with the busy part of h_W (C7)"""
     p = tmp_path_factory.mktemp("dtp") / "dtp.json"
-    p.write_text(json.dumps(DTP))
+    p.write_text(json.dumps(DTP if request.param == "h_W" else DTP_C7))
     return str(p)
 
 
@@ -196,6 +199,35 @@ def test_formula():
     assert r.Tb == pytest.approx(Tb)
     assert r.To == pytest.approx(To)
     assert r.y == pytest.approx(24e6 * (0.125 - Tb + To) / 8)
+
+
+def test_formula_busy_part_of_h_W():
+    """C7: T_fleet(t) counts only the busy part of each frame, h_W - R_PHY (T_DIFS + T_bo) / 8 (DIFS and mean
+    backoff are idle time for the survey), and y stays in [0, R_PHY Ts / 8]."""
+    d = ma.ChmonDTP.from_dict(DTP_C7)
+    assert d.h_W_busy == pytest.approx(570.25 - 24e6 * (37e-6 + 67.5e-6) / 8) == pytest.approx(256.75)
+    a = ma.Sample(at_us=0, have_survey=1, time_ms=1000, busy_ms=100, rx_bytes=0, tx_bytes=0)
+    b = ma.Sample(at_us=125000, have_survey=1, time_ms=1125, busy_ms=150, rx_bytes=30000, tx_bytes=10000,
+                  rx_packets=20, tx_packets=10, tx_failed=2)
+    r = ma.compute(d, a, b)
+    To = (8 * (30000 + 10000 * 8 / 10) + (20 + 8) * 8 * 256.75) / 24e6
+    assert r.To == pytest.approx(To)
+    assert r.y == pytest.approx(24e6 * (0.125 - 0.125 * 50 / 125 + To) / 8)
+    # clamp: a busy-free interval with many frames stays at R_PHY Ts / 8
+    b2 = ma.Sample(at_us=125000, have_survey=1, time_ms=1125, busy_ms=100, rx_bytes=10 ** 6, tx_bytes=0,
+                   rx_packets=900)
+    assert ma.compute(d, a, b2).y == 24e6 * 0.125 / 8
+    # the busy part may not be negative
+    with pytest.raises(ValueError):
+        ma.ChmonDTP.from_dict(dict(DTP_C7, h_W=300.0))
+
+
+def test_c_refuses_negative_busy_part(chmon, tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text(json.dumps(dict(DTP_C7, h_W=300.0)))
+    r = subprocess.run([chmon, "--dtp", str(p), "--replay", "/dev/null", "--fast", "--stdout"],
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    assert r.returncode != 0 and "T_DIFS" in r.stdout
 
 
 def test_pairing_and_labels():

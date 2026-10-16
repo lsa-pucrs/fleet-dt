@@ -176,8 +176,18 @@ static void test_dtp(void)
 	CHECK(fdt_pdtp_parse(DTP2, strlen(DTP2), &d, err, sizeof err) == 0);
 	CHECK(d.L == 2 && fabs(d.topic[1].rate - 240.0) < 1e-9 && d.topic[1].s == 1400);
 	CHECK(fabs(d.c_b - (1.0 + 160.0 / 1448.0)) < 1e-12);
-	/* h_P of boat/b4/tx/state (16 bytes) with QoS 2: 1 + 1 + 2 + 16 + 2 = 22 */
-	CHECK(fabs(d.topic[0].c_m - (d.c_b * 22 + 160 + 12)) < 1e-9);
+	/* h_P of boat/b4/tx/state (16 bytes) with QoS 2: 1 + 1 + 2 + 16 + 2 = 22;
+	 * c_m = c_b h_P + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W) = c_b 22 + 160 + 3 (4 + 160) (C6) */
+	CHECK(fabs(d.topic[0].c_m - (d.c_b * 22 + 160 + 492)) < 1e-9);
+	/* the same file with h_W = 570.25 (802.11g ERP-OFDM at 24 Mb/s, emu/README.md):
+	 * c_b = 1 + 2 (80 + 570.25) / 1448, c_m = c_b 22 + 2 (650.25) + 3 (4 + 160 + 1140.5) */
+	{
+		char hw[1024];
+		snprintf(hw, sizeof hw, "{\"h_W\": 570.25, %s", DTP2 + 1);
+		CHECK(fdt_pdtp_parse(hw, strlen(hw), &d, err, sizeof err) == 0);
+		CHECK(fabs(d.c_b - (1.0 + 1300.5 / 1448.0)) < 1e-12);
+		CHECK(fabs(d.topic[0].c_m - (d.c_b * 22 + 1300.5 + 3913.5)) < 1e-9);
+	}
 	/* L from the file: 6 telemetry topics and 16 video layers */
 	char big[8192];
 	int n = snprintf(big, sizeof big, "{\"Ts\":0.125,\"T1\":0.02,\"T2\":0.01,\"c_b\":1.06,\"c_m\":180,\"topics\":["

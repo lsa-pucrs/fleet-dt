@@ -10,14 +10,14 @@ over the same interval, scaled to Ts like fdt_chmon scales it:
 
   y_cnt     y(t) of the counters (monitor_adapter.compute, the arithmetic of fdt_chmon.c)
   y_model   R_PHY (Ts - Tb_gt + To_model) / 8: the exact busy time of the AP (PHY states CCA_BUSY, TX, RX
-            of gt.bin) and, for To, 8 (MPDU bytes without FCS + h_W) / R_PHY of every unique MPDU between the
+            of gt.bin) and, for To, 8 (MPDU bytes without FCS + h_W_busy) / R_PHY of every unique MPDU between the
             AP and a vessel that reached its receiver (acknowledged; the first acknowledged copy of a
             packet), at the end of its exchange. y_cnt - y_model is the error of the counters themselves:
             whole-ms survey, the estimate B_tx N_acked / N_tx, the instants at which the driver counts
             (first transmission, RX end, drop at the retry limit), the read jitter
   y_phy     R_PHY (Ts - Tb_gt + To_phy) / 8 with To_phy the measured airtime (frame and ACK) of the same
             exchanges inside the interval: Section V-B with the true durations. y_model - y_phy is the
-            error of the airtime model 8 (B + N h_W) / R_PHY
+            error of the airtime model 8 (B + N h_W_busy) / R_PHY (h_W_busy = h_W - R_PHY (T_DIFS + T_bo) / 8, C7)
   y_step    y_phy over the nominal step [start(t), start(t + 1)) instead of the read interval
 
 and reports bias, mean and 99th percentile of the relative error |e| / y_phy, and the maximum, for
@@ -133,7 +133,7 @@ def main(argv=None):
         P = pairs(d, f)
     if not P:
         raise SystemExit("no pair of consecutive reads")
-    busy, air, model, n_unique, n_exch = ground_truth(hdr, rec, M, d.h_W, d.R_PHY)
+    busy, air, model, n_unique, n_exch = ground_truth(hdr, rec, M, d.h_W_busy, d.R_PHY)
     t = np.array([p[0] for p in P], dtype=np.int64)
     A = np.array([p[1].at_us for p in P], dtype=np.int64) * 1000 - org     # simulator ns
     B = np.array([p[2].at_us for p in P], dtype=np.int64) * 1000 - org

@@ -59,8 +59,15 @@ int fdt_dtp_parse(const char *text, size_t len, struct fdt_dtp *d, char *err, si
 	    num(o, "T2", 0, 1, &d->T2, err, errlen) || num(o, "alpha", 0.125, 0, &d->alpha, err, errlen) ||
 	    num(o, "U", 0.8, 0, &d->U, err, errlen) || num(o, "C0", 0, 0, &d->C0, err, errlen) ||
 	    num(o, "c_b", 1.0, 0, &d->c_b, err, errlen) || num(o, "c_m", 0.0, 0, &d->c_m, err, errlen) ||
-	    num(o, "R_PHY", 24e6, 0, &d->R_PHY, err, errlen) || num(o, "h_W", 0.0, 0, &d->h_W, err, errlen))
+	    num(o, "R_PHY", 24e6, 0, &d->R_PHY, err, errlen) || num(o, "h_W", 0.0, 0, &d->h_W, err, errlen) ||
+	    num(o, "T_DIFS", 0.0, 0, &d->T_DIFS, err, errlen) || num(o, "T_bo", 0.0, 0, &d->T_bo, err, errlen))
 		goto out;
+	/* the same expression in fleetdt/as_model.py (h_W_busy) and fleetdt/monitor_adapter.py (ChmonDTP) */
+	d->h_W_busy = d->h_W - d->R_PHY * (d->T_DIFS + d->T_bo) / 8.0;
+	if (d->h_W < 0 || d->T_DIFS < 0 || d->T_bo < 0 || d->h_W_busy < 0) {
+		fail(err, errlen, "DTP: h_W, T_DIFS, T_bo and h_W - R_PHY (T_DIFS + T_bo) / 8 must be >= 0");
+		goto out;
+	}
 	if (!(d->Ts > 0) || d->T1 < 0 || d->T2 < 0 || d->T1 + d->T2 >= d->Ts) {
 		fail(err, errlen, "DTP: Ts, T1, T2 must satisfy 0 <= T1 + T2 < Ts");
 		goto out;
