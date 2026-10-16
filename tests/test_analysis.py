@@ -419,3 +419,143 @@ def test_calibrate_by_M():
     assert m[0] <= m[1] and m[0] <= m[2]
     out = subprocess.run([sys.executable, "-m", "fleetdt.outer", "--help"], cwd=ROOT, capture_output=True, text=True)
     assert out.returncode == 0 and "--by-M" in out.stdout
+
+
+# --------------------------------------------------------------------------- notation spec (C5, C8, C20, C21, names)
+
+
+def test_backlog_predictor_with_admitted_bytes_and_c_y():
+    """C5: q(t) = max(0, q(t-1) + sum_i a_i(t) - c_y y(t) T3/Ts); DMR = fraction of steps with q > 0. With
+    f(t) = A(t) / (U(t) C_hat(t) T3/Ts) the what-if over U reproduces A(t) at the logged U and scales it
+    with the cap at other U."""
+    r = 0.76
+    y = np.array([100, 100, 70, 100, 100, 100, 80, 120, 100], float)
+    C = np.full(len(y), 100.0)
+    A_ = np.array([60, 70, 75, 68, 60, 76, 70, 50, 65], float)      # admitted bytes, <= U C T3/Ts = 76
+    recs = [{"t": t, "y": float(yy), "C_hat": 100.0, "U": 1.0, "A": float(a)} for t, (yy, a) in enumerate(zip(y, A_))]
+    f = O.fill_series(recs, r)
+    assert f == pytest.approx(A_ / (1.0 * 100.0 * r))
+    for cy in (1.0, 0.9):
+        want, q = [], 0.0
+        for yy, a in zip(y, A_):
+            q = max(0.0, q + a - cy * yy * r)
+            want.append(q)
+        qa, ok = O.backlog_admitted(y, A_, r, c_y=cy)
+        assert qa == pytest.approx(want) and ok.all()
+        qb, _ = O.backlog(y, C, [1.0], r, fill=f, c_y=cy)          # logged U: X(t) = A(t)
+        assert qb[:, 0] == pytest.approx(want)
+        assert O.dmr_predicted(y, C, [1.0], r, fill=f, c_y=cy)[0] == pytest.approx(np.mean(np.asarray(want) > 0))
+    # c_y < 1 counts less of y as capacity: the backlog can only grow
+    assert np.all(O.backlog_admitted(y, A_, r, c_y=0.9)[0] >= O.backlog_admitted(y, A_, r, c_y=1.0)[0])
+    # other U: X_U(t) = f(t) U C_hat(t) T3/Ts
+    qu, _ = O.backlog(y, C, [0.5], r, fill=f)
+    q, want = 0.0, []
+    for k, yy in enumerate(y):
+        q = max(0.0, q + f[k] * 0.5 * 100.0 * r - yy * r)
+        want.append(q)
+    assert qu[:, 0] == pytest.approx(want)
+    # without A the predictor takes the cap (f = 1) and phi = 1 - DMR
+    assert O.phi_predicted(y, C, [0.9], r)[0] == pytest.approx(1 - O.dmr_predicted(y, C, [0.9], r)[0])
+    # kappa is an alias of c_y; both with different values are an error
+    assert O.backlog_admitted(y, A_, r, kappa=0.9)[0] == pytest.approx(O.backlog_admitted(y, A_, r, c_y=0.9)[0])
+    with pytest.raises(ValueError):
+        O.backlog(y, C, [1.0], r, c_y=0.9, kappa=0.8)
+
+
+def test_admitted_bytes_sources():
+    """A(t): "A" of the AS, else the sum of "a", else the admitted demand of the edges of G(t)"""
+    e = [{"i": 1, "l": 1, "d": 100, "p": 2}, {"i": 1, "l": 2, "d": 50, "p": 0}, {"i": 2, "l": 1, "d": 70, "p": 1},
+         {"i": 3, "l": 1, "d": 999, "p": 1}]
+    assert O.admitted_bytes({"A": 5, "a": {"1": 1}, "edges": e}) == 5
+    assert O.admitted_bytes({"a": {"1": 1, "2": 2}, "edges": e}) == 3
+    assert O.admitted_bytes({"edges": e, "vessels": [1, 2]}) == 170
+    assert math.isnan(O.admitted_bytes({"edges": [{"i": 1, "l": 1, "d": 100, "p": None}]}))
+
+
+def test_outer_loop_whatif_names_and_aliases():
+    rng = np.random.default_rng(5)
+    y = 300_000 + rng.normal(0, 20_000, 2000)
+    recs = [{"t": t, "y": float(v), "C_hat": 300_000.0, "U": 0.8, "K_hat": 0.8 * 300_000.0 * 0.76,
+             "A": 0.6 * 300_000.0 * 0.76} for t, v in enumerate(y)]
+    res = O.outer_loop(recs, target=0.95, B=200, alpha=0.0, c_y=0.95)
+    assert res["PICP_nom"] == res["gamma_target"] == 0.95 and res["c_y"] == res["kappa"] == 0.95
+    assert res["n_admitted"] == 2000
+    for w in res["whatif"]:
+        assert w["gamma"] == w["PICP"] and w["gamma_low"] == w["PICP_low"]
+        assert w["phi"] == pytest.approx(1 - w["DMR"])
+    w = {x["U"]: x for x in res["whatif"]}
+    # alpha = 0 keeps C_hat = C0 = 300000: at the logged U = 0.8 the predictor replays A(t) exactly
+    qa, ok = O.backlog_admitted(y, np.full(len(y), 0.6 * 300_000.0 * 0.76), 0.76, c_y=0.95)
+    assert w[0.8]["DMR"] == pytest.approx(np.mean(qa[ok] > 0))
+    assert O.outer_loop(recs, target=0.95, B=50, alpha=0.0, kappa=0.95)["c_y"] == 0.95
+    out = subprocess.run([sys.executable, "-m", "fleetdt.outer", "--help"], cwd=ROOT, capture_output=True, text=True)
+    assert "--c-y" in out.stdout and "--kappa" in out.stdout
+
+
+def _state_records(cases):
+    """one step per case (n, fwd, dup), vessel 1, state admitted (p 2) and needed"""
+    recs = []
+    for t, (n, fwd, dup) in enumerate(cases):
+        recs.append({"t": t, "y": 100.0, "C_hat": 100.0, "U": 0.8, "vessels": [1], "needed": [1], "order": [1],
+                     "edges": [{"i": 1, "l": 1, "d": 100, "p": 2, "r": 100, "n": n, "dup": dup, "late": 0,
+                                "fwd": fwd}]})
+    return recs
+
+
+def test_pdr_state_c8():
+    """C8: a pair (t, i) counts when the GS receives every state message forwarded in step t exactly once:
+    n_rx == n_fwd and no duplicate (two forwarded and two received count; one of two does not)."""
+    dtp = DTP(topics=["state"], Ts=0.125, T1=0.02, T2=0.01, U=0.8,
+              specs=[__import__("fleetdt.as_model", fromlist=["TopicSpec"]).TopicSpec(name="state", rate=8)])
+    recs = _state_records([(2, 2, 0), (1, 2, 0), (1, 1, 1), (1, None, 0), (2, None, 0), (1, 1, 0)])
+    res = A.run_metrics(recs, dtp, criterion="count", ci=False)
+    assert res["PDR_state"]["value"] == pytest.approx(3 / 6)        # cases 0, 3 (n == ceil(8 Ts) = 1), 5
+    assert res["PDR_state"] is res["delta"]
+
+
+def test_names_aliases_pcr_and_relmse():
+    dtp = DTP(topics=["state", "imu", "video"], Ts=0.125, T1=0.02, T2=0.01, U=0.8)
+    res = A.run_metrics(_endpoint_records(), dtp, criterion="count", ci=False, c_y=0.9)
+    # C21: share of N(t) = {1, 2} in the complete prefix: (0,1) 2/2, (0,2) 1/2, (0,3) 2/2, (1,1) 2/2, (1,2) 2/2
+    assert res["PCR"]["value"] == pytest.approx((1 + 0.5 + 1 + 1 + 1) / 5)
+    assert res["Pi"] is res["PCR"] and res["PCR"]["pairs"] == 5
+    assert res["prefix"]["mean_frac"] == pytest.approx(12 / 15)     # the old ratio (denominator L) stays
+    assert res["PICP"] is res["gamma"] and res["u"] is res["nu"] and res["PDR_i"] is res["eta_vessel"]
+    assert res["DMR"]["value"] == pytest.approx(1 - res["phi"]["value"])
+    assert res["c_y"] == res["kappa"] == 0.9
+    # DMR_hat from the admitted demand of the edges: step 0 A = 700 (vessels 1, 2; p > 0), step 1 A = 1600;
+    # c_y y T3/Ts = 0.9 * 1000 * 0.76 = 684: q(0) = 16, q(1) = 932
+    assert res["DMR_hat"]["value"] == pytest.approx(1.0) and res["DMR_hat"]["n"] == 2
+    assert A.margin_series(_endpoint_records(), dtp, kappa=0.9).tolist() == \
+        A.margin_series(_endpoint_records(), dtp, c_y=0.9).tolist()
+    # RelMSE = MSE_ES / MSE_alt and its log
+    r = A.rel_mse([1, 2, 3, 4], [1, 2, 3, 5], [0, 2, 3, 6])
+    assert r["value"] == pytest.approx(0.25 / 1.25) and r["log"] == pytest.approx(math.log(0.2)) and r["n"] == 4
+    assert res["RelMSE"]["alt"] == "persistence"
+
+
+def test_c20_n_eff_clopper_pearson_and_signed_tost():
+    # n_eff = n / (2 tau_int); tau_int = 1/2 for i.i.d. data gives n_eff = n
+    assert A.n_eff(1000, 0.5) == 1000 and A.n_eff(1000, 2.5) == 200
+    # Clopper-Pearson with the raw count in n_eff trials: k = 0 gives 1 - 0.05^(1/n_eff), n_eff not integer
+    for ne in (37.5, 200.0, 2995.0):
+        assert A.clopper_pearson_upper_eff(0, 5000, ne, events="raw") == pytest.approx(1 - 0.05 ** (1 / ne), rel=1e-9)
+    assert A.clopper_pearson_upper_eff(0, 1e6, 2995.0) < 1e-3 < A.clopper_pearson_upper_eff(0, 1e6, 2990.0)
+    # raw is the conservative rule: with k > 0 events it is not below the scaled count
+    assert A.clopper_pearson_upper_eff(3, 6000, 600, events="raw") >= A.clopper_pearson_upper_eff(3, 6000, 600,
+                                                                                                    events="scaled")
+    # the event metrics report the raw bound (viol_upper) and the scaled one
+    rng = np.random.default_rng(4)
+    recs = _records(330_000 + ar1(800, 0.9, rng, 2000.0), np.full(800, 300_000.0), fail_at=(5,))
+    res = A.run_metrics(recs, tiny_dtp(), criterion="count", ci=False)
+    ne = res["DMR"]["n_eff"]
+    assert res["DMR"]["violations"] == 1
+    assert res["DMR"]["viol_upper"] == pytest.approx(A.clopper_pearson_upper_eff(1, 800, ne, events="raw"))
+    assert res["DMR"]["viol_upper_scaled"] == pytest.approx(A.clopper_pearson_upper_eff(1, 800, ne, events="scaled"))
+    # TOST on the signed differences: +-0.006 around 0 is equivalent within 0.005; |d| = 0.006 is not
+    d = np.array([0.006, -0.006] * 20)
+    assert A.tost(d, 0.005)["equivalent"]
+    assert not A.tost(np.abs(d), 0.005)["equivalent"]
+    a = np.linspace(0.5, 0.6, 40)
+    r1, r2 = A.tost(a, 0.005, b=a - d), A.tost(d, 0.005)
+    assert r1["equivalent"] == r2["equivalent"] and r1["p"] == pytest.approx(r2["p"], rel=1e-9)

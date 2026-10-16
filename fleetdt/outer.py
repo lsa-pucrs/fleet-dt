@@ -4,23 +4,38 @@ target utilization U of eq. (3) from the DTA.
   (a) alpha_star = argmin of the one-step mean squared error of eq. (2) replayed on y(t)
       (grid 0.01..1 step 0.01, then golden-section refinement around the best grid point); with several
       runs, the MSE is pooled over the runs (each run replayed from its own C0);
-  (b) gamma(U) = fraction of steps with y(t) >= U C_hat(t), C_hat(t) recomputed causally with alpha_star;
-      gamma_low(U) = lower one-sided 95 % bound of gamma(U) by circular block bootstrap (blocks of
+  (b) PICP(U) (prediction interval coverage probability; gamma in earlier versions) = fraction of the
+      steps of S (steps with y(t) and C_hat(t)) with y(t) >= U C_hat(t), C_hat(t) recomputed causally with
+      alpha_star; PICP_low(U) = lower one-sided 95 % bound of PICP(U) by circular block bootstrap (blocks of
       ceil(2 tau_int) steps, tau_int of the margin series y(t) - U C_hat(t), blocks inside each run,
       the same resamples for every U of the grid);
-      U_star = largest U of the grid 0.30..1.00 with gamma_low(U) >= gamma_target
-      (U_star_point: the same rule on the point estimate gamma(U));
-  (c) what-if table: for each U, gamma(U), gamma_low(U) and the predicted full-delivery fraction
-      phi(U) of the backlog recursion of Corollary 1 (function backlog):
-          q(t) = max(0, q(t-1) + U C_hat(t) T3/Ts - y(t) T3/Ts),   q(-1) = 0,
-          phi(U) = fraction of the steps with q(t) = 0.
-      y(t) stands for C(t). Proposition 2 needs C(t) >= U C_hat(t) and empty send buffers at the start of
-      phase 3, so phi(U) <= gamma(U): a shortfall in step t-1 leaves bytes that delay step t.
+      U_star = largest U of the grid 0.30..1.00 with PICP_low(U) >= PICP_nom (C13; "gamma_target")
+      (U_star_point: the same rule on the point estimate PICP(U));
+  (c) what-if table: for each U, PICP(U), PICP_low(U) and the predicted deadline miss ratio DMR(U) of the
+      backlog predictor of Corollary 1 in Lindley form (C5, function backlog):
+          q(t) = max(0, q(t-1) + sum_{i in M(t)} a_i(t) - c_y y(t) T3/Ts),   q(-1) = 0,
+          DMR(U) = fraction of the steps with q(t) > 0   (phi(U) = 1 - DMR(U), the full-delivery fraction).
+      a_i(t) are the bytes that Algorithm 1 admitted for vessel i (the AS logs "a" and their sum "A",
+      fleetdt/as_service.py; the VE copies "A" into G(t); without "A" the admitted demand of the edges of G(t),
+      sum of d_il over p_l > 0, and without edges the cap U K_hat(t)). c_y y(t) stands for C(t): c_y is the
+      calibrated lower bound of C(t)/y(t) (kappa in earlier versions; 1 by default).
+      What-if over U (approximation): the admitted bytes of another U are not observed, so the predictor
+      scales them with the cap, X_U(t) = f(t) U K_hat_alpha(t), f(t) = A(t) / (U(t) K_hat(t)) the share of
+      the logged cap that Algorithm 1 filled (1 without A) and K_hat_alpha(t) = C_hat(t) T3/Ts with the
+      C_hat(t) replayed with alpha_star; at the logged U and alpha, X_U(t) = A(t) exactly. Larger U admit
+      more topics only in steps of whole topics, so f(t) of other U deviates from the logged one by at most
+      the demand of one topic per vessel. Proposition 2 needs C(t) >= U C_hat(t) and empty send buffers at
+      the start of phase 3, so DMR(U) >= 1 - PICP(U) when f = 1 and c_y = 1: a shortfall in step t-1 leaves
+      bytes that delay step t.
 
 alpha* and U* per number of vessels M: calibrate_by_M (one DTA per run, M of a run = largest m(t)).
 
-  python -m fleetdt.outer dta.jsonl [--target 0.99] [--window W] [--every K] [--json]
-  python -m fleetdt.outer run1.jsonl run2.jsonl ... --by-M [--target 0.99] [--json]
+  python -m fleetdt.outer dta.jsonl [--target 0.99] [--c-y 1.0] [--window W] [--every K] [--json]
+  python -m fleetdt.outer run1.jsonl run2.jsonl ... --by-M [--target 0.99] [--c-y 1.0] [--json]
+
+Output keys: PICP, PICP_low, DMR per U (whatif), PICP_nom, c_y; the keys of earlier versions stay as
+aliases for one release: gamma (= PICP), gamma_low (= PICP_low), phi (= 1 - DMR), gamma_target (= PICP_nom),
+kappa (= c_y).
 """
 from __future__ import annotations
 
@@ -61,6 +76,37 @@ def series(records: Iterable[Dict]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]
     y = np.array([nan if by_t[t].get("y") is None else float(by_t[t]["y"]) for t in ts.tolist()])
     C = np.array([nan if by_t[t].get("C_hat") is None else float(by_t[t]["C_hat"]) for t in ts.tolist()])
     return ts, y, C
+
+
+def admitted_bytes(r: Dict) -> float:
+    """A(t) = sum_{i in M(t)} a_i(t) of one record: "A" of the AS (fleet/as, G(t)), else the sum of the a_i
+    of "a", else the admitted demand of the edges of G(t) (d_il of the vessels of M(t) with p_l > 0); NaN
+    when the record holds none of them (no table: nothing admitted is known)."""
+    if r.get("A") is not None:
+        return float(r["A"])
+    if isinstance(r.get("a"), dict) and r["a"]:
+        return float(sum(float(v) for v in r["a"].values()))
+    edges = r.get("edges") or []
+    M = set(r.get("vessels") or [])
+    if edges and any(e.get("p") is not None for e in edges):
+        return float(sum(float(e.get("d") or 0) for e in edges
+                         if (not M or e.get("i") in M) and (e.get("p") or 0) > 0))
+    return float("nan")
+
+
+def fill_series(records: Iterable[Dict], T3_Ts: float) -> np.ndarray:
+    """f(t) = A(t) / (U(t) C_hat(t) T3/Ts) per step sorted by t (series order): the share of the cap of
+    step t that Algorithm 1 filled; NaN without A(t), U(t) or C_hat(t) (the predictor then takes f = 1)."""
+    by_t = {}
+    for r in records:
+        by_t[int(r["t"])] = r
+    out = []
+    for t in sorted(by_t):
+        r = by_t[t]
+        A, U, C = admitted_bytes(r), r.get("U"), r.get("C_hat")
+        cap = float(U) * float(C) * T3_Ts if U is not None and C is not None else float("nan")
+        out.append(A / cap if cap > 0 and A == A else float("nan"))
+    return np.asarray(out, dtype=float)
 
 
 def replay(y: np.ndarray, alphas, C0: float) -> np.ndarray:
@@ -163,58 +209,112 @@ def largest_U(gamma: np.ndarray, U_grid: np.ndarray, target: float) -> Optional[
 T3_TS_DEFAULT = 0.095 / 0.125   # T3 / Ts of the DTP of the paper (Ts = 125 ms, T1 = 20 ms, T2 = 10 ms)
 
 
-def backlog(y: np.ndarray, C_hat: np.ndarray, U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT) -> Tuple[np.ndarray, np.ndarray]:
-    """Backlog recursion of Corollary 1 on a DTA series, for every U of U_grid.
+def _c_y(c_y: Optional[float], kappa: Optional[float]) -> float:
+    """c_y, with kappa (its name in earlier versions) as a backward-compatible alias."""
+    if kappa is not None:
+        if c_y is not None and float(c_y) != float(kappa):
+            raise ValueError("c_y and kappa (its old name) differ")
+        return float(kappa)
+    return 1.0 if c_y is None else float(c_y)
+
+
+def backlog(y: np.ndarray, C_hat: np.ndarray, U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT,
+            fill: Optional[np.ndarray] = None, c_y: Optional[float] = None,
+            kappa: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """Backlog predictor of Corollary 1 in Lindley form (C5) on a DTA series, for every U of U_grid.
 
     Convention at the step boundary: q(t) is the number of bytes of steps 0..t still in the send
     buffers of the data bridges at the end of phase 3 of step t, and these are the bytes in the
     buffers at the start of phase 3 of step t+1 (the drain during phases 1 and 2 of step t+1 is
     neglected, so the prediction is conservative). q(-1) = 0: phase 3 of the first step of the series
-    starts with empty buffers. Phase 3 of step t receives X(t) = U C_hat(t) T3/Ts bytes (every vessel
-    of M(t) fills its grant, sum_i a_i(t) <= m(t) b(t) = K_hat(t)) and the channel carries y(t) T3/Ts
-    bytes (Assumption 2, y in place of C):
+    starts with empty buffers. Phase 3 of step t receives X(t) = sum_{i in M(t)} a_i(t) bytes, the
+    admitted bytes of Algorithm 1, and the channel carries c_y y(t) T3/Ts bytes (Assumption 2, c_y y in
+    place of C):
 
-        q(t) = max(0, q(t-1) + U C_hat(t) T3/Ts - y(t) T3/Ts).
+        q(t) = max(0, q(t-1) + X(t) - c_y y(t) T3/Ts),   X(t) = f(t) U C_hat(t) T3/Ts.
+
+    fill holds f(t) = A(t) / (U(t) K_hat(t)) of the logged run (fill_series; NaN or None: f = 1, the cap
+    U K_hat(t), which bounds the admitted bytes because sum_i a_i(t) <= m(t) b(t) = U K_hat(t)). For the
+    logged U, X(t) is the logged A(t); for other U the admitted bytes scale with the cap (what-if
+    approximation of the module docstring).
 
     Step t delivers every message of level 1 or 2 within the step iff q(t) = 0. This is Corollary 1:
-    q(t-1) = 0 (empty buffers at the start of phase 3 of step t) and y(t) >= U C_hat(t) give q(t) = 0
-    (Proposition 2); C(tau) >= U C_hat(tau) for every tau <= t gives q(tau) = 0 for every tau <= t; and
-    a step with y(t) >= U C_hat(t) after a step with q(t-1) > 0 can fail. A step without y(t) or
-    C_hat(t) leaves q unchanged and is not evaluated.
+    q(t-1) = 0 (empty buffers at the start of phase 3 of step t) and C(t) >= X(t) Ts/T3 give q(t) = 0
+    (Proposition 2); the service condition at every step tau <= t gives q(tau) = 0 for every tau <= t;
+    and a step whose service condition holds after a step with q(t-1) > 0 can fail. A step without y(t)
+    or C_hat(t) leaves q unchanged and is not evaluated.
 
     The recursion runs step by step (vectorized over U), so q(t) = 0 is exact and does not depend on
     the rounding of a cumulative sum.
     Returns q (n x len(U_grid), bytes) and the mask of the evaluated steps (n,)."""
+    cy = _c_y(c_y, kappa)
     y = np.asarray(y, dtype=float)
     C = np.asarray(C_hat, dtype=float)
     U = np.atleast_1d(np.asarray(U_grid, dtype=float))
+    f = np.ones(len(y)) if fill is None else np.where(np.isnan(np.asarray(fill, dtype=float)), 1.0,
+                                                       np.asarray(fill, dtype=float))
     ok = ~(np.isnan(y) | np.isnan(C))
     q = np.zeros((len(y), len(U)))
     cur = np.zeros(len(U))
     for t in range(len(y)):
         if ok[t]:
-            cur = np.maximum(0.0, cur + (U * C[t] - y[t]) * T3_Ts)
+            cur = np.maximum(0.0, cur + (f[t] * U * C[t] - cy * y[t]) * T3_Ts)
         q[t] = cur
     return q, ok
 
 
-def phi_predicted(y: np.ndarray, C_hat: np.ndarray, U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT) -> np.ndarray:
-    """(c) predicted full-delivery fraction phi(U): fraction of the evaluated steps with q(t) = 0."""
-    q, ok = backlog(y, C_hat, U_grid, T3_Ts)
+def backlog_admitted(y: np.ndarray, A: np.ndarray, T3_Ts: float = T3_TS_DEFAULT,
+                     c_y: Optional[float] = None, kappa: Optional[float] = None) -> Tuple[np.ndarray, np.ndarray]:
+    """The predictor of C5 on the logged run itself: q(t) = max(0, q(t-1) + A(t) - c_y y(t) T3/Ts) with the
+    admitted bytes A(t) (admitted_bytes); a step without y(t) or A(t) leaves q unchanged and is not
+    evaluated. Returns q (n,) and the mask of the evaluated steps."""
+    cy = _c_y(c_y, kappa)
+    y, A = np.asarray(y, dtype=float), np.asarray(A, dtype=float)
+    ok = ~(np.isnan(y) | np.isnan(A))
+    q = np.zeros(len(y))
+    cur = 0.0
+    for t in range(len(y)):
+        if ok[t]:
+            cur = max(0.0, cur + A[t] - cy * y[t] * T3_Ts)
+        q[t] = cur
+    return q, ok
+
+
+def dmr_predicted(y: np.ndarray, C_hat: np.ndarray, U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT,
+                  fill: Optional[np.ndarray] = None, c_y: Optional[float] = None,
+                  kappa: Optional[float] = None) -> np.ndarray:
+    """(c) predicted deadline miss ratio DMR(U): fraction of the evaluated steps with q(t) > 0."""
+    q, ok = backlog(y, C_hat, U_grid, T3_Ts, fill=fill, c_y=c_y, kappa=kappa)
     if not ok.any():
         return np.full(q.shape[1], np.nan)
-    return np.mean(q[ok] <= 0.0, axis=0)
+    return np.mean(q[ok] > 0.0, axis=0)
 
 
-def phi_predicted_runs(runs: Sequence[Tuple[np.ndarray, np.ndarray]], U_grid=U_GRID,
-                       T3_Ts: float = T3_TS_DEFAULT) -> np.ndarray:
-    """phi(U) pooled over runs; the recursion restarts with q(-1) = 0 in each run."""
+def phi_predicted(y: np.ndarray, C_hat: np.ndarray, U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT,
+                  fill: Optional[np.ndarray] = None, c_y: Optional[float] = None,
+                  kappa: Optional[float] = None) -> np.ndarray:
+    """Predicted full-delivery fraction phi(U) = 1 - DMR(U) (name of earlier versions, kept as an alias)."""
+    return 1.0 - dmr_predicted(y, C_hat, U_grid, T3_Ts, fill=fill, c_y=c_y, kappa=kappa)
+
+
+def dmr_predicted_runs(runs: Sequence[Tuple], U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT,
+                       c_y: Optional[float] = None, kappa: Optional[float] = None) -> np.ndarray:
+    """DMR(U) pooled over runs, each run (y, C_hat) or (y, C_hat, fill); the recursion restarts with
+    q(-1) = 0 in each run."""
     num, den = np.zeros(len(np.atleast_1d(U_grid))), 0
-    for y, C in runs:
-        q, ok = backlog(y, C, U_grid, T3_Ts)
-        num += np.sum(q[ok] <= 0.0, axis=0)
+    for run in runs:
+        y, C = run[0], run[1]
+        f = run[2] if len(run) > 2 else None
+        q, ok = backlog(y, C, U_grid, T3_Ts, fill=f, c_y=c_y, kappa=kappa)
+        num += np.sum(q[ok] > 0.0, axis=0)
         den += int(ok.sum())
     return num / den if den else np.full(len(num), np.nan)
+
+
+def phi_predicted_runs(runs: Sequence[Tuple], U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT,
+                       c_y: Optional[float] = None, kappa: Optional[float] = None) -> np.ndarray:
+    """phi(U) = 1 - DMR(U) pooled over runs (alias of earlier versions)."""
+    return 1.0 - dmr_predicted_runs(runs, U_grid, T3_Ts, c_y=c_y, kappa=kappa)
 
 
 # --------------------------------------------------------------------------- (b) bootstrap bound of gamma
@@ -291,47 +391,56 @@ def _C0(y: np.ndarray, Crec: np.ndarray) -> float:
     return float(finite[0]) if len(finite) else float(np.nanmean(y))
 
 
-def _calibrate(runs: Sequence[Tuple[np.ndarray, np.ndarray]], C0s: Sequence[float], target: float,
+def _calibrate(runs: Sequence[Tuple], C0s: Sequence[float], target: float,
                alpha: Optional[float], U_grid, conf: float, B: int, block: Optional[int], seed: int,
-               T3_Ts: float) -> Dict:
-    ys = [y for y, _ in runs]
+               T3_Ts: float, c_y: float = 1.0) -> Dict:
+    """runs: (y, C_hat recorded) or (y, C_hat recorded, f) per run, f = fill_series of the run."""
+    ys = [r[0] for r in runs]
+    fills = [r[2] if len(r) > 2 else None for r in runs]
     if alpha is None:
         a_star, m_star = fit_alpha_runs(ys, C0s)
     else:
         a_star, m_star = float(alpha), float(mse_runs(ys, C0s, [alpha])[0])
     rep = [(y, replay(y, [a_star], C0)[:, 0]) for y, C0 in zip(ys, C0s)]
     gb = gamma_bounds(rep, U_grid, conf=conf, B=B, block=block, seed=seed)
-    phi = phi_predicted_runs(rep, U_grid, T3_Ts)
+    dmr = dmr_predicted_runs([(y, C, f) for (y, C), f in zip(rep, fills)], U_grid, T3_Ts, c_y=c_y)
+    n_fill = sum(int(np.sum(~np.isnan(f))) for f in fills if f is not None)
     return {
         "alpha_star": a_star, "mse": m_star, "rmse": math.sqrt(m_star) if m_star == m_star else None,
-        "gamma_target": target, "conf": conf, "block": gb["block"], "tau_margin": gb["tau_margin"], "T3_Ts": T3_Ts,
+        "PICP_nom": target, "gamma_target": target, "c_y": c_y, "kappa": c_y, "n_admitted": n_fill,
+        "conf": conf, "block": gb["block"], "tau_margin": gb["tau_margin"], "T3_Ts": T3_Ts,
         "U_star": largest_U(gb["gamma_low"], U_grid, target),
         "U_star_point": largest_U(gb["gamma"], U_grid, target),
-        "whatif": [{"U": float(u), "gamma": float(g), "gamma_low": float(gl), "phi": float(f)}
-                   for u, g, gl, f in zip(U_grid, gb["gamma"], gb["gamma_low"], phi)],
+        "whatif": [{"U": float(u), "PICP": float(g), "PICP_low": float(gl), "DMR": float(d),
+                    "gamma": float(g), "gamma_low": float(gl), "phi": float(1.0 - d)}
+                   for u, g, gl, d in zip(U_grid, gb["gamma"], gb["gamma_low"], dmr)],
     }
 
 
 def outer_loop(records: Sequence[Dict], target: float = 0.99, window: Optional[int] = None,
                alpha: Optional[float] = None, C0: Optional[float] = None,
                U_grid: np.ndarray = U_GRID, conf: float = 0.95, B: int = 1000, block: Optional[int] = None,
-               seed: int = 0, T3_Ts: Optional[float] = None) -> Dict:
+               seed: int = 0, T3_Ts: Optional[float] = None, c_y: Optional[float] = None,
+               kappa: Optional[float] = None) -> Dict:
     """Outer loop over the DTA (or its last `window` steps). With `alpha` given, (a) is skipped.
     C0 defaults to the C_hat recorded in the first step considered (the AS value at that step).
-    U_star: largest U with the lower `conf` block-bootstrap bound of gamma >= target (U_star_point:
-    the rule on the point estimate). whatif[k]["phi"]: phi(U) of the backlog recursion (function backlog).
-    The keys used by fleetdt.as_service (U_star, alpha_star, mse, n_y) keep their meaning."""
+    U_star: largest U with the lower `conf` block-bootstrap bound of PICP >= target (PICP_nom; U_star_point:
+    the rule on the point estimate). whatif[k]["DMR"]: DMR(U) of the backlog predictor (function backlog)
+    with the admitted bytes of the records and c_y (kappa: old name). The keys used by fleetdt.as_service
+    (U_star, alpha_star, mse, n_y) keep their meaning."""
+    cy = _c_y(c_y, kappa)
     ts, y, Crec = series(records)
+    r = T3_Ts if T3_Ts is not None else _T3_Ts(records)
+    f = fill_series(records, r)
     if window:
-        ts, y, Crec = ts[-window:], y[-window:], Crec[-window:]
+        ts, y, Crec, f = ts[-window:], y[-window:], Crec[-window:], f[-window:]
     if len(ts) == 0:
         raise ValueError("empty DTA")
     if C0 is None:
         C0 = _C0(y, Crec)
-    r = T3_Ts if T3_Ts is not None else _T3_Ts(records)
     res = {"t_first": int(ts[0]), "t_last": int(ts[-1]), "n_steps": int(len(ts)), "n_y": int(np.sum(~np.isnan(y))),
            "window": window, "C0": C0}
-    res.update(_calibrate([(y, Crec)], [C0], target, alpha, U_grid, conf, B, block, seed, r))
+    res.update(_calibrate([(y, Crec, f)], [C0], target, alpha, U_grid, conf, B, block, seed, r, cy))
     return res
 
 
@@ -368,11 +477,13 @@ def run_M(records: Sequence[Dict]) -> int:
 
 def calibrate_by_M(runs: Sequence[Sequence[Dict]], target: float = 0.99, alpha: Optional[float] = None,
                    U_grid: np.ndarray = U_GRID, conf: float = 0.95, B: int = 1000, block: Optional[int] = None,
-                   seed: int = 0, T3_Ts: Optional[float] = None) -> Dict[int, Dict]:
+                   seed: int = 0, T3_Ts: Optional[float] = None, c_y: Optional[float] = None,
+                   kappa: Optional[float] = None) -> Dict[int, Dict]:
     """alpha* and U* per number of vessels M (calibration session): the runs (one DTA each) are grouped
     by run_M; alpha* minimizes the MSE pooled over the runs of the group, gamma and its block-bootstrap
-    bound pool the steps of the group (blocks inside each run), and phi(U) restarts the backlog in each
+    bound pool the steps of the group (blocks inside each run), and DMR(U) restarts the backlog in each
     run. Returns {M: result} with the keys of outer_loop plus "runs" and "n_y"."""
+    cy = _c_y(c_y, kappa)
     groups: Dict[int, List[Sequence[Dict]]] = {}
     for recs in runs:
         if recs:
@@ -382,26 +493,26 @@ def calibrate_by_M(runs: Sequence[Sequence[Dict]], target: float = 0.99, alpha: 
         if M == 0:
             continue
         ser, C0s = [], []
+        r = T3_Ts if T3_Ts is not None else _T3_Ts([x for recs in rr for x in recs])
         for recs in rr:
             _, y, Crec = series(recs)
-            ser.append((y, Crec))
+            ser.append((y, Crec, fill_series(recs, r)))
             C0s.append(_C0(y, Crec))
-        r = T3_Ts if T3_Ts is not None else _T3_Ts([x for recs in rr for x in recs])
-        res = {"M": M, "runs": len(rr), "n_steps": int(sum(len(y) for y, _ in ser)),
-               "n_y": int(sum(np.sum(~np.isnan(y)) for y, _ in ser))}
-        res.update(_calibrate(ser, C0s, target, alpha, U_grid, conf, B, block, seed, r))
+        res = {"M": M, "runs": len(rr), "n_steps": int(sum(len(s[0]) for s in ser)),
+               "n_y": int(sum(np.sum(~np.isnan(s[0])) for s in ser))}
+        res.update(_calibrate(ser, C0s, target, alpha, U_grid, conf, B, block, seed, r, cy))
         out[M] = res
     return out
 
 
 def sliding(records: Sequence[Dict], window: int, every: Optional[int] = None, target: float = 0.99,
-            B: int = 1000) -> List[Dict]:
-    """Recomputation over the last `window` steps every `every` steps (condition C3 of the experiments)."""
+            B: int = 1000, c_y: Optional[float] = None) -> List[Dict]:
+    """Recomputation over the last `window` steps every `every` steps (variant O3 of the experiments)."""
     recs = sorted(records, key=lambda r: int(r["t"]))
     every = every or window
     out = []
     for end in range(window, len(recs) + 1, every):
-        res = outer_loop(recs[end - window:end], target=target, B=B)
+        res = outer_loop(recs[end - window:end], target=target, B=B, c_y=c_y)
         res.pop("whatif")
         out.append(res)
     return out
@@ -410,7 +521,9 @@ def sliding(records: Sequence[Dict], window: int, every: Optional[int] = None, t
 def main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(prog="fleetdt.outer", description="Outer loop of the Fleet-DT AS")
     ap.add_argument("dta", nargs="+", help="DTA file(s) (JSON lines of G(t)); with --by-M one file per run")
-    ap.add_argument("--target", type=float, default=0.99, help="coverage target gamma")
+    ap.add_argument("--target", type=float, default=0.99, help="nominal coverage PICP_nom")
+    ap.add_argument("--c-y", "--kappa", dest="c_y", type=float, default=1.0,
+                    help="c_y, lower bound of C(t)/y(t) in the backlog predictor (--kappa: old name)")
     ap.add_argument("--window", type=int, default=None, help="last W steps (with --every: sliding windows)")
     ap.add_argument("--every", type=int, default=None, help="sliding recomputation every K steps (needs --window)")
     ap.add_argument("--by-M", action="store_true", help="alpha* and U* per number of vessels M over the runs")
@@ -419,7 +532,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
     if a.by_M or len(a.dta) > 1:
-        res = calibrate_by_M([load_dta(p) for p in a.dta], target=a.target, conf=a.conf, B=a.B)
+        res = calibrate_by_M([load_dta(p) for p in a.dta], target=a.target, conf=a.conf, B=a.B, c_y=a.c_y)
         if a.json:
             print(json.dumps({str(k): v for k, v in res.items()}, indent=1))
             return
@@ -430,7 +543,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         return
     recs = load_dta(a.dta[0])
     if a.every and a.window:
-        res = sliding(recs, a.window, a.every, a.target, B=a.B)
+        res = sliding(recs, a.window, a.every, a.target, B=a.B, c_y=a.c_y)
         if a.json:
             print(json.dumps(res, indent=1))
             return
@@ -438,17 +551,17 @@ def main(argv: Optional[List[str]] = None) -> None:
         for r in res:
             print("%8d %8.4f %10.1f %8s" % (r["t_last"], r["alpha_star"], r["rmse"] or float("nan"), r["U_star"]))
         return
-    res = outer_loop(recs, target=a.target, window=a.window, conf=a.conf, B=a.B)
+    res = outer_loop(recs, target=a.target, window=a.window, conf=a.conf, B=a.B, c_y=a.c_y)
     if a.json:
         print(json.dumps(res, indent=1))
         return
     print("steps %d..%d (%d, %d with y), C0 = %.1f" % (res["t_first"], res["t_last"], res["n_steps"], res["n_y"], res["C0"]))
     print("alpha* = %.4f   RMSE = %.1f bytes" % (res["alpha_star"], res["rmse"] or float("nan")))
-    print("U* = %s for the lower %.0f %% bound of gamma >= %.3f (point estimate: %s), block %d steps" % (
-        res["U_star"], 100 * res["conf"], res["gamma_target"], res["U_star_point"], res["block"]))
-    print("%6s %8s %9s %8s" % ("U", "gamma", "gamma_lo", "phi"))
+    print("U* = %s for the lower %.0f %% bound of PICP >= %.3f (point estimate: %s), block %d steps, c_y = %g" % (
+        res["U_star"], 100 * res["conf"], res["PICP_nom"], res["U_star_point"], res["block"], res["c_y"]))
+    print("%6s %8s %9s %8s" % ("U", "PICP", "PICP_lo", "DMR"))
     for w in res["whatif"][::5]:
-        print("%6.2f %8.4f %9.4f %8.4f" % (w["U"], w["gamma"], w["gamma_low"], w["phi"]))
+        print("%6.2f %8.4f %9.4f %8.4f" % (w["U"], w["PICP"], w["PICP_low"], w["DMR"]))
 
 
 if __name__ == "__main__":

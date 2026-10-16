@@ -317,3 +317,31 @@ def test_service_over_mqtt(tmp_path):
 def test_cli_help():
     out = subprocess.run(["python3", "-m", "fleetdt.as_service", "--help"], cwd=ROOT, capture_output=True, text=True)
     assert out.returncode == 0 and "--outer-every" in out.stdout
+
+
+def test_decision_logs_the_admitted_bytes():
+    """C5: the decision holds a_i(t) (demand of vessel i over its topics of level 1 or 2) and A(t) = sum_i a_i;
+    the VE carries A from fleet/as into G(t)."""
+    from fleetdt.model import Graph
+    from fleetdt.ve.collector import Assembler, StepClock
+    a = AS(small_dtp(), epoch=0.0)
+    a.on_demand(1, 0, D1, at=0.01)
+    a.on_demand(2, 0, D2, at=0.02)
+    dec = a.close_phase1(0)
+    assert dec["p"] == [2, 2, 0, 1]
+    assert dec["a"] == {"1": 100 + 600 + 200, "2": 100 + 500 + 250} and dec["A"] == 1750
+    assert dec["A"] <= dec["K_hat"]
+    b7 = AS(small_dtp(), epoch=0.0, policy="b7")
+    b7.on_demand(1, 0, D1, at=0.01)
+    b7.on_demand(2, 0, D2, at=0.02)
+    d7 = b7.close_phase1(0)
+    assert d7["a"] == {str(i): sum(v for v, lev in zip(D, d7["p_by"][i]) if lev > 0)
+                       for i, D in ((1, D1), (2, D2))}
+    assert d7["A"] == sum(d7["a"].values())
+    dtp = small_dtp()
+    asm = Assembler(dtp, StepClock(dtp.Ts, 0.0, now=lambda: 0.0))
+    asm.on_message("boat/b1/demand", encode_demand(0, D1), at=0.01)
+    asm.on_message("fleet/as", json.dumps({k: dec[k] for k in ("t", "C_hat", "K_hat", "b", "U", "alpha", "A")}).encode(),
+                   at=0.3)
+    g = asm._finish(0)
+    assert g.A == 1750 and Graph.from_dict(g.to_dict()).A == 1750

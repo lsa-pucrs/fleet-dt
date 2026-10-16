@@ -67,8 +67,16 @@ of the vessel RP4.
 python -m fleetdt.as_service --dtp dtp.json --broker 127.0.0.1:1883 --log as.jsonl
 python -m fleetdt.ve live --broker 127.0.0.1:1883 --dtp dtp.json --dta dta.jsonl   # http://localhost:8080
 python -m fleetdt.ve replay dta.jsonl
-python -m fleetdt.outer dta.jsonl --target 0.99 --window 4800 --every 4800
-python -m fleetdt.analysis run1.jsonl run2.jsonl --dtp dtp.json --criterion count   # or bytes
+python -m fleetdt.outer dta.jsonl --target 0.99 --window 4800 --every 4800 [--c-y 1.0]
+python -m fleetdt.analysis run1.jsonl run2.jsonl --dtp dtp.json --criterion count [--c-y 1.0]   # or bytes
+```
+
+The outputs use the metric names of the paper: PICP, DMR (deadline miss ratio, 1 - full-delivery
+fraction), DMR_hat (backlog predictor with the admitted bytes A(t) of the AS log and c_y), PDR_state,
+PDR_i, PCR (denominator |N(t)|), u, c_y and RelMSE; the names of earlier versions (gamma, phi, delta,
+eta_vessel, Pi, nu, kappa; --kappa) stay as aliases for one release.
+
+```bash
 python -m fleetdt.gsconf gs --vessel 1=192.168.1.99 --vessel 2=192.168.1.98 > gs.conf
 fdt_chmon --dtp dtp.json --iface wlan0 --broker 192.168.1.10:1883      # on the GS radio
 ```

@@ -95,6 +95,7 @@ class Graph:
     b: Optional[float] = None       # grant limit
     U: Optional[float] = None
     alpha: Optional[float] = None
+    A: Optional[float] = None       # admitted bytes of the fleet, sum_i a_i(t) of the AS (fleet/as), C5
     needed: List[int] = field(default_factory=list)  # N(t), 1-based topic indices
     order: List[int] = field(default_factory=list)   # sigma_t
 
@@ -124,7 +125,7 @@ class Graph:
         g = Graph(t=d["t"], L=d["L"], topics=list(d["topics"]))
         g.vessels = list(d.get("vessels", []))
         g.edges = [Edge(**{k: v for k, v in e.items() if k in Edge.__dataclass_fields__}) for e in d.get("edges", [])]
-        for k in ("y", "C_hat", "K_hat", "b", "U", "alpha"):
+        for k in ("y", "C_hat", "K_hat", "b", "U", "alpha", "A"):
             setattr(g, k, d.get(k))
         g.needed = list(d.get("needed", []))
         g.order = list(d.get("order", []))

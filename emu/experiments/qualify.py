@@ -149,7 +149,8 @@ def run_outcomes(rd, warm_steps, criterion):
     if not recs:
         return None
     m = run_metrics(recs, DTP.load(dtpp), criterion=criterion, ci=False)
-    return {"gamma": m["gamma"]["value"], "phi": m["phi"]["value"], "Pi": m["prefix"]["mean_frac"]}
+    # keys of the pre-registered margins (gamma = PICP, phi = 1 - DMR, Pi = PCR with denominator |N(t)|, C21)
+    return {"gamma": m["PICP"]["value"], "phi": m["phi"]["value"], "Pi": m["PCR"]["value"]}
 
 
 def steal_summary(rd):
@@ -224,7 +225,8 @@ def lag_table(values, delta_us=1000.0):
 
 
 def tost_paired(d, margin, alpha=0.05):
-    """TOST of mean(d) inside (-margin, margin) with the (1 - 2 alpha) t interval"""
+    """TOST of mean(d) inside (-margin, margin) with the (1 - 2 alpha) t interval; d are the signed paired
+    differences (K1 - K3), never their absolute values (C20)"""
     from scipy.stats import t as tdist
     x = [float(v) for v in d if v is not None and not math.isnan(v)]
     n = len(x)

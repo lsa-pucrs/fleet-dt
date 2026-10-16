@@ -708,8 +708,9 @@ repeats lagging runs during the qualification). `qualify.py analyze RESULTS --ma
 (after the warm-up of 240 steps, lag in phases 2-3 < delta, default 1 ms, and no catch-up), reports the
 lag per phase (p50/p99/p99.9/max of the per-step maxima, share >= delta) per cell (M, profile, K) and per
 method, the invalid-run rates with Fisher exact tests (methods, K = 1 against K = 3), the steal time of
-the vessels, and the paired TOST of K = 3 against K = 1 per cell and pooled on gamma (margin 0.005), phi
-(0.005) and Pi (0.05), from `RUN/outcomes.json` or from `RUN/vms/gs/dta.jsonl` with
+the vessels, and the paired TOST of K = 3 against K = 1 (signed differences) per cell and pooled on gamma
+(PICP, margin 0.005), phi (1 - DMR, 0.005) and Pi (PCR with denominator |N(t)|, 0.05), from
+`RUN/outcomes.json` or from `RUN/vms/gs/dta.jsonl` with
 `fleetdt.analysis.run_metrics` (after the warm-up). With 3 pairs per cell (t with 2 degrees of freedom)
 the per-cell TOST is equivalent only when the three differences agree within a small fraction of the
 margin; the pooled TOST has up to 30 pairs.

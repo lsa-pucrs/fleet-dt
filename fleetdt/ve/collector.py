@@ -194,7 +194,7 @@ class Assembler:
             g.order = [self.index[n] for n in self.dtp.order if n in self.index] or list(range(1, self.dtp.L + 1))
             g.needed = [self.index[n] for n in self.dtp.needed if n in self.index]
         if a:
-            for k in ("C_hat", "K_hat", "b", "U", "alpha"):
+            for k in ("C_hat", "K_hat", "b", "U", "alpha", "A"):
                 if k in a:
                     setattr(g, k, a[k])
         else:  # the VE reproduces eq. (2) and eq. (3)

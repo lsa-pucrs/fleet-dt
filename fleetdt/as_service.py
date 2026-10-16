@@ -2,7 +2,9 @@
 
 At start(t) + T1 the AS closes M(t), computes C_hat(t) (eq. 2), K_hat(t) and b(t) (eq. 3), runs
 Algorithm 1 over sigma_t and N(t), publishes (t, p(t)) on boat/b<i>/levels (QoS 1) for every i in M(t)
-and the JSON summary on fleet/as. The optional outer loop (fleetdt.outer, contribution (iv)) updates
+and the JSON summary on fleet/as. The decision (log line and fleet/as) holds D (the demand tables of M(t)),
+the table, and the admitted bytes a_i(t) of each vessel ("a") with their sum A(t) ("A"), which the backlog
+predictor of the outer loop replays (C5). The optional outer loop (fleetdt.outer, contribution (iv)) updates
 U and alpha from the DTA every `outer_every` steps; it runs in a child process (fleetdt.outer.run_job,
 SCHED_OTHER and nice 10), so its Python loops do not hold the GIL of the process that publishes p(t)
 and the real-time priority of the AS preempts it. Service.connect() returns after the SUBACK of the
@@ -183,9 +185,19 @@ class AS:
                 p_by, g = admission_b7(D, self.sigma, self.N, b)
                 dec["p_by"] = {i: p_by[i] for i in M}
                 dec["grants"] = {i: g[i] for i in M}
+                self._admitted(dec, D, {i: p_by[i] for i in M})
                 return dec
             dec["p"] = admission(D, self.sigma, self.N, b)            # Algorithm 1
+            self._admitted(dec, D, {i: dec["p"] for i in M})
             return dec
+
+    @staticmethod
+    def _admitted(dec: Dict, D: Dict[int, Sequence[int]], p_by: Dict[int, Sequence[int]]) -> None:
+        """a_i(t) = sum of d_il(t) over the topics of level 1 or 2 of vessel i (the final a_i of Algorithm 1)
+        and A(t) = sum_i a_i(t), the bytes that phase 3 of step t receives at most; the backlog predictor of
+        the outer loop (C5, fleetdt.outer.backlog) replays them."""
+        a = {str(i): int(sum(v for v, lev in zip(D[i], p_by[i]) if lev > 0)) for i in p_by}
+        dec["a"], dec["A"] = a, int(sum(a.values()))
 
     def set_params(self, U: Optional[float] = None, alpha: Optional[float] = None) -> None:
         with self.lock:
@@ -394,7 +406,7 @@ class Service:
             payload = encode_levels(dec["t"], dec["p"])
             for i in dec["M"]:
                 self.client.publish("boat/b%d/levels" % i, payload, qos=1)
-        keys = ("t", "C_hat", "K_hat", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants")
+        keys = ("t", "C_hat", "K_hat", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants", "a", "A")
         self.client.publish("fleet/as", json.dumps({k: dec[k] for k in keys if k in dec}, separators=(",", ":")),
                             qos=0)
 
