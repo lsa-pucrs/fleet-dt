@@ -144,7 +144,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     v.add_argument("--data-port", type=int, default=1884)
     v.add_argument("--bind", default="", help="address of both listeners (default: every address)")
     v.add_argument("--b2", action="store_true", help="baseline B2: listeners 1885 (AF41) and 1886 (EF)")
-    v.add_argument("--mode", default=None, help="plugin_opt_mode (fleetdt, b1, b2, b3, b5, slotted, tdma)")
+    v.add_argument("--mode", default=None,
+                   help="plugin_opt_mode (fleetdt, b1, b2, b3, b5, slotted, tdma, paper, paper_nopolice, paper_noeos)")
     v.add_argument("--log-dest", default=None, help="log_dest of the broker (e.g. 'file /tmp/m.log')")
     v.add_argument("--p1-spacing-us", type=int, default=None,
                    help="plugin_opt_p1_spacing_us: demand of vessel i at i * spacing after start(t) (default of "

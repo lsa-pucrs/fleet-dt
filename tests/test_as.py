@@ -132,19 +132,68 @@ def _free_port():
     return p
 
 
+def _wait(ev: threading.Event, what: str, timeout: float = 10.0) -> None:
+    if not ev.wait(timeout):
+        raise AssertionError("timeout waiting for %s" % what)
+
+
+def _client(mqtt, cid, port, subs=None):
+    """paho client connected to the test broker. Returns (client, connected, subscribed): the events are
+    set by CONNACK and by the SUBACK of `subs`, so the caller synchronizes on the broker itself."""
+    connected, subscribed = threading.Event(), threading.Event()
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cid)
+    tcp_nodelay(c)
+
+    def on_connect(cl, u, f, rc, props=None):
+        if subs:
+            cl.subscribe(subs)
+        connected.set()
+
+    c.on_connect = on_connect
+    c.on_subscribe = lambda cl, u, mid, rcs, props=None: subscribed.set()
+    c.connect_async("127.0.0.1", port)
+    c.loop_start()
+    return c, connected, subscribed
+
+
+def _start_broker(conf, port, timeout=10.0):
+    """Starts mosquitto and returns when it accepts TCP connections on `port` (no fixed sleep)."""
+    broker = subprocess.Popen([MOSQUITTO, "-c", str(conf)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    end = time.monotonic() + timeout
+    while True:
+        try:
+            socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
+            return broker
+        except OSError:
+            if broker.poll() is not None or time.monotonic() > end:
+                broker.terminate()
+                raise AssertionError("mosquitto did not open port %d" % port)
+            time.sleep(0.01)
+
+
 @pytest.mark.skipif(MOSQUITTO is None, reason="mosquitto not installed")
 def test_service_over_mqtt(tmp_path):
+    """The AS over a real broker: M(t), eq. (2), Algorithm 1, sigma_t and the phase-2 deadline.
+
+    Synchronization (the cause of the earlier flakiness): the test used fixed sleeps for the broker
+    start and never waited for the SUBACK of its own subscriber nor of the AS, and it fixed the epoch
+    before the setup ended, so a slow start (full suite, loaded host) shifted the first steps; it also
+    asserted the deadline T2 on the arrival time at the test subscriber, a thread of the same Python
+    process as the AS, so the scheduling delay of the test client (GIL and CPU contention with other
+    processes) counted as AS delay. Now the broker, the subscriber, the publisher and the AS are
+    synchronized on CONNACK and SUBACK events, the epoch is set after that, the AS runs exactly `steps`
+    steps (Service.run(steps)), the deadline T2 is checked on the publication instant that the AS
+    measures (pub_delay of the decision log, Section V-C), and the arrival at the subscriber is only
+    required to fall inside step t (after start(t) + T1, before start(t + 1))."""
     import paho.mqtt.client as mqtt
     port = _free_port()
     conf = tmp_path / "m.conf"
     conf.write_text("listener %d 127.0.0.1\nallow_anonymous true\nset_tcp_nodelay true\n" % port)
-    broker = subprocess.Popen([MOSQUITTO, "-c", str(conf)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    svc = None
+    broker = _start_broker(conf, port)
+    svc = sub = pub = None
+    run = None
     try:
-        time.sleep(0.4)
         dtp = DTP.load(ROOT / "dtp.json")
-        epoch = time.time() + 0.8
-        svc = Service(dtp, "127.0.0.1", port, epoch=epoch, log_path=str(tmp_path / "dec.jsonl"))
         got = []
         lock = threading.Lock()
 
@@ -152,26 +201,35 @@ def test_service_over_mqtt(tmp_path):
             with lock:
                 got.append((msg.topic, bytes(msg.payload), time.time()))
 
-        sub = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="test-sub-%d" % port)
-        tcp_nodelay(sub)
+        sub, sub_conn, sub_ack = _client(mqtt, "test-sub-%d" % port, port, [("boat/+/levels", 1), ("fleet/as", 0)])
         sub.on_message = on_msg
-        sub.on_connect = lambda c, u, f, rc, p=None: c.subscribe([("boat/+/levels", 1), ("fleet/as", 0)])
-        sub.connect("127.0.0.1", port)
-        sub.loop_start()
-        pub = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="test-pub-%d" % port)
-        tcp_nodelay(pub)
-        pub.connect("127.0.0.1", port)
-        pub.loop_start()
-        svc.start()
-        time.sleep(0.2)
+        pub, pub_conn, _ = _client(mqtt, "test-pub-%d" % port, port)
+        _wait(sub_conn, "CONNACK of the subscriber")
+        _wait(sub_ack, "SUBACK of the subscriber")
+        _wait(pub_conn, "CONNACK of the publisher")
+
+        # the AS: Service.connect() returns on CONNACK; its SUBACK (demand, throughput, order) arrives
+        # through on_subscribe, which Service does not use
+        svc = Service(dtp, "127.0.0.1", port, epoch=0.0, log_path=str(tmp_path / "dec.jsonl"))
+        svc_ack = threading.Event()
+        svc.client.on_subscribe = lambda c, u, mid, rcs, props=None: svc_ack.set()
+        svc.connect()
+        _wait(svc_ack, "SUBACK of the AS")
+        epoch = time.time() + 0.3            # every subscription is active: step 0 starts 0.3 s from now
+        svc.core.epoch = epoch               # read by run() and the deadlines; no step is open yet
+        steps = 20
+        run = threading.Thread(target=svc.run, kwargs={"steps": steps}, daemon=True)
+        run.start()
 
         rng = random.Random(7)
-        steps = 20
         L = dtp.L
+        video = {dtp.index(n) for n in dtp.topics if n.startswith("video")}
         valid = {}        # t -> {i: D_i(t)} expected in M(t)
         ys = {}
         order_from = 10
-        new_order = (["state", "gps", "imu", "video", "mag", "power", "baro"], ["state", "gps"])
+        # sigma with the needed topics first (state, gps), then the rest of the DTP order reversed
+        new_needed = ["state", "gps"]
+        new_order = (new_needed + [n for n in reversed(dtp.order) if n not in new_needed], new_needed)
 
         def wait_until(at):
             dt = at - time.time()
@@ -188,7 +246,7 @@ def test_service_over_mqtt(tmp_path):
                 pub.publish("fleet/order", json.dumps({"t": t, "order": new_order[0], "needed": new_order[1]}), qos=1)
             valid[t] = {}
             for i in (1, 2, 3):
-                d = [rng.randint(100, 3000) for _ in range(L - 1)] + [rng.randint(20_000, 140_000)]
+                d = [rng.randint(5_000, 20_000) if l in video else rng.randint(100, 3000) for l in range(1, L + 1)]
                 if i == 2 and t == 7:
                     pub.publish("boat/b2/demand", encode_demand(t, d[:-1]), qos=1)   # wrong L
                     continue
@@ -199,9 +257,11 @@ def test_service_over_mqtt(tmp_path):
             if t % 2 == 1:
                 wait_until(start + dtp.T1 + 0.004)
                 pub.publish("boat/b3/demand", encode_demand(t, [1] * L), qos=1)
+        run.join(timeout=steps * dtp.Ts + 5.0)
+        assert not run.is_alive(), "the AS did not finish its %d steps" % steps
         wait_until(epoch + steps * dtp.Ts + 0.1)
-        svc.stop()
         summary = svc.delay_summary()
+        svc.stop()
         svc = None
         sub.loop_stop()
         pub.loop_stop()
@@ -215,6 +275,10 @@ def test_service_over_mqtt(tmp_path):
             else:
                 t, p = decode_levels(payload)
                 levels[(t, int(topic.split("/")[1][1:]))] = (p, at)
+
+        lines = [json.loads(l) for l in (tmp_path / "dec.jsonl").read_text().splitlines()]
+        assert [r["t"] for r in lines if r.get("published")] == list(range(steps))
+        pub_delay = {r["t"]: r["pub_delay"] for r in lines if r.get("published")}
 
         C = dtp.C0
         sigma = [dtp.index(n) for n in dtp.order]
@@ -232,20 +296,23 @@ def test_service_over_mqtt(tmp_path):
             b = grant_limit(C, dtp.U, dtp.T3, dtp.Ts, o["m"])
             assert o["b"] == pytest.approx(b, rel=1e-12)
             p = admission(valid[t], sigma, N, o["b"])
-            assert o["p"] == p, t
+            assert o["p"] == p and len(p) == L, t
+            assert o["order"] == sigma and o["needed"] == N, t
             deadline = epoch + t * dtp.Ts + dtp.T1
+            assert pub_delay[t] < dtp.T2, (t, pub_delay[t])          # p(t) published within phase 2
             for i in valid[t]:
                 pl, at = levels[(t, i)]
                 assert pl == p
-                assert at - deadline < dtp.T2, (t, i, at - deadline)
+                assert deadline <= at < deadline - dtp.T1 + dtp.Ts, (t, i, at - deadline)   # inside step t
             assert not any(k == (t, 3) for k in levels) or 3 in valid[t]
         assert len({p_t for p_t in (tuple(fas[t][0]["p"]) for t in range(steps))}) > 1  # the decisions vary
         assert summary["n"] == steps and summary["max"] < dtp.T2
-        lines = [json.loads(l) for l in (tmp_path / "dec.jsonl").read_text().splitlines()]
-        assert [r["t"] for r in lines if r.get("published")] == list(range(steps))
     finally:
         if svc is not None:
             svc.stop()
+        for c in (sub, pub):
+            if c is not None:
+                c.loop_stop()
         broker.terminate()
         broker.wait(timeout=5)
 

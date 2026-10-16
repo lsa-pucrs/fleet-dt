@@ -23,7 +23,14 @@
  *
  *   fdt_chmon --dtp dtp.json --iface wlan0 --broker GS:1883 [--record samples.jsonl]
  *   fdt_chmon --dtp dtp.json --replay samples.jsonl [--fast] [--loop] (--broker H:P | --stdout)
+ *   fdt_chmon --dtp dtp.json --replay-stream FILE|-      samples as they arrive, y(t) on stdout
  *   fdt_chmon --iface wlan0 --dump        one reading of the counters, then exit
+ *
+ * The stream backend (--replay-stream) reads samples in the format of --record from a file, a FIFO or
+ * stdin ("-") as a producer appends them (the counter export of the emulator, emu/ns3/fdt-emu.cc
+ * --cnt, through fleetdt/monitor_adapter.py) and runs the pairing of the live loop: a sample read at
+ * the boundary start(t) (t = the step of its instant "at") closes step t - 1 when the previous sample
+ * belongs to step t - 1; compute() and emit() are the ones of the live loop.
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -378,11 +385,91 @@ static void emit(struct out *o, int64_t t, const struct result *r)
 #endif
 }
 
+/* ---------------------------------------------------------------- stream backend */
+
+/* one sample line, with the field rules of load_replay(); returns 0 when the line holds JSON */
+static int parse_sample_line(const char *line, struct sample *x)
+{
+	cJSON *o = cJSON_Parse(line);
+	if (!o)
+		return -1;
+	memset(x, 0, sizeof *x);
+	x->at_us = (int64_t)(jnum(o, "at") * 1e6);
+	const cJSON *sv = cJSON_GetObjectItemCaseSensitive(o, "survey");
+	x->have_survey = sv ? (cJSON_IsTrue(sv) || (cJSON_IsNumber(sv) && sv->valuedouble != 0)) : 1;
+	x->time_ms = (uint64_t)jnum(o, "time_ms");
+	x->busy_ms = (uint64_t)jnum(o, "busy_ms");
+	x->rx_bytes = (uint64_t)jnum(o, "rx_bytes");
+	x->tx_bytes = (uint64_t)jnum(o, "tx_bytes");
+	x->rx_packets = (uint32_t)(uint64_t)jnum(o, "rx_packets");
+	x->tx_packets = (uint32_t)(uint64_t)jnum(o, "tx_packets");
+	x->tx_failed = (uint32_t)(uint64_t)jnum(o, "tx_failed");
+	x->stations = (int)jnum(o, "stations");
+	cJSON_Delete(o);
+	return 0;
+}
+
+static int run_stream(const struct fdt_dtp *d, const char *path, const char *record)
+{
+	FILE *f = strcmp(path, "-") ? fopen(path, "r") : stdin;
+	if (!f) {
+		fprintf(stderr, "fdt_chmon: %s: %s\n", path, strerror(errno));
+		return 1;
+	}
+	FILE *rec = record ? fopen(record, "a") : NULL;
+	if (record && !rec) {
+		fprintf(stderr, "fdt_chmon: %s: %s\n", record, strerror(errno));
+		return 1;
+	}
+	struct sigaction sa;
+	memset(&sa, 0, sizeof sa);
+	sa.sa_handler = on_signal;
+	sigaction(SIGINT, &sa, NULL);
+	sigaction(SIGTERM, &sa, NULL);
+	struct out o;
+	memset(&o, 0, sizeof o);
+	o.to_stdout = 1;
+	struct sample prev, cur;
+	int have_prev = 0;
+	int64_t prev_t = 0;
+	uint64_t published = 0, gaps = 0, bad = 0;
+	char *line = NULL;
+	size_t ll = 0;
+	while (!stop && getline(&line, &ll, f) > 0) {
+		if (parse_sample_line(line, &cur)) {
+			bad++;
+			continue;
+		}
+		if (rec)
+			sample_json(rec, &cur);
+		int64_t t = fdt_step_at(d, cur.at_us);   /* the boundary start(t) at which the sample was read */
+		struct result r;
+		if (have_prev && prev_t == t - 1 && !compute(d, &prev, &cur, &r)) {
+			emit(&o, t - 1, &r);
+			published++;
+		} else if (have_prev) {
+			gaps++;
+		}
+		prev = cur;
+		prev_t = t;
+		have_prev = 1;
+	}
+	free(line);
+	if (rec)
+		fclose(rec);
+	if (f != stdin)
+		fclose(f);
+	fprintf(stderr, "fdt_chmon: stream published=%" PRIu64 " gaps=%" PRIu64 " unparsed=%" PRIu64 "\n",
+	        published, gaps, bad);
+	return 0;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
 	        "usage: fdt_chmon --dtp FILE (--iface IF | --replay FILE [--fast] [--loop]) [--broker HOST:PORT]\n"
 	        "                 [--topic fleet/throughput] [--stdout] [--record FILE] [--offset-ms MS] [--steps N]\n"
+	        "       fdt_chmon --dtp FILE --replay-stream FILE|- [--record FILE]\n"
 	        "       fdt_chmon --iface IF --dump\n");
 	exit(2);
 }
@@ -390,6 +477,7 @@ static void usage(void)
 int main(int argc, char **argv)
 {
 	const char *dtp_path = NULL, *iface = NULL, *replay = NULL, *record = NULL, *broker = NULL;
+	const char *stream = NULL;
 	int fast = 0, loop = 0, dump = 0, prio = 50;
 	double offset_ms = 0.5;
 	long long steps = -1;
@@ -400,9 +488,9 @@ int main(int argc, char **argv)
 		{"dtp", 1, 0, 'd'}, {"iface", 1, 0, 'i'}, {"replay", 1, 0, 'r'}, {"record", 1, 0, 'R'},
 		{"broker", 1, 0, 'b'}, {"topic", 1, 0, 't'}, {"stdout", 0, 0, 's'}, {"fast", 0, 0, 'f'},
 		{"loop", 0, 0, 'l'}, {"dump", 0, 0, 'D'}, {"offset-ms", 1, 0, 'o'}, {"steps", 1, 0, 'n'},
-		{"prio", 1, 0, 'p'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
+		{"prio", 1, 0, 'p'}, {"replay-stream", 1, 0, 'S'}, {"help", 0, 0, 'h'}, {0, 0, 0, 0}};
 	int c;
-	while ((c = getopt_long(argc, argv, "d:i:r:R:b:t:sflDo:n:p:h", lo, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "d:i:r:R:b:t:sflDo:n:p:S:h", lo, NULL)) != -1) {
 		switch (c) {
 		case 'd': dtp_path = optarg; break;
 		case 'i': iface = optarg; break;
@@ -417,6 +505,7 @@ int main(int argc, char **argv)
 		case 'o': offset_ms = atof(optarg); break;
 		case 'n': steps = atoll(optarg); break;
 		case 'p': prio = atoi(optarg); break;
+		case 'S': stream = optarg; break;
 		default: usage();
 		}
 	}
@@ -441,7 +530,7 @@ int main(int argc, char **argv)
 		sample_json(stdout, &s);
 		return s.have_survey ? 0 : 3;
 	}
-	if (!dtp_path || (!iface == !replay))
+	if (!dtp_path || (stream ? (iface || replay) : (!iface == !replay)))
 		usage();
 	struct fdt_dtp d;
 	char err[256];
@@ -453,6 +542,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "fdt_chmon: R_PHY must be positive\n");
 		return 1;
 	}
+	if (stream)
+		return run_stream(&d, stream, record);
 	struct sample *rs = NULL;
 	size_t nrs = 0;
 	if (replay && (load_replay(replay, &rs, &nrs) || nrs < 2)) {

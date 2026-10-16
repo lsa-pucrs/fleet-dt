@@ -9,16 +9,22 @@
  * --idle steps, and 0 for the others (a topic whose publisher is down claims no
  * part of the channel). With --idle 0 every topic claims its demand.
  *
+ * --jitter-ms J (default 0) adds the jitter allowance of the sources to the bound:
+ * n_l = ceil(r_l (Ts + J)). The vessel regulator in mode paper with plugin_opt_demand
+ * external polices each topic to the d_{i,l}(t) published here, so the allowance has to be
+ * inside this value.
+ *
  * The publication instant follows clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME)
  * under SCHED_FIFO (when the process holds CAP_SYS_NICE), so it does not drift.
  *
  *   fdt_dti --dtp /etc/fleetdt/dtp.json --vessel 1 [--broker 127.0.0.1:1883]
- *           [--offset-ms 1] [--idle 8] [--prio 50] [--steps N] [--verbose]
+ *           [--offset-ms 1] [--idle 8] [--jitter-ms 0] [--prio 50] [--steps N] [--verbose]
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <getopt.h>
 #include <inttypes.h>
+#include <math.h>
 #include <sched.h>
 #include <signal.h>
 #include <pthread.h>
@@ -77,7 +83,7 @@ static void on_message(struct mosquitto *m, void *u, const struct mosquitto_mess
 static void usage(void)
 {
 	fprintf(stderr, "usage: fdt_dti --dtp FILE --vessel I [--broker HOST:PORT] [--offset-ms MS] "
-	                "[--idle STEPS] [--prio P] [--steps N] [--verbose]\n");
+	                "[--idle STEPS] [--jitter-ms MS] [--prio P] [--steps N] [--verbose]\n");
 	exit(2);
 }
 
@@ -86,14 +92,15 @@ int main(int argc, char **argv)
 	const char *dtp_path = NULL;
 	char host[128] = "127.0.0.1";
 	int port = 1883, idle = 8, prio = 50, verbose = 0;
-	double offset_ms = 1.0;
+	double offset_ms = 1.0, jitter_ms = 0.0;
 	long long steps = -1;
 	static const struct option lo[] = {
 		{"dtp", 1, 0, 'd'}, {"vessel", 1, 0, 'v'}, {"broker", 1, 0, 'b'}, {"offset-ms", 1, 0, 'o'},
-		{"idle", 1, 0, 'i'}, {"prio", 1, 0, 'p'}, {"steps", 1, 0, 'n'}, {"verbose", 0, 0, 'V'},
+		{"idle", 1, 0, 'i'}, {"jitter-ms", 1, 0, 'j'}, {"prio", 1, 0, 'p'}, {"steps", 1, 0, 'n'},
+		{"verbose", 0, 0, 'V'},
 		{"help", 0, 0, 'h'}, {0, 0, 0, 0}};
 	int c;
-	while ((c = getopt_long(argc, argv, "d:v:b:o:i:p:n:Vh", lo, NULL)) != -1) {
+	while ((c = getopt_long(argc, argv, "d:v:b:o:i:j:p:n:Vh", lo, NULL)) != -1) {
 		switch (c) {
 		case 'd': dtp_path = optarg; break;
 		case 'v': vessel = atoi(optarg[0] == 'b' ? optarg + 1 : optarg); break;
@@ -109,6 +116,7 @@ int main(int argc, char **argv)
 		}
 		case 'o': offset_ms = atof(optarg); break;
 		case 'i': idle = atoi(optarg); break;
+		case 'j': jitter_ms = atof(optarg); break;
 		case 'p': prio = atoi(optarg); break;
 		case 'n': steps = atoll(optarg); break;
 		case 'V': verbose = 1; break;
@@ -132,8 +140,18 @@ int main(int argc, char **argv)
 	char topic[96];
 	snprintf(topic, sizeof topic, "boat/b%d/demand", vessel);
 	uint32_t dmax[FDT_L_MAX];
+	if (jitter_ms < 0) {
+		fprintf(stderr, "fdt_dti: the jitter must be >= 0\n");
+		return 2;
+	}
 	for (int l = 0; l < dtp.L; l++) {
-		dmax[l] = fdt_demand(&dtp, l);
+		if (jitter_ms > 0) {   /* n_l = ceil(r_l (Ts + J)), the rest as fdt_demand() */
+			double n = ceil(dtp.topic[l].rate * (dtp.Ts + jitter_ms * 1e-3) - 1e-9);
+			double v = ceil(dtp.c_b * (n * (double)dtp.topic[l].bound + FDT_STEP_HEADER * n) + dtp.c_m * n - 1e-9);
+			dmax[l] = v > 4294967295.0 ? 4294967295u : (uint32_t)v;
+		} else {
+			dmax[l] = fdt_demand(&dtp, l);
+		}
 		last_raw[l] = INT64_MIN / 2;
 	}
 
@@ -168,8 +186,8 @@ int main(int argc, char **argv)
 		fprintf(stderr, "fdt_dti: SCHED_FIFO unavailable (%s), running under SCHED_OTHER\n", strerror(errno));
 	mlockall(MCL_CURRENT | MCL_FUTURE);
 
-	fprintf(stderr, "fdt_dti: vessel %d, L=%d, epoch=%.3f, Ts=%.3f s, offset=%.3f ms, idle=%d steps, broker %s:%d\n",
-	        vessel, dtp.L, dtp.epoch, dtp.Ts, offset_ms, idle, host, port);
+	fprintf(stderr, "fdt_dti: vessel %d, L=%d, epoch=%.3f, Ts=%.3f s, offset=%.3f ms, idle=%d steps, jitter=%.3f ms, "
+	        "broker %s:%d\n", vessel, dtp.L, dtp.epoch, dtp.Ts, offset_ms, idle, jitter_ms, host, port);
 	int64_t t = fdt_step_at(&dtp, fdt_now_us()) + 1;
 	uint64_t published = 0, late = 0;
 	int64_t late_max = 0;

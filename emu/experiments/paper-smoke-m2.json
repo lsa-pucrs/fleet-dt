@@ -1,0 +1,19 @@
+{
+ "kind": "fleet",
+ "stack": "paper",
+ "name": "paper-smoke-m2",
+ "M": 2,
+ "Ts": 0.125,
+ "seed": 1,
+ "steps": 480,
+ "lead_s": 15,
+ "dtp": "dtp.json",
+ "scenario": "emu/scenarios/S1-m2.json",
+ "plugin_mode": "paper",
+ "as": {"U": 0.8},
+ "outer": {"every": 480, "window": 480, "target": 0.99},
+ "dti": {"enabled": true, "offset_ms": 1.0, "stagger_ms": 0.0, "idle": 8},
+ "jmcs": {"period_s": 10, "first": "survey", "video_prefix": "video"},
+ "monitor": {"offset_us": 500, "jitter_us": 300, "quant": "harvest", "harvest_ms": 0, "sigma": 0.0, "backend": "auto"},
+ "source": {"scale": 1.0, "size": "random", "min_frac": 0.5}
+}

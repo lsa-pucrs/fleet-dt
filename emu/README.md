@@ -10,7 +10,8 @@ every PHY event.
 |---|---|
 | `ns3/fdt-emu.cc`, `ns3/minijson.h` | emulator (copied to `scratch/fdt-emu/` of the ns-3 tree by `run.py build`) |
 | `run.py` | orchestrator: `build`, `image`, `up`, `sync`, `ssh`, `run`, `status`, `down`; `--slot K` for parallel sessions |
-| `fleet.py` | one Fleet-DT run of the whole stack (`run.py run` of an experiment with `"kind": "fleet"`) |
+| `fleet.py` | one Fleet-DT run of the whole stack (`run.py run` of an experiment with `"kind": "fleet"`); `--stack paper` (default) or `--stack as2` |
+| `jmcs_stub.py` | operation control stub of the paper stack: `fleet/order` (sigma_t, N(t)) every step, survey/transit every 10 s |
 | `experiments/matrix.py`, `runner.py`, `calibrate.py`, `dtp_base.json` | experiment matrix of Section VI (E0 to E4, saturation and pilot), parallel runner with a resumable manifest, calibration (rho, lambda, gamma, scores, Z of B4) |
 | `analysis/gtstep.py`, `metrics.py`, `stats.py`, `report.py` | ground truth per step, metrics of a run, statistics, hypothesis tests, LaTeX tables and PDF figures |
 | `scenarios/gen.py`, `scenarios/S<k>-m<M>.json` | channel scenarios S1 to S5 (seeded) and their seed-1 files for M = 2, 4, 8 |
@@ -22,7 +23,7 @@ every PHY event.
 | `scenarios/*.json` | channel scenarios |
 | `experiments/*.json` | experiment files for `run.py run` |
 | `tools/mqtt_load.py`, `tools/mon_capture.py` | load/measurement clients (in the VMs) and host capture of `fleet/monitor` |
-| `validation/` | `bianchi.sh` (ns-3 wifi-bianchi), `edca_sat.sh` (fdt-emu saturation), `eta.py` (paper model), `monitor_vs_gt.py` |
+| `validation/` | `bianchi.sh` (ns-3 wifi-bianchi), `edca_sat.sh` (fdt-emu saturation), `eta.py` (paper model), `monitor_vs_gt.py`, `counters_vs_gt.py` (y(t) of the nl80211 counters against gt.bin) |
 
 ## Running
 
@@ -61,10 +62,95 @@ and the experiment's `vars`. Between runs an idle emulator (no ground truth) kee
 Offline (no VMs, not in real time), e.g. for validation:
 `ns3.48-fdt-emu-optimized --scenario=S --outdir=D --vms=0 --rt=none --monitor=none --selftest=RATE_BPS,SIZE --duration=T`.
 
-## Fleet-DT runs and the experiments of Section VI
+## Paper stack (`fleet.py --stack paper`, the default)
 
-A fleet experiment (`"kind": "fleet"`, written by `experiments/matrix.py`) runs the whole stack of
-SPEC_v2.md in one session (`fleet.py`):
+`emu/run.py run EXP.json [--stack paper|as2]` runs a fleet experiment on the stack of `--stack`, else on
+the `"stack"` of the experiment, else on the paper stack. The experiments of `experiments/matrix.py`
+(older model) carry no `"stack"`: run them with `--stack as2` (the paper stack refuses their DTP v2).
+The paper stack runs the model of the paper (Sections III to V):
+
+| Host | Programs (per run) |
+|---|---|
+| GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel), the AS `fleetdt.as_service` (Algorithm 1, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`) |
+| vessel VM i | Mosquitto with `fdt_regulator.so` in `plugin_opt_mode paper` (or `paper_nopolice`, `paper_noeos` by `"plugin_mode"`), `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_demand external`; the v1 DTI program `build/fdt_dti` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the sources (`vessel/publishers/raw_load.py`, or `"source": {"cmd": ...}`) |
+| host | emulator with the ground truth and the nl80211 counter export (`--cnt`, `--cntDst` = 127.0.0.1:9650+K), `fleetdt.monitor_adapter` (y(t) on `fleet/throughput` through 127.0.0.1:2883+K), monitor bridge and capture (ground truth), clock probe |
+
+Steps are 0-based on every program of this stack: start(t) = epoch + t Ts (the DTP epoch; null =
+2026-01-01T00:00:00Z). The run picks S0 at least `lead_s` ahead, passes `--runStartUs` = start(S0) to the
+emulator (the counter reads fall at start(t) + `monitor.offset_us` + U[0, `monitor.jitter_us`]) and stops
+after `steps` steps. The paper stack starts the adapter, the emulator, the brokers, waits for the 2M
+bridges, then the VE, the JMCS stub, the AS, the DTI programs and the sources.
+
+Experiment fields (example: `experiments/paper-smoke-m2.json`; `"dtp"` and `"scenario"` may be objects or
+repository paths, a DTP path gets `"vessels"` = 1..M):
+
+| Field | Meaning (default) |
+|---|---|
+| `dtp` | DTP of the paper (SPEC.md: topics with `rate` and `bound`); a DTP v2 is refused (use `--stack as2`) |
+| `plugin_mode`, `plugin_opts` | `paper`; extra `plugin_opt_<k> <v>` lines of the vessel brokers |
+| `as` | `U`, `alpha` (override the DTP), `extra` (arguments of `fleetdt.as_service`) |
+| `outer` | `every`, `window`, `target` (0.99); `dta_file`: a DTA of earlier runs (host path) instead of the DTA of the run |
+| `dti` | `enabled` (true; false: the plugin publishes D_i(t), `plugin_opt_demand internal`), `offset_ms` (1), `stagger_ms` (0, added per vessel index), `idle` (8) |
+| `jmcs` | `period_s` (10), `first` (survey), `offset_ms` (2), `video_prefix` (video), `modes` (explicit orders) |
+| `monitor` | `offset_us` (500), `jitter_us` (0), `quant` (harvest or cumulative), `harvest_ms` (0), `sigma` (0; 0.02, 0.05), `noise_seed` (seed), `backend` (auto, c, py) |
+| `source` | `scale`, `size`, `min_frac`, `topics` of `raw_load.py`, or `cmd` (template with `{dtp}`, `{vessel}`, `{seed}`, `{t0}`, `{duration}`, `{run}`) |
+| `stack_commit` | refuse the run unless the checkout is this commit and the files of the stack are unchanged |
+
+RUN/result.json records `stack`, `revision` (git `commit`, `branch`, `describe`, `dirty`, `dirty_stack`:
+the files of the stack that differ from the commit, the tree digest, and `stack_files`: sha256 of every
+file of the stack), `dtp_sha256`, `monitor` (with `backend_used`), `chmon_host_sha256`, `plugin_mode`,
+`demand`, `commands` (the command lines of the run), S0, t0 and the emulator summary (with `nl80211`).
+RUN/ also holds `throughput.jsonl` (each published y(t) with its publication time), `counters_rx.jsonl`
+(the counter reads that reached the adapter), `monitor_adapter.log`, `emu/counters.jsonl` (every read of
+the emulator) and `vms/<host>/` (`as.jsonl`, `dta.jsonl`, `order.jsonl`, `regulator.jsonl`, broker logs).
+
+### y(t) of R6 from nl80211 counters
+
+The emulator exports only what nl80211 gives on a deployed AP (`fdt-emu --cnt=TS_US:OFF_US[:JITTER_US]`):
+the survey of the channel in use (active and busy time in whole ms) and, per associated vessel, RX/TX
+bytes, RX/TX packets, tx_failed and tx_retries, read at the step boundaries with a uniform read jitter;
+one JSON line per read in the sample format of `fdt_chmon --record` (the sums over the stations, as
+fdt_chmon sums a station dump, plus `"sta"`). The counter semantics follow mac80211 + ath9k:
+
+| Counter | Emulated as |
+|---|---|
+| survey busy | union of the AP PHY TX, RX and primary-channel CCA-busy periods (rx_clear) |
+| survey time | radio-on time |
+| quantization | `--cntQuant=harvest` (ath9k): each harvest adds floor(time since the last harvest / 1 ms) and drops the remainder; harvests at each read and every `--cntHarvestMs` (ANI poll; 0: off). `cumulative`: floor(total / 1 ms) |
+| rx_bytes, rx_packets | unicast data, QoS-null and management frames received without error from the vessel, duplicates (Retry bit and the sequence control of the last frame of the TID) left out; bytes = MPDU without FCS |
+| tx_bytes, tx_packets | the same frames sent to the vessel, once per MPDU at its first transmission (Retry bit clear) |
+| tx_failed | MPDUs dropped at the retry limit, or at the lifetime after a failed transmission |
+| station entry | leaves the dump when the vessel deassociates, returns with zeroed counters |
+
+`fleetdt.monitor_adapter` (host) receives the reads (UDP), pairs consecutive reads as the live loop of
+`fdt_chmon` does (a read at start(t) closes step t - 1) and computes y(t) = R_PHY (Ts - Tb + To) / 8 with
+the unchanged `compute()` of `radio/channel_monitor/fdt_chmon.c`: backend `c` runs `fdt_chmon
+--replay-stream -` built for the host by `radio/channel_monitor/build_host.sh` (`build/fdt_chmon_host`,
+built by `fleet.py` before each run); backend `py` is the line-by-line port in the adapter
+(`tests/test_monitor_adapter.py` checks that both print the same lines). With `monitor.sigma` > 0 the
+adapter multiplies y by (1 + sigma e), e ~ N(0, 1) (seeded), and keeps the noise-free value in `"y0"`.
+It publishes `{"t", "y", "Tb", "To"}` (QoS 0) on `fleet/throughput`, the format that
+`fleetdt.as_service` parses.
+
+Validation against the ground truth of the same run:
+`python3 emu/validation/counters_vs_gt.py RUN/emu/counters.jsonl RUN/emu/gt.bin --dtp RUN/dtp.json --y RUN/throughput.jsonl`
+compares y_cnt with y_model (exact busy time, 8 (MPDU bytes + h_W) / R_PHY of every acknowledged unique
+MPDU: the error of the counters), y_phy (exact busy time and measured airtime: Section V-B with the true
+durations) and y_step (y_phy over the nominal step). Offline, without VMs:
+
+```sh
+B=$NS3/build/scratch/fdt-emu/ns3.48-fdt-emu-optimized
+$B --scenario=emu/scenarios/S3-m2.json --outdir=D --vms=0 --rt=none --monitor=none \
+   --selftest=4000000,1400 --selftestDown=2000000,1200 --duration=40 --runStartUs=U --cnt=125000:500:2000
+python3 emu/validation/counters_vs_gt.py D/counters.jsonl D/gt.bin --dtp dtp.json
+```
+
+(`--selftestDown=RATE_BPS,SIZE` adds downlink sources of the GS to every vessel, so the TX counters see
+traffic; `U` = a step start, e.g. start(floor((now - epoch) / Ts) + 1) in microseconds.)
+
+## Fleet-DT runs and the experiments of Section VI (stack as2)
+
+A fleet experiment of the older model (`"kind": "fleet"`, written by `experiments/matrix.py`) runs the whole stack of SPEC_v2.md in one session (`fleet.py --stack as2`):
 
 | Host | Programs (per run) |
 |---|---|
@@ -135,6 +221,8 @@ published) and `cJSON-1.7.19.tar.gz` = GitHub tag archive v1.7.19.
 | Monitor | every 5 ms (`monitor_period_ms`), UDP JSON batch of SPEC 4.3 to `--monitor` (127.0.0.1:9550) |
 | Run start | `--runStartUs=U`: the times of the interference schedules and of the waypoints count from the host time U (the start of the first step of a run); before it, a node stays at its first waypoint |
 | Phase batches | `--flush=TS_US:OFF_US,...`: extra monitor batches at the host times U + k TS + OFF (fleet runs: 2.5 ms after the end of Q(t) and of W(t)), so that the AS has every record of Q(t) at phase 2 |
+| nl80211 counters | `--cnt=TS_US:OFF_US[:JITTER_US]`: reads of the AP counters at U + k TS + OFF + U[0, JITTER] (own generator, `--cntSeed`), one JSON line each to `OUTDIR/counters.jsonl` (`--cntFile`) and as a UDP datagram to `--cntDst`; `--cntQuant`, `--cntHarvestMs` (see "y(t) of R6 from nl80211 counters"); `summary.json` `nl80211` |
+| Self test | `--selftest=RATE_BPS,SIZE` uplink and `--selftestDown=RATE_BPS,SIZE` downlink UDP sources (no VMs) |
 
 ### Monitor batch (PR6)
 

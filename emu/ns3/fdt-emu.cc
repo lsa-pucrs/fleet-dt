@@ -14,6 +14,10 @@
 //   lag.txt      every 10 ms: simulator time (us) and lag = wall clock - (origin + simulator time) (us)
 //   summary.json counters, lag statistics, configuration report
 //   monitor      UDP JSON batches (SPEC_v2 4.3) every 5 ms to --monitor (monitor_bridge.py)
+//   counters.jsonl  with --cnt: the nl80211 counters of the AP (survey busy/active time in whole ms,
+//                station bytes, packets, tx_failed) read at the step boundaries, one JSON line per read
+//                in the sample format of fdt_chmon --record; also sent as UDP datagrams to --cntDst
+//                (fleetdt/monitor_adapter.py computes y(t) from them)
 //
 // Usage (from the ns-3 tree):  ./ns3 run "fdt-emu --scenario=S.json --outdir=D --basePort=41000"
 
@@ -44,6 +48,8 @@
 #include <deque>
 #include <functional>
 #include <fcntl.h>
+#include <map>
+#include <random>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <time.h>
@@ -665,12 +671,342 @@ class Monitor
     }
 };
 
+// ---------------------------------------------------------------------------------------------
+// nl80211 counter export of the AP (paper R6, Section V-B)
+//
+// Only what the driver of a deployed AP (mac80211 + ath9k) gives through nl80211, read at the step
+// boundaries as radio/channel_monitor/fdt_chmon.c reads it:
+//   survey of the channel in use: NL80211_SURVEY_INFO_TIME and NL80211_SURVEY_INFO_TIME_BUSY, whole ms
+//   station dump of every associated vessel: RX/TX bytes (64 bit), RX/TX packets, TX failed and
+//   TX retries (32 bit)
+// One read = one JSON line in the sample format of `fdt_chmon --record` (sums over the stations, the
+// way fdt_chmon sums a station dump) plus the counters of each station in "sta". The busy intervals
+// and the per-frame success flags of the monitor stream (ground truth) do not enter the record.
+//
+// Semantics of the emulated counters:
+//   busy        union of the AP PHY TX, RX and primary-channel CCA-busy periods (rx_clear)
+//   time        radio-on time (simulator time since the start of the emulator)
+//   quantization "harvest" (ath9k, default): at each harvest (each read, and every cntHarvestMs > 0,
+//               the ANI poll) the driver adds floor(time since the last harvest / 1 ms) to each
+//               counter and drops the remainder; "cumulative": floor(total time / 1 ms)
+//   rx_*        unicast data, QoS-null and management frames that the AP receives without error from
+//               the station, without duplicates (Retry bit set and the sequence control of the last
+//               frame of the same TID, as mac80211 drops them before it counts), bytes = MPDU without
+//               FCS (skb->len)
+//   tx_*        unicast data, QoS-null and management frames that the AP sends to the station, once per
+//               MPDU at its first transmission (Retry bit clear), bytes = MPDU without FCS
+//   tx_failed   MPDUs to the station dropped at the retry limit, or at the lifetime after at least one
+//               failed transmission (Retry bit set)
+//   tx_retries  transmissions with the Retry bit set
+//   a station that deassociates leaves the dump and comes back with zeroed counters
+// Read instants: runStartUs + k TS + OFF + U[0, JITTER] (host clock), one uniform draw per read from
+// a generator of its own (seeded by cntSeed), so the random streams of the channel model do not change.
+
+int64_t
+FloorDiv(int64_t a, int64_t b)
+{
+    int64_t q = a / b;
+    return (a % b != 0 && ((a < 0) != (b < 0))) ? q - 1 : q;
+}
+
+struct StaCounters
+{
+    bool assoc = false;
+    uint64_t rxBytes = 0, txBytes = 0;
+    uint32_t rxPackets = 0, txPackets = 0, txFailed = 0, txRetries = 0, rxDup = 0;
+    std::map<uint8_t, uint16_t> lastSeqCtl; // TID (16: non-QoS) -> sequence control of the last frame
+};
+
+class Nl80211Counters;
+Nl80211Counters* g_cnt = nullptr;
+
+class Nl80211Counters
+{
+  public:
+    int m_sock = -1;
+    sockaddr_in m_dst{};
+    FILE* m_file = nullptr;
+    int64_t m_stepNs = 125000000, m_offNs = 500000, m_jitterNs = 0;
+    int64_t m_epochSimNs = 0; // simulator time of a step start (runStartUs)
+    bool m_cumulative = false;
+    int64_t m_harvestNs = 0;
+    std::mt19937_64 m_rng{1};
+    Mac48Address m_apMac;
+    std::vector<StaCounters> m_sta; // node index 1..M
+    uint64_t m_reads = 0, m_sendErr = 0;
+
+    // busy timeline: total of the closed intervals and the open one
+    int64_t m_closedNs = 0, m_curS = -1, m_curE = -1;
+    // survey counters (ms) and the state of the last harvest
+    uint64_t m_timeMs = 0, m_busyMs = 0;
+    int64_t m_lastHarvestNs = 0, m_lastBusyNs = 0;
+    int64_t m_k = 0; // index of the next read
+
+    void Busy(int64_t s, int64_t e)
+    {
+        if (e <= s)
+        {
+            return;
+        }
+        if (m_curS < 0 || s > m_curE)
+        {
+            if (m_curS >= 0)
+            {
+                m_closedNs += m_curE - m_curS;
+            }
+            m_curS = s;
+            m_curE = e;
+        }
+        else
+        {
+            m_curE = std::max(m_curE, e);
+        }
+    }
+
+    int64_t BusyNs(int64_t at) const
+    {
+        int64_t b = m_closedNs;
+        if (m_curS >= 0 && at > m_curS)
+        {
+            b += std::min(at, m_curE) - m_curS;
+        }
+        return b;
+    }
+
+    void Harvest(int64_t at)
+    {
+        int64_t busy = BusyNs(at);
+        m_timeMs += uint64_t((at - m_lastHarvestNs) / 1000000);
+        m_busyMs += uint64_t((busy - m_lastBusyNs) / 1000000);
+        m_lastHarvestNs = at;
+        m_lastBusyNs = busy;
+    }
+
+    void PeriodicHarvest()
+    {
+        Harvest(NowNs());
+        Simulator::Schedule(NanoSeconds(m_harvestNs), &Nl80211Counters::PeriodicHarvest, this);
+    }
+
+    static bool Counted(const FrameInfo& fi)
+    {
+        return fi.kind == 0 || fi.kind == 2 || fi.kind == 6; // data, management, QoS/null
+    }
+
+    StaCounters* Sta(const Mac48Address& a)
+    {
+        int n = NodeOf(a);
+        if (n < 1 || n > int(g_M) || !m_sta[n].assoc)
+        {
+            return nullptr;
+        }
+        return &m_sta[n];
+    }
+
+    // a PSDU that the AP starts to send (size with FCS)
+    void ApTx(const FrameInfo& fi)
+    {
+        if (fi.hdr.GetAddr1().IsGroup() || !Counted(fi))
+        {
+            return;
+        }
+        StaCounters* s = Sta(fi.hdr.GetAddr1());
+        if (!s)
+        {
+            return;
+        }
+        if (fi.hdr.IsRetry())
+        {
+            s->txRetries++;
+        }
+        else
+        {
+            s->txPackets++;
+            s->txBytes += fi.size >= 4 ? fi.size - 4 : 0;
+        }
+    }
+
+    // a frame that the AP receives without error (size with FCS)
+    void ApRx(const FrameInfo& fi)
+    {
+        if (fi.hdr.GetAddr1() != m_apMac || !Counted(fi))
+        {
+            return;
+        }
+        StaCounters* s = Sta(fi.hdr.GetAddr2());
+        if (!s)
+        {
+            return;
+        }
+        uint8_t tid = fi.hdr.IsQosData() ? fi.hdr.GetQosTid() : 16;
+        uint16_t sc = fi.hdr.GetSequenceControl();
+        auto it = s->lastSeqCtl.find(tid);
+        if (fi.hdr.IsRetry() && it != s->lastSeqCtl.end() && it->second == sc)
+        {
+            s->rxDup++;
+            return;
+        }
+        s->lastSeqCtl[tid] = sc;
+        s->rxPackets++;
+        s->rxBytes += fi.size >= 4 ? fi.size - 4 : 0;
+    }
+
+    void ApDropped(WifiMacDropReason reason, Ptr<const WifiMpdu> mpdu)
+    {
+        const WifiMacHeader& h = mpdu->GetHeader();
+        if (h.GetAddr1().IsGroup() || !(h.IsData() || h.IsMgt()))
+        {
+            return;
+        }
+        bool failed = reason == WIFI_MAC_DROP_REACHED_RETRY_LIMIT ||
+                      (reason == WIFI_MAC_DROP_EXPIRED_LIFETIME && h.IsRetry());
+        StaCounters* s = Sta(h.GetAddr1());
+        if (failed && s)
+        {
+            s->txFailed++;
+        }
+    }
+
+    void SetAssoc(int node, bool on)
+    {
+        if (node < 1 || node > int(g_M))
+        {
+            return;
+        }
+        if (!on || !m_sta[node].assoc)
+        {
+            m_sta[node] = StaCounters(); // a new station entry starts from zero
+        }
+        m_sta[node].assoc = on;
+    }
+
+    int64_t ReadAt(int64_t k)
+    {
+        int64_t j = 0;
+        if (m_jitterNs > 0)
+        {
+            j = std::uniform_int_distribution<int64_t>(0, m_jitterNs)(m_rng);
+        }
+        return m_epochSimNs + k * m_stepNs + m_offNs + j;
+    }
+
+    void Start()
+    {
+        NS_ABORT_MSG_IF(m_stepNs <= 0 || m_offNs < 0 || m_offNs + m_jitterNs >= m_stepNs,
+                        "--cnt: need TS > 0 and 0 <= OFF, OFF + JITTER < TS");
+        int64_t now = NowNs();
+        m_k = FloorDiv(now - m_epochSimNs - m_offNs, m_stepNs) + 1;
+        int64_t at = ReadAt(m_k);
+        Simulator::Schedule(NanoSeconds(at - now), &Nl80211Counters::Read, this);
+        if (!m_cumulative && m_harvestNs > 0)
+        {
+            Simulator::Schedule(NanoSeconds(m_harvestNs), &Nl80211Counters::PeriodicHarvest, this);
+        }
+    }
+
+    void Read()
+    {
+        int64_t now = NowNs();
+        uint64_t timeMs, busyMs;
+        if (m_cumulative)
+        {
+            timeMs = uint64_t(now / 1000000);
+            busyMs = uint64_t(BusyNs(now) / 1000000);
+        }
+        else
+        {
+            Harvest(now);
+            timeMs = m_timeMs;
+            busyMs = m_busyMs;
+        }
+        uint64_t rxb = 0, txb = 0;
+        uint32_t rxp = 0, txp = 0, txf = 0; // 32-bit sums, as fdt_chmon sums a station dump
+        int nsta = 0;
+        std::string sta;
+        char buf[320];
+        for (uint32_t n = 1; n <= g_M; n++)
+        {
+            const StaCounters& s = m_sta[n];
+            if (!s.assoc)
+            {
+                continue;
+            }
+            rxb += s.rxBytes;
+            txb += s.txBytes;
+            rxp += s.rxPackets;
+            txp += s.txPackets;
+            txf += s.txFailed;
+            snprintf(buf,
+                     sizeof buf,
+                     "%s{\"i\":%u,\"rx_bytes\":%llu,\"tx_bytes\":%llu,\"rx_packets\":%u,\"tx_packets\":%u,"
+                     "\"tx_failed\":%u,\"tx_retries\":%u}",
+                     nsta ? "," : "",
+                     n,
+                     (unsigned long long)s.rxBytes,
+                     (unsigned long long)s.txBytes,
+                     s.rxPackets,
+                     s.txPackets,
+                     s.txFailed,
+                     s.txRetries);
+            sta += buf;
+            nsta++;
+        }
+        int64_t us = HostUs(now);
+        std::string js;
+        js.reserve(256 + sta.size());
+        snprintf(buf,
+                 sizeof buf,
+                 "{\"at\":%lld.%06lld,\"survey\":1,\"time_ms\":%llu,\"busy_ms\":%llu,\"rx_bytes\":%llu,"
+                 "\"tx_bytes\":%llu,\"rx_packets\":%u,\"tx_packets\":%u,\"tx_failed\":%u,\"stations\":%d,"
+                 "\"sta\":[",
+                 (long long)(us / 1000000),
+                 (long long)(us % 1000000),
+                 (unsigned long long)timeMs,
+                 (unsigned long long)busyMs,
+                 (unsigned long long)rxb,
+                 (unsigned long long)txb,
+                 rxp,
+                 txp,
+                 txf,
+                 nsta);
+        js += buf;
+        js += sta;
+        js += "]}\n";
+        if (m_sock >= 0 &&
+            sendto(m_sock, js.data(), js.size(), MSG_DONTWAIT, (sockaddr*)&m_dst, sizeof m_dst) < 0)
+        {
+            m_sendErr++;
+        }
+        if (m_file)
+        {
+            fputs(js.c_str(), m_file);
+        }
+        m_reads++;
+        m_k++;
+        int64_t at = ReadAt(m_k);
+        Simulator::Schedule(NanoSeconds(at - now), &Nl80211Counters::Read, this);
+    }
+};
+
+void
+OnApDroppedMpdu(WifiMacDropReason reason, Ptr<const WifiMpdu> mpdu)
+{
+    if (g_cnt)
+    {
+        g_cnt->ApDropped(reason, mpdu);
+    }
+}
+
 class MonListener : public WifiPhyListener
 {
   public:
     void NotifyRxStart(Time d) override
     {
         g_mon->Busy(NowNs(), NowNs() + d.GetNanoSeconds());
+        if (g_cnt)
+        {
+            g_cnt->Busy(NowNs(), NowNs() + d.GetNanoSeconds());
+        }
     }
 
     void NotifyRxEndOk() override
@@ -684,6 +1020,10 @@ class MonListener : public WifiPhyListener
     void NotifyTxStart(Time d, dBm_u) override
     {
         g_mon->Busy(NowNs(), NowNs() + d.GetNanoSeconds());
+        if (g_cnt)
+        {
+            g_cnt->Busy(NowNs(), NowNs() + d.GetNanoSeconds());
+        }
     }
 
     void NotifyCcaBusyStart(Time d, WifiChannelListType t, const std::vector<Time>&) override
@@ -691,6 +1031,10 @@ class MonListener : public WifiPhyListener
         if (t == WIFI_CHANLIST_PRIMARY)
         {
             g_mon->Busy(NowNs(), NowNs() + d.GetNanoSeconds());
+            if (g_cnt)
+            {
+                g_cnt->Busy(NowNs(), NowNs() + d.GetNanoSeconds());
+            }
         }
     }
 
@@ -742,6 +1086,10 @@ OnTxPsdu(int node, WifiConstPsduMap psdus, WifiTxVector txv, double txPowerW)
     r.reason = uint8_t(std::clamp(int(std::lround(10 * std::log10(txPowerW * 1000.0))) + 128, 0, 255));
     GtWrite(r);
     g_txCount[node]++;
+    if (node == 0 && g_cnt)
+    {
+        g_cnt->ApTx(fi);
+    }
     if (node == 0 && g_mon)
     {
         if (fi.hdr.IsAck())
@@ -779,6 +1127,10 @@ OnRxEnd(int node, bool ok, Ptr<const Packet> pdu)
     g_rx[node].valid = false;
     GtWrite(GtFrom(ok ? 1 : 2, node, now - dur, dur, fi, rate));
     (ok ? g_rxOk : g_rxErr)[node]++;
+    if (node == 0 && ok && g_cnt)
+    {
+        g_cnt->ApRx(fi);
+    }
     if (node == 0 && g_mon)
     {
         if (!ok)
@@ -1039,6 +1391,29 @@ SelfTestSend(int h, double interval, uint32_t size)
     Simulator::Schedule(Seconds(interval), &SelfTestSend, h, interval, size);
 }
 
+// downlink self test: UDP packets of `size` IP bytes from the GS (AP) to vessel h
+void
+SelfTestSendDown(int h, double interval, uint32_t size)
+{
+    uint8_t ip[28] = {0x45, 0, 0, 0, 0, 0, 0x40, 0, 64, 17, 0, 0};
+    ip[2] = size >> 8;
+    ip[3] = size & 0xff;
+    uint32_t sip = g_hosts[0].ip, dip = g_hosts[h].ip;
+    for (int k = 0; k < 4; k++)
+    {
+        ip[12 + k] = (sip >> (24 - 8 * k)) & 0xff;
+        ip[16 + k] = (dip >> (24 - 8 * k)) & 0xff;
+    }
+    ip[20] = 0x9c;
+    ip[21] = 0x42; // sport 40002
+    ip[22] = 0x9c;
+    ip[23] = 0x43;
+    Ptr<Packet> full = Create<Packet>(ip, 28);
+    full->AddAtEnd(Create<Packet>(size - 28));
+    g_wifiDev[0]->Send(full, g_wifiMac[h], 0x0800);
+    Simulator::Schedule(Seconds(interval), &SelfTestSendDown, h, interval, size);
+}
+
 // ---------------------------------------------------------------------------------------------
 // lag of the real-time scheduler
 
@@ -1124,6 +1499,10 @@ uint32_t g_assoc = 0;
 void
 OnAssoc(int node, Mac48Address bssid)
 {
+    if (g_cnt)
+    {
+        g_cnt->SetAssoc(node, true);
+    }
     g_assoc++;
     std::cout << "ASSOC " << g_names[node] << " t=" << Simulator::Now().GetSeconds() << std::endl;
     if (g_assoc == g_M)
@@ -1135,6 +1514,10 @@ OnAssoc(int node, Mac48Address bssid)
 void
 OnDeAssoc(int node, Mac48Address bssid)
 {
+    if (g_cnt)
+    {
+        g_cnt->SetAssoc(node, false);
+    }
     if (g_assoc > 0)
     {
         g_assoc--;
@@ -1227,9 +1610,15 @@ main(int argc, char* argv[])
     uint32_t basePort = 41000;
     double duration = 0, hardLimitMs = 50;
     bool vms = true, gt = true;
-    std::string selftest;
+    std::string selftest, selftestDown;
     std::string runStartUs; // host time (us) of scenario time 0 of the schedules and the waypoints
     std::string flush;      // "TS_US:OFF1_US,OFF2_US": extra monitor batches at runStart + k Ts + off
+    std::string cntSpec;    // "TS_US:OFF_US[:JITTER_US]": nl80211 counter reads at runStart + k Ts + off + U[0, jitter]
+    std::string cntDst = "none";
+    std::string cntQuant = "harvest";
+    double cntHarvestMs = 0;
+    bool cntFile = true;
+    int64_t cntSeed = -1;
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("scenario", "scenario JSON (emu/scenarios)", scenarioPath);
@@ -1243,6 +1632,8 @@ main(int argc, char* argv[])
     cmd.AddValue("gt", "write the ground truth gt.bin", gt);
     cmd.AddValue("gtStates", "PHY state records in gt.bin: ap, all or none", g_gtStates);
     cmd.AddValue("selftest", "RATE_BPS,SIZE: built-in uplink sources of every vessel (no VMs)", selftest);
+    cmd.AddValue("selftestDown", "RATE_BPS,SIZE: built-in downlink sources of the GS to every vessel (no VMs)",
+                 selftestDown);
     cmd.AddValue("runStartUs",
                  "host time (us) at which the scenario time 0 of the interference schedules and the waypoints "
                  "falls (default: the start of the emulator)",
@@ -1251,6 +1642,17 @@ main(int argc, char* argv[])
                  "TS_US:OFF_US[,OFF_US...]: extra monitor batches at the host times runStartUs + k TS + OFF "
                  "(the ends of Q(t) and W(t))",
                  flush);
+    cmd.AddValue("cnt",
+                 "TS_US:OFF_US[:JITTER_US]: export the nl80211 counters of the AP, read at the host times "
+                 "runStartUs + k TS + OFF + U[0, JITTER] (empty: no export)",
+                 cntSpec);
+    cmd.AddValue("cntDst", "host:port of the counter datagrams (monitor_adapter.py; none: file only)", cntDst);
+    cmd.AddValue("cntFile", "write the counter reads to OUTDIR/counters.jsonl", cntFile);
+    cmd.AddValue("cntQuant",
+                 "survey quantization: harvest (ath9k: floor per harvest, remainder dropped) or cumulative",
+                 cntQuant);
+    cmd.AddValue("cntHarvestMs", "extra survey harvests every MS (ath9k ANI poll; 0: only at the reads)", cntHarvestMs);
+    cmd.AddValue("cntSeed", "seed of the read jitter (default: the scenario seed)", cntSeed);
     cmd.Parse(argc, argv);
 
     mj::Value sc = mj::ParseFile(scenarioPath);
@@ -1629,6 +2031,49 @@ main(int argc, char* argv[])
         int sz = 4 << 20;
         setsockopt(mon.m_sock, SOL_SOCKET, SO_SNDBUF, &sz, sizeof sz);
     }
+    // ---- nl80211 counter export
+    Nl80211Counters cnt;
+    if (!cntSpec.empty())
+    {
+        std::vector<int64_t> v;
+        size_t p0 = 0;
+        while (p0 <= cntSpec.size())
+        {
+            size_t p1 = cntSpec.find(':', p0);
+            if (p1 == std::string::npos)
+            {
+                p1 = cntSpec.size();
+            }
+            v.push_back(int64_t(std::stod(cntSpec.substr(p0, p1 - p0)) * 1e3));
+            p0 = p1 + 1;
+        }
+        NS_ABORT_MSG_IF(v.size() < 2 || v.size() > 3, "--cnt=TS_US:OFF_US[:JITTER_US]");
+        NS_ABORT_MSG_IF(cntQuant != "harvest" && cntQuant != "cumulative", "--cntQuant: harvest or cumulative");
+        cnt.m_stepNs = v[0];
+        cnt.m_offNs = v[1];
+        cnt.m_jitterNs = v.size() > 2 ? v[2] : 0;
+        cnt.m_cumulative = cntQuant == "cumulative";
+        cnt.m_harvestNs = int64_t(cntHarvestMs * 1e6);
+        cnt.m_rng.seed(uint64_t(cntSeed >= 0 ? cntSeed : int64_t(sc["seed"].Num(1)) * 7919 + 17));
+        cnt.m_apMac = g_wifiMac[0];
+        cnt.m_sta.resize(g_M + 1);
+        if (!cntDst.empty() && cntDst != "none")
+        {
+            auto colon = cntDst.rfind(':');
+            cnt.m_sock = socket(AF_INET, SOCK_DGRAM, 0);
+            cnt.m_dst.sin_family = AF_INET;
+            cnt.m_dst.sin_port = htons(uint16_t(std::stoi(cntDst.substr(colon + 1))));
+            inet_pton(AF_INET, cntDst.substr(0, colon).c_str(), &cnt.m_dst.sin_addr);
+        }
+        if (cntFile)
+        {
+            cnt.m_file = fopen((outdir + "/counters.jsonl").c_str(), "w");
+            NS_ABORT_MSG_IF(!cnt.m_file, "cannot write " << outdir << "/counters.jsonl");
+            setvbuf(cnt.m_file, nullptr, _IOFBF, 1 << 16);
+        }
+        g_cnt = &cnt;
+        g_wifiDev[0]->GetMac()->TraceConnectWithoutContext("DroppedMpdu", MakeCallback(&OnApDroppedMpdu));
+    }
     // the state helper keeps a weak reference: the listener lives as long as main()
     auto monListener = std::make_shared<MonListener>();
     g_phy[0]->RegisterListener(monListener);
@@ -1766,6 +2211,16 @@ main(int argc, char* argv[])
             Simulator::Schedule(Seconds(1.0 + 0.001 * i), &SelfTestSend, int(i), size * 8.0 / rbps, size);
         }
     }
+    if (!selftestDown.empty())
+    {
+        auto comma = selftestDown.find(',');
+        double rbps = std::stod(selftestDown.substr(0, comma));
+        uint32_t size = uint32_t(std::stoul(selftestDown.substr(comma + 1)));
+        for (uint32_t i = 1; i <= g_M; i++)
+        {
+            Simulator::Schedule(Seconds(1.0005 + 0.001 * i), &SelfTestSendDown, int(i), size * 8.0 / rbps, size);
+        }
+    }
 
     // ---- run
     signal(SIGTERM, OnSignal);
@@ -1806,6 +2261,11 @@ main(int argc, char* argv[])
         mon.m_stepEpochSimNs = int64_t(shift * 1e9);
         mon.ScheduleFlushes();
     }
+    if (g_cnt)
+    {
+        cnt.m_epochSimNs = int64_t(shift * 1e9);
+        cnt.Start();
+    }
     std::cout << "SHIFT " << shift << " s (scenario time 0 at host us " << (runStartUs.empty() ? "origin" : runStartUs)
               << ")" << std::endl;
     if (g_gt)
@@ -1835,6 +2295,12 @@ main(int argc, char* argv[])
 
     // ---- summary
     GtClose();
+    if (cnt.m_file)
+    {
+        fclose(cnt.m_file);
+        cnt.m_file = nullptr;
+    }
+    g_cnt = nullptr;
     for (size_t k = 0; k < g_lagUs.size(); k++)
     {
         fprintf(g_lagF, "%lld %.1f\n", (long long)(k * g_lagEveryNs / 1000), g_lagUs[k]);
@@ -1857,7 +2323,9 @@ main(int argc, char* argv[])
        << "},\"lag_us_all\":{\"p99\":" << lsAll.p99 << ",\"p999\":" << lsAll.p999 << ",\"max\":" << lsAll.max
        << "},\"gt_records\":"
        << g_gtCount << ",\"monitor\":{\"batches\":" << mon.m_batches << ",\"records\":" << mon.m_records
-       << ",\"send_errors\":" << mon.m_sendErr << "},\"non_ip_from_vm\":" << g_nonIp << ",\"hosts\":[";
+       << ",\"send_errors\":" << mon.m_sendErr << "},\"nl80211\":{\"reads\":" << cnt.m_reads
+       << ",\"send_errors\":" << cnt.m_sendErr << ",\"quant\":\"" << (cntSpec.empty() ? "off" : cntQuant)
+       << "\"},\"non_ip_from_vm\":" << g_nonIp << ",\"hosts\":[";
     for (size_t h = 0; h < g_hosts.size(); h++)
     {
         auto& H = g_hosts[h];

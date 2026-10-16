@@ -20,14 +20,23 @@ vessel broker:
   (capped at n_l (s_l - 8)), --load-mode rate multiplies the output rate (rho > 1 exceeds the DTP);
 * the socket of the MQTT client runs without the Nagle algorithm (TCP_NODELAY);
 * every published output is logged as one JSON line {"topic", "out", "n", "bytes", "t_us", "trunc"}
-  (t_us: release time, microseconds of the Unix time) to --log (default: none).
+  (t_us: release time, microseconds of the Unix time) to --log (default: none);
+* temporal video layers (topics with "group", "layer" and "layers", e.g. video_1 .. video_16 of
+  dtp_v2.json, see video_layers.py): frame k of the group (frames at k / f, f = layers * rate of a layer,
+  times --fps-scale) is output j = (k - rev(layer - 1)) / layers of topic <group>_<rev(k mod layers) + 1>,
+  so the layer topics interleave and the first j layers carry j / layers of the frame rate spread
+  uniformly; the phase of the group is common to its layers, the size of frame k comes from the trace
+  (one position per frame of the group, a seeded offset per group) or from the lognormal model seeded by
+  (seed, vessel, group, k), times --video-scale; "out" is the frame index k. The defaults of
+  --video-scale and --fps-scale come from "video_layers"."vessels".<vessel> of the DTP (size_scale and
+  fps_scale), so the vessels offer different video loads.
 
 Python >= 3.7, paho-mqtt 1.x or 2.x.
 
   fdt_source.py --dtp dtp_v2.json --vessel 1 [--host 127.0.0.1 --port 1883] [--topics state,video]
                 [--stream-size max|uniform] [--median 11000 --sigma 0.5 | --size-trace sizes.txt]
                 [--load 1.0 --load-mode size|rate] [--phase random|zero] [--duration S] [--seed 1]
-                [--log out.jsonl]
+                [--video-scale S --fps-scale F] [--log out.jsonl]
 """
 import argparse
 import heapq
@@ -57,10 +66,35 @@ class Topic(object):
         self.s = int(d["s"])
         self.kind = str(d["kind"])
         self.qos = int(d.get("qos", 0))
+        self.group = d.get("group")
+        self.layer = int(d["layer"]) if d.get("layer") is not None else None
+        self.layers = int(d.get("layers", 0)) or None
+        if self.layer is not None:
+            if self.group is None or not self.layers or not 1 <= self.layer <= self.layers:
+                raise ValueError("topic %s: a layer topic needs group, layers and 1 <= layer <= layers" % self.name)
+            self.residue = bitrev(self.layer - 1, layer_bits(self.layers))
+        else:
+            self.residue = None
         if self.kind not in ("stream", "output"):
             raise ValueError("topic %s: kind must be stream or output" % self.name)
         if self.kind == "output" and self.s <= OUT_HEADER.size:
             raise ValueError("topic %s: s must exceed the 8-byte output header" % self.name)
+
+
+def layer_bits(layers):
+    b = int(round(math.log(layers, 2)))
+    if (1 << b) != layers:
+        raise ValueError("the number of layers must be a power of two (got %d)" % layers)
+    return b
+
+
+def bitrev(k, bits):
+    """Reverses the `bits` low bits of k (video_layers.bitrev)."""
+    r = 0
+    for _ in range(bits):
+        r = (r << 1) | (k & 1)
+        k >>= 1
+    return r
 
 
 def load_dtp(path):
@@ -69,7 +103,14 @@ def load_dtp(path):
     epoch = d.get("epoch")
     return {"epoch": DEFAULT_EPOCH if epoch is None else float(epoch), "Ts": float(d["Ts"]),
             "T1": float(d.get("T1", 0.0)), "T2": float(d.get("T2", 0.0)),
-            "required": set(d.get("required", [])), "topics": [Topic(t) for t in d["topics"]]}
+            "required": set(d.get("required", [])), "topics": [Topic(t) for t in d["topics"]],
+            "video_layers": d.get("video_layers") or {}}
+
+
+def vessel_video(dtp, vessel):
+    """size_scale and fps_scale of a vessel from "video_layers"."vessels" (1.0 when absent)."""
+    v = (dtp.get("video_layers") or {}).get("vessels", {}).get(str(vessel), {})
+    return float(v.get("size_scale", 1.0)), float(v.get("fps_scale", 1.0))
 
 
 def load_trace(path):
@@ -129,9 +170,14 @@ class Source(object):
         self.count = {}
 
     def rate(self, tp):
+        r = tp.rate * (self.a.fps_scale if tp.layer is not None else 1.0)
         if tp.kind == "output" and self.a.load_mode == "rate":
-            return tp.rate * self.a.load
-        return tp.rate
+            return r * self.a.load
+        return r
+
+    def frame(self, tp, j):
+        """Frame index k of the group of a layer topic for its output j: k = rev(layer - 1) + layers j."""
+        return tp.residue + tp.layers * j
 
     def draw(self, tp, j, what):
         """random.Random of (seed, vessel, topic, j, what): the draws of output j do not depend on the
@@ -140,6 +186,20 @@ class Source(object):
 
     def output_size(self, tp, j=None):
         cap = tp.n * (tp.s - OUT_HEADER.size)
+        if tp.layer is not None:   # frame k of the group: one trace position or one seeded draw per frame
+            k = self.frame(tp, j)
+            if self.trace is not None:
+                off = random.Random("%d:%d:%s:trace" % (self.a.seed, self.a.vessel, tp.group)).randrange(len(self.trace))
+                size = self.trace[(off + k) % len(self.trace)]
+            else:
+                median = self.a.median if self.a.median else 0.5 * cap
+                rng = random.Random("%d:%d:%s:%d:size" % (self.a.seed, self.a.vessel, tp.group, k))
+                size = int(round(rng.lognormvariate(math.log(median), self.a.sigma)))
+            size = int(round(size * self.a.video_scale))
+            if self.a.load_mode == "size":
+                size = int(round(size * self.a.load))
+            size = max(1, size)
+            return min(size, cap), size > cap
         if self.trace is not None:
             if j is not None:     # mode --t0: a seeded start position in the trace, then output j
                 off = random.Random("%d:%d:%s:trace" % (self.a.seed, self.a.vessel, tp.name)).randrange(len(self.trace))
@@ -175,10 +235,12 @@ class Source(object):
                 msgs.append(body)
                 total += size
             return msgs, total, False, j
-        size, trunc = self.output_size(tp, j if seeded else None)
+        size, trunc = self.output_size(tp, j if (seeded or tp.layer is not None) else None)
         chunk = tp.s - OUT_HEADER.size
         m = max(1, int(math.ceil(size / float(chunk))))
-        if seeded:
+        if tp.layer is not None:
+            oid = self.frame(tp, j) & 0xFFFFFFFF
+        elif seeded:
             oid = j & 0xFFFFFFFF
         else:
             oid = self.out_id.get(tp.name, 0)
@@ -192,8 +254,20 @@ class Source(object):
             msgs.append(OUT_HEADER.pack(oid, k, m) + body)
         return msgs, size, trunc, oid
 
+    def group_phase(self, tp, period):
+        """Phase of layer topic tp: a phase common to the group (zero, or seeded in one frame period)
+        plus rev(layer - 1) frame periods, so frame k of the group is released at phase + k / f."""
+        fp = period / tp.layers
+        if self.a.phase == "zero":
+            g = 0.0
+        else:
+            g = random.Random("%d:%d:%s:phase" % (self.a.seed, self.a.vessel, tp.group)).uniform(0, fp)
+        return g + tp.residue * fp
+
     def phase(self, tp, period):
         """seeded phase of topic tp relative to t0 (mode --t0)"""
+        if tp.layer is not None:
+            return self.group_phase(tp, period)
         rng = self.draw(tp, 0, "phase")
         if self.a.phase == "zero":
             return 0.0
@@ -219,6 +293,12 @@ class Source(object):
                 j0 = int(math.ceil((t0 + 0.05 - ph) / period))     # first output at least 50 ms ahead
                 base = ph + j0 * period
                 heapq.heappush(heap, (base + self.draw(tp, j0, "jit").uniform(0, tp.jitter), base, tp.name, tp, j0))
+                continue
+            if tp.layer is not None:    # layers keep their interleaving relative to the epoch
+                ph = self.dtp["epoch"] + self.group_phase(tp, period)
+                j0 = int(math.ceil((t0 - ph) / period))
+                base = ph + j0 * period
+                heapq.heappush(heap, (base + self.rng.uniform(0, tp.jitter), base, tp.name, tp, j0))
                 continue
             if self.a.phase == "zero":
                 base = self.dtp["epoch"] + math.ceil((t0 - self.dtp["epoch"]) / period) * period
@@ -247,7 +327,7 @@ class Source(object):
             if self.a.t0 is not None:
                 heapq.heappush(heap, (nxt + self.draw(tp, j + 1, "jit").uniform(0, tp.jitter), nxt, name, tp, j + 1))
                 continue
-            if time.time() - nxt > 1.0:   # far behind (suspended process): resynchronize
+            if time.time() - nxt > 1.0 and tp.layer is None:   # far behind (suspended process): resynchronize
                 nxt = time.time()
             heapq.heappush(heap, (nxt + self.rng.uniform(0, tp.jitter), nxt, name, tp, j + 1))
         if self.log is not None:
@@ -274,9 +354,18 @@ def main(argv=None):
     ap.add_argument("--t0", type=float, default=None,
                     help="start of the first step of the run (Unix seconds): seeded draws per output (experiments)")
     ap.add_argument("--log", default=None, help="JSON lines of the published outputs")
+    ap.add_argument("--video-scale", type=float, default=None,
+                    help="size scale of the frames of the layer topics (default: size_scale of the vessel in the DTP)")
+    ap.add_argument("--fps-scale", type=float, default=None,
+                    help="frame-rate scale of the layer topics (default: fps_scale of the vessel in the DTP)")
     a = ap.parse_args(argv)
     a.topics = set(n for n in a.topics.split(",") if n) if a.topics else None
     dtp = load_dtp(a.dtp)
+    vs, vf = vessel_video(dtp, a.vessel)
+    a.video_scale = vs if a.video_scale is None else a.video_scale
+    a.fps_scale = vf if a.fps_scale is None else a.fps_scale
+    if not a.video_scale > 0 or not a.fps_scale > 0:
+        ap.error("--video-scale and --fps-scale must be positive")
     names = set(tp.name for tp in dtp["topics"])
     if a.topics and not a.topics <= names:
         ap.error("unknown topics: %s" % ",".join(sorted(a.topics - names)))

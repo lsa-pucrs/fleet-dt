@@ -6,14 +6,38 @@
   "R_PHY": 24000000, "h_W": 150,
   "vessels": [1, 2],
   "topics": [
-    {"name": "state", "rate": 8,  "bound": 48},
-    {"name": "imu",   "rate": 32, "bound": 48},
-    {"name": "gps",   "rate": 8,  "bound": 80},
-    {"name": "baro",  "rate": 8,  "bound": 32},
-    {"name": "power", "rate": 8,  "bound": 40},
-    {"name": "mag",   "rate": 16, "bound": 40},
-    {"name": "video", "rate": 30, "bound": 14000}
+    {"name": "state",      "rate": 8,   "bound": 48},
+    {"name": "imu",        "rate": 32,  "bound": 48},
+    {"name": "gps",        "rate": 8,   "bound": 80},
+    {"name": "baro",       "rate": 8,   "bound": 32},
+    {"name": "power",      "rate": 8,   "bound": 40},
+    {"name": "mag",        "rate": 16,  "bound": 40},
+    {"name": "video_1",    "rate": 64,  "bound": 1400},
+    {"name": "video_2",    "rate": 64,  "bound": 1400},
+    {"name": "video_3",    "rate": 64,  "bound": 1400},
+    {"name": "video_4",    "rate": 64,  "bound": 1400},
+    {"name": "video_5",    "rate": 64,  "bound": 1400},
+    {"name": "video_6",    "rate": 64,  "bound": 1400},
+    {"name": "video_7",    "rate": 64,  "bound": 1400},
+    {"name": "video_8",    "rate": 64,  "bound": 1400},
+    {"name": "video_9",    "rate": 64,  "bound": 1400},
+    {"name": "video_10",   "rate": 64,  "bound": 1400},
+    {"name": "video_11",   "rate": 64,  "bound": 1400},
+    {"name": "video_12",   "rate": 64,  "bound": 1400},
+    {"name": "video_13",   "rate": 64,  "bound": 1400},
+    {"name": "video_14",   "rate": 64,  "bound": 1400},
+    {"name": "video_15",   "rate": 64,  "bound": 1400},
+    {"name": "video_16",   "rate": 64,  "bound": 1400}
   ],
-  "order":  ["state", "imu", "gps", "video", "baro", "power", "mag"],
-  "needed": ["state", "imu", "gps"]
+  "order":  ["state", "imu", "gps", "baro", "power", "mag", "video_1", "video_2", "video_3", "video_4", "video_5", "video_6", "video_7", "video_8", "video_9", "video_10", "video_11", "video_12", "video_13", "video_14", "video_15", "video_16"],
+  "needed": ["state", "imu", "gps"],
+  "video_layers": {
+    "base": "video", "layers": 16, "fps": 15, "bound": 1400, "msgs_per_frame": 8,
+    "vessels": {
+      "1": {"quality": 50, "fps_scale": 1.0, "size_scale": 1.0},
+      "2": {"quality": 45, "fps_scale": 1.0, "size_scale": 0.9},
+      "3": {"quality": 48, "fps_scale": 1.0, "size_scale": 0.95},
+      "4": {"quality": 42, "fps_scale": 1.0, "size_scale": 0.85}
+    }
+  }
 }

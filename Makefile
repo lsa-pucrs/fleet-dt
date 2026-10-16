@@ -1,7 +1,8 @@
 # Fleet-DT: C programs (vessel regulator plugin v2, v1 DTI program, channel monitor) and tests.
 #
 #   make                 build everything into build/
-#   make test-c          C unit tests of the v2 regulator (test-c-san: with ASan and UBSan)
+#   make test-c          C unit tests of the v2 regulator and of mode paper (test-c-san: with ASan and UBSan)
+#   make test-paper      integration test of the paper stack (tests/test_paper_stack.py, needs MOSQ)
 #   make test-vessel     integration test of the vessel side v2 (tests/vessel_v2, needs MOSQ)
 #   make test            test-c, test-vessel and the Python tests
 #   make install         install the C programs into PREFIX (vessel or GS)
@@ -26,15 +27,18 @@ DTP2 = common/fdt_dtp2.c common/fdt_common.c
 DTP2_H = common/fdt_dtp2.h common/fdt_common.h
 REG = vessel/regulator/fdt_reg.c
 REG_H = vessel/regulator/fdt_reg.h
+# mode paper of the regulator (fdt_reg_paper.c) and its DTP reader and 0-based clock (fdt_paper.c)
+PREG = vessel/regulator/fdt_reg_paper.c common/fdt_paper.c
+PREG_H = vessel/regulator/fdt_reg_paper.h common/fdt_paper.h
 
-all: $(B)/fdt_regulator.so $(B)/fdt_dti $(B)/fdt_chmon $(B)/test_reg
+all: $(B)/fdt_regulator.so $(B)/fdt_dti $(B)/fdt_chmon $(B)/test_reg $(B)/test_reg_paper
 
 $(B):
 	mkdir -p $(B)
 
 # v2: vessel regulator and DTI program in one plugin
-$(B)/fdt_regulator.so: vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_sock.c vessel/regulator/fdt_sock.h $(REG) $(REG_H) $(DTP2) $(DTP2_H) | $(B)
-	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -o $@ vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_sock.c $(REG) $(DTP2) $(LDFLAGS) -lcjson -lm
+$(B)/fdt_regulator.so: vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_sock.c vessel/regulator/fdt_sock.h $(REG) $(REG_H) $(PREG) $(PREG_H) $(DTP2) $(DTP2_H) | $(B)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -o $@ vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_sock.c $(REG) $(PREG) $(DTP2) $(LDFLAGS) -lcjson -lm
 
 # v1 programs (DTP v1, dtp.json)
 $(B)/fdt_dti: vessel/dti/fdt_dti.c $(COMMON) $(COMMON_H) | $(B)
@@ -49,11 +53,22 @@ $(B)/test_reg: tests/c/test_reg.c $(REG) $(REG_H) $(DTP2) $(DTP2_H) | $(B)
 $(B)/test_reg_san: tests/c/test_reg.c $(REG) $(REG_H) $(DTP2) $(DTP2_H) | $(B)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANFLAGS) -o $@ tests/c/test_reg.c $(REG) $(DTP2) $(LDFLAGS) -lcjson -lm
 
-test-c: $(B)/test_reg
-	$(B)/test_reg
+$(B)/test_reg_paper: tests/c/test_reg_paper.c $(PREG) $(PREG_H) $(REG_H) $(COMMON) $(COMMON_H) | $(B)
+	$(CC) $(CPPFLAGS) $(CFLAGS) -o $@ tests/c/test_reg_paper.c $(PREG) $(COMMON) $(LDFLAGS) -lcjson -lm
 
-test-c-san: $(B)/test_reg_san
+$(B)/test_reg_paper_san: tests/c/test_reg_paper.c $(PREG) $(PREG_H) $(REG_H) $(COMMON) $(COMMON_H) | $(B)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANFLAGS) -o $@ tests/c/test_reg_paper.c $(PREG) $(COMMON) $(LDFLAGS) -lcjson -lm
+
+test-c: $(B)/test_reg $(B)/test_reg_paper
+	$(B)/test_reg
+	$(B)/test_reg_paper
+
+test-c-san: $(B)/test_reg_san $(B)/test_reg_paper_san
 	$(B)/test_reg_san
+	$(B)/test_reg_paper_san
+
+test-paper: $(B)/fdt_regulator.so $(B)/fdt_dti
+	FDT_BUILD=$(abspath $(B)) MOSQ=$(MOSQ) $(PYTHON) -m pytest -q tests/test_paper_stack.py
 
 test-vessel: $(B)/fdt_regulator.so
 	FDT_BUILD=$(abspath $(B)) MOSQ=$(MOSQ) $(PYTHON) -m pytest -q tests/vessel_v2
@@ -72,4 +87,4 @@ install: all
 clean:
 	rm -rf $(B)
 
-.PHONY: all test test-c test-c-san test-vessel install clean
+.PHONY: all test test-c test-c-san test-vessel test-paper install clean

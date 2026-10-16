@@ -6,8 +6,10 @@
   emu/run.py up --scenario S.json          VMs (GS + M vessels), emulator, monitor bridge, clock probe
   emu/run.py sync                          copy this repository into every VM (~/fleet-dt)
   emu/run.py ssh HOST [CMD...]             HOST: gs, v1..vM (interactive without CMD)
-  emu/run.py run EXP.json                  one experiment; results in EMU/runs/<time>-<name>/ (or the
-                                           "run_dir" of a fleet experiment, see emu/fleet.py)
+  emu/run.py run EXP.json [--stack paper|as2]   one experiment; results in EMU/runs/<time>-<name>/ (or the
+                                           "run_dir" of a fleet experiment, see emu/fleet.py); --stack
+                                           picks the stack of a fleet experiment (default: its "stack",
+                                           else paper)
   emu/run.py status
   emu/run.py down                          stop only the processes that `up` started (PID files)
 
@@ -51,6 +53,7 @@ BASE_PORT = 41000          # data plane: QEMU BASE+2h, emulator BASE+2h+1 (slot 
 SSH_PORT = 2300            # management: ssh of host h on 127.0.0.1:SSH_PORT+h (slot K: 2300 + 20 K)
 MQTT_FWD = 2883            # GS broker (1883) on 127.0.0.1:MQTT_FWD for the monitor bridge (slot K: 2883 + K)
 MON_PORT = 9550            # emulator -> monitor bridge (UDP; slot K: 9550 + K)
+CNT_PORT = 9650            # emulator nl80211 counters -> fleetdt.monitor_adapter (UDP; slot K: 9650 + K)
 CID_BASE = 100             # vsock CID of host h: CID_BASE + h (slot K: 100 + 20 K)
 VM_PREFIX = "fdt-emu"
 # CPU affinity (rootless taskset) on the i7-14700 (CPUs 0-15: 8 P-cores with 2 threads, 16-27: 12 E-cores).
@@ -63,7 +66,7 @@ AUX_CPUS = "16-23"         # monitor bridge, clock probe, monitor capture
 
 
 def configure_slot(k):
-    global SLOT, SESS, VMS, STATE, BASE_PORT, SSH_PORT, MQTT_FWD, MON_PORT, CID_BASE, VM_PREFIX
+    global SLOT, SESS, VMS, STATE, BASE_PORT, SSH_PORT, MQTT_FWD, MON_PORT, CNT_PORT, CID_BASE, VM_PREFIX
     global EMU_CPUS, VM_CPUS, AUX_CPUS
     if not 0 <= k <= 9:
         raise SystemExit("slot must be in 0..9")
@@ -75,6 +78,7 @@ def configure_slot(k):
     SSH_PORT = 2300 + 20 * k
     MQTT_FWD = 2883 + k
     MON_PORT = 9550 + k
+    CNT_PORT = 9650 + k
     CID_BASE = 100 + 20 * k
     VM_PREFIX = "fdt-emu" if k == 0 else "fdt-emu-s%d" % k
     EMU_CPUS = os.environ.get("FDT_EMU_CPUS", "%d,%d" % (8 + 2 * k, 9 + 2 * k) if k < 4 else "8-15")
@@ -636,6 +640,8 @@ def main():
     s.add_argument("remote", nargs=argparse.REMAINDER)
     r = sub.add_parser("run")
     r.add_argument("exp")
+    r.add_argument("--stack", choices=("paper", "as2"), default=None,
+                   help="stack of a fleet experiment (default: the \"stack\" of the experiment, else paper)")
     sub.add_parser("status")
     sub.add_parser("down")
     a = ap.parse_args()
