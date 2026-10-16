@@ -1166,6 +1166,7 @@ class Conn
         s->SetRecvCallback(MakeCallback(&Conn::OnRecv, this));
         s->SetSendCallback(MakeCallback(&Conn::OnSpace, this));
         s->TraceConnectWithoutContext("HighestSequence", MakeCallback(&Conn::OnHighTx, this));
+        highTx = DynamicCast<TcpSocketBase>(s)->GetTxBuffer()->HeadSequence().GetValue();
     }
 
     void OnHighTx(SequenceNumber32, SequenceNumber32 v)
@@ -1562,9 +1563,15 @@ class Vessel
             pend.pop_front();
             Deliver(m.topic, m.qos, m.payload);
         }
-        if (HostUs(NowNs()) >= deadlineUs)
+        int64_t now = HostUs(NowNs());
+        if (now >= deadlineUs)
         {
-            deadlineUs = fdt_reg_tick(&reg, HostUs(NowNs()));
+            // plugin_tick.c: the next deadline is the tick time plus the whole milliseconds that the plugin
+            // returns (fdt_regulator_plugin.c on_tick: rounded up, at least 1 ms, at most 1 s)
+            int64_t next = fdt_reg_tick(&reg, now);
+            int64_t d = next - HostUs(NowNs());
+            int64_t m = d <= 1000 ? 1 : (d + 999) / 1000;
+            deadlineUs = now + std::min<int64_t>(m, 1000) * 1000;
         }
         int64_t dly = deadlineUs - HostUs(NowNs());
         int64_t ms = dly <= 1000 ? 1 : (dly + 999) / 1000;
@@ -2333,6 +2340,7 @@ main(int argc, char* argv[])
                               MakeCallback(&Vessel::AcceptData, v));
         Ptr<Socket> lc = Socket::CreateSocket(v->node, TcpSocketFactory::GetTypeId());
         lc->Bind(InetSocketAddress(Ipv4Address::GetAny(), 1883));
+        lc->SetPriority(6);
         lc->Listen();
         lc->SetAcceptCallback(MakeNullCallback<bool, Ptr<Socket>, const Address&>(),
                               MakeCallback(&Vessel::AcceptCtl, v));

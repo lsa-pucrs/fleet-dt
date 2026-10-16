@@ -31,7 +31,7 @@ E5: B6 on the cells of E3: S1, S2, S4, S5; ρ ∈ {1, 1.5, 2}; M = 4; Ts = 125 m
 cell and seed in the DTP, the scenario, the sources, the ρ setting, and the schedule of the operation
 control software (checked by `emu/experiments/addendum/check_e5.py`), so the E5 runs pair with the E3
 runs of the same seed. The E5 runs start after the last E1 to E4 run, on the same host, with the same K = 3,
-the same lag rule, and the code of tag `v2-addendum-a1`.
+the same lag rule, and the code of tag `v2-addendum-a2r2` (amendment below).
 
 | | Hypothesis and threshold | Exp. | Evaluation (`emu/analysis/report.py`, `h8`) |
 |---|---|---|---|
@@ -40,14 +40,14 @@ the same lag rule, and the code of tag `v2-addendum-a1`.
 Additional analysis (not a hypothesis): the slotted variant (E3) against B6 with the same test, because
 both use the same slot structure and differ in the division of the data window among the vessels.
 
-Amendment of 2026-10-15 (tag `v2-addendum-a2r1`, before the first E5 run): the tag `v2-addendum-a1` admitted
+Amendment of 2026-10-15 (tags `v2-addendum-a2r1` and `v2-addendum-a2r2`, before the first E5 run): the tag `v2-addendum-a1` admitted
 the units of a vessel first-fit (a unit that did not fit was skipped and a later, smaller unit could still
 enter the window); IPACT with limited service stops at the first unit that does not fit, because the
 vessel sends its queue in order. A code review found the difference; no E5 run existed.
 
 ## A2. H9 and E6: larger fleets in simulation
 
-Fixed on 2026-10-15, tag `v2-addendum-a2r1`, before the first E6a, E6b and E6d run of this revision.
+Fixed on 2026-10-15, tag `v2-addendum-a2r2`, before the first E6a, E6b and E6d run of this revision.
 
 Reason: the emulation host runs the emulator of M ≤ 4 vessels in real time (Section VI); the scale study
 runs the same software components in a discrete-event simulation that does not need real time.
@@ -66,7 +66,14 @@ H1, and that B6 admitted units first-fit (amendment of A1). The E6a campaign of 
 was stopped after 16 runs; its results, the saturation runs, and the pilots of that tag are kept unread in
 `~/fleetdt-deploy/emu/sim-campaigns/invalid-a2-20261015/`. This revision fixes the defects, repeats the
 saturation runs (E6c) and the pilots, and replaces the phase rule T1(M), T2(M) of the tag, which the
-pilots with the control bridges in AC_BE had produced.
+pilots with the control bridges in AC_BE had produced. A second review of the revision (tag
+`v2-addendum-a2r1`) found that the simulated tick deadline was the exact instant that the regulator asked
+for, whereas `plugin_tick.c` keeps the tick time plus the rounded-up milliseconds (an input could start a
+tick up to 1 ms early), that the listener of the control bridge sent its SYN-ACK at UP 0, and that the
+unsent-byte count started 1 byte high; the tag `v2-addendum-a2r2` fixes the three, and the E6 runs of the
+tag `v2-addendum-a2r1` (stopped within 15 minutes, results unread) are kept in
+`~/fleetdt-deploy/emu/sim-campaigns/invalid-a2r1-20261015/`. The saturation runs and pilots of a2r1 stay
+in use (the tick timing moves releases by less than 1 ms).
 
 ### Simulator (`emu/sim`)
 
