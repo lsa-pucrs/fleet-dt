@@ -57,6 +57,11 @@ def test_jmcs_current_dtp():
     video = [n for n in names if n.startswith("video")]
     assert video
     assert set(video) <= set(m["survey"]["needed"]) and not set(video) & set(m["transit"]["needed"])
+    # needed of the DTP = the six telemetry topics: survey N(t) = telemetry + video layers, transit = telemetry
+    telemetry = ["state", "imu", "gps", "baro", "power", "mag"]
+    assert d["needed"] == telemetry
+    assert m["survey"]["needed"] == telemetry + video and m["transit"]["needed"] == telemetry
+    assert m["transit"]["order"] == telemetry + video
     core = AS(DTP.from_dict(d), epoch=0.0, now=lambda: 0.0)
     for mode in ("survey", "transit"):
         assert sorted(m[mode]["order"]) == sorted(names)

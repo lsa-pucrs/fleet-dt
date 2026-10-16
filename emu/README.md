@@ -68,13 +68,14 @@ Offline (no VMs, not in real time), e.g. for validation:
 the `"stack"` of the experiment, else on the paper stack. The experiments of `experiments/matrix.py`
 (older model) carry `"stack": "as2"`, and `experiments/runner.py` runs a spec without `"stack"` (the
 frozen campaign) on the as2 stack; the paper stack refuses their DTP v2. Both campaigns use the video in
-16 layer topics (`experiments/dtp_base.json` holds the content of `dtp_v2.json`).
+16 spatial stripe layer topics (`experiments/dtp_base.json` holds the content of `dtp_v2.json`; see
+"Video in stripe layers" below).
 The paper stack runs the model of the paper (Sections III to V):
 
 | Host | Programs (per run) |
 |---|---|
 | GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel; B2 three data bridges, B10 one per topic), the AS `fleetdt.as_service` (methods with tables; Algorithm 1 or `--policy b7`, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA, in a child process), the fleet feedback `fleetdt.feedback` (B3, B8, B9; `feedback.jsonl`), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`) |
-| vessel VM i | `RUN/dtp_vessel.json` = `video_layers.py resolve` of the DTP for vessel i (layer bounds scaled by its `size_scale`); Mosquitto with `fdt_regulator.so` in the mode of the method, `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_demand external`, `plugin_opt_jitter_ms J`; the v1 DTI program `build/fdt_dti --jitter-ms J` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the layered video source `vessel/publishers/fdt_source.py` (frame sizes of a trace, `src.jsonl`), or `raw_load.py`, or `"source": {"cmd": ...}` |
+| vessel VM i | `RUN/dtp_vessel.json` = `video_layers.py resolve` of the DTP for vessel i (rates and bounds of the layer topics from its `size_scale`); Mosquitto with `fdt_regulator.so` in the mode of the method, `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_step_log RUN/regsteps.jsonl` (step summaries: p, d, rx, fwd, held, cost per topic), `plugin_opt_demand external`, `plugin_opt_jitter_ms J`; the v1 DTI program `build/fdt_dti --jitter-ms J` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the stripe video source `vessel/publishers/fdt_source.py` (frame sizes of a trace times the stripe shares, `src.jsonl`), or `raw_load.py`, or `"source": {"cmd": ...}`; the sampler `build/fdt_outq` (SIOCOUTQ of the bridge sockets, `RUN/outq.jsonl`, built by the preparation from `emu/tools/outq_sampler.c`, started after the bridges connect, steps S0 .. S0 + steps) |
 | host | emulator with the ground truth and the nl80211 counter export (`--cnt`, `--cntDst` = 127.0.0.1:9650+K), `fleetdt.monitor_adapter` (y(t) on `fleet/throughput` through 127.0.0.1:2883+K), monitor bridge and capture (ground truth), clock probe |
 
 Steps are 0-based on every program of this stack: start(t) = epoch + t Ts (the DTP epoch; null =
@@ -117,7 +118,12 @@ repository paths, a DTP path gets `"vessels"` = 1..M):
 | `dti` | `enabled` (true; false: the plugin publishes D_i(t), `plugin_opt_demand internal`), `offset_ms` (1), `stagger_ms` (0, added per vessel index), `idle` (8), `jitter_ms` (the J of `plugin_opts`; both must agree) |
 | `jmcs` | `period_s` (10), `first` (survey), `offset_ms` (2), `video_prefix` (video), `modes` (explicit orders) |
 | `monitor` | `offset_us` (500), `jitter_us` (0), `quant` (harvest or cumulative), `harvest_ms` (0), `sigma` (0; 0.02, 0.05), `noise_seed` (seed), `backend` (auto, c, py) |
-| `source` | `kind` `fdt_source` (default: `trace` (`emu/traces/water-sbs-q50-s0p5.txt`; null with `median`, `sigma`: lognormal), `scale` (rho of the frame sizes, `load_mode`), `jitter_ms`, `phase`, `stream_size`, `topics`) or `raw_load` (`scale`, `size`, `min_frac`, `topics`), or `cmd` (template with `{dtp}`, `{dtp_vessel}`, `{vessel}`, `{seed}`, `{t0}`, `{duration}`, `{run}`) |
+| `source` | `kind` `fdt_source` (default: `trace` (`emu/traces/water-sbs-q90-s1.txt`; null with `median`, `sigma`: lognormal), `scale` (scale of the frame sizes, `load_mode`), `jitter_ms`, `phase`, `stream_size`, `topics`, `allow_trunc`) or `raw_load` (`scale`, `size`, `min_frac`, `topics`), or `cmd` (template with `{dtp}`, `{dtp_vessel}`, `{vessel}`, `{seed}`, `{t0}`, `{duration}`, `{run}`). The run refuses a trace replay whose largest frame times `scale` exceeds `video_layers.frame_cap` (the source would truncate stripes) or whose share profile (`q<Q>-s<S>` of the file name) differs from `video_layers.profile`, unless `allow_trunc` |
+| `abort_lag_us` | lag at which the emulator stops the run (`--abortLagUs`, default 1000; 0 records only, as in Q); the emulator always runs with `--phaseLag` (Ts:T1:T2 of the DTP) and `--stepBytes`; an emulator that exits early (status 3: lag abort) or reports `phase_lag.aborted` fails the run; `emu_args` may not repeat these options |
+| `pcap` | true: `--pcap=1`, the emulator writes `RUN/emu/ap.pcap` (IPv4 packets between the AP node and the GS; E0 conformance) |
+| `outq` | `enabled` (true), `fifo` (SCHED_FIFO priority of the sampler) |
+| `clock` | E1: `{"inject": true, "ramp_ppm", "ramp_s", "hold_s", "loss_n", "loss_s", "loss_windows", "warm_s", "seed"}`: per vessel `fdt_clock_schedule.make(...)` with the origin at start(S0) and ppm0 = the frequency error of the vessel in the session, installed at `/etc/fleetdt/clock-schedule.json` before the emulator starts, `/var/log/fdt-clockerr.jsonl` copied to `RUN/clockerr.jsonl` after the run, the schedule removed; needs a session up with `--clock-inject` |
+| `replay_subsets`, `replay_jobs` | E2: after the run, `emu/replay_subsets.py RUN --jobs J` (default 4) on the auxiliary CPUs (`replay_subsets.log`, `result.json` "replay_subsets") |
 | `stack_commit` | refuse the run unless the checkout is this commit and the files of the stack are unchanged |
 
 RUN/result.json records `stack`, `revision` (git `commit`, `branch`, `describe`, `dirty`, `dirty_stack`:
@@ -126,6 +132,12 @@ file of the stack), `dtp_sha256`, `dtp_vessels_sha256`, `method`, `method_config
 `monitor` (with `backend_used`), `chmon_host_sha256`, `plugin_mode`, `demand`, `commands` (the command
 lines of the run), S0, t0 and the emulator summary (with `nl80211`). RUN/dtp_b<i>.json holds the DTP of
 vessel i.
+`result.json` also records `video` (frame rate, frame cap, profile, trace, scale, mean frame over the cap),
+`abort_lag_us`, `pcap`, `cpu_profile` (`ratio` of the session and `emu/vm/cpu_profile.py status` of every
+QEMU process before and after the run), `clock` (E1), `emu_exit` and `replay_subsets`; `emu_summary` adds
+`phase_lag`, `qdisc`, `conf`, `pcap` and `step_bytes` of `emu/summary.json`. The AS log `as.jsonl` holds
+`D` (the demand tables of M(t)) and `y_used` (the y(t - 1) of eq. (2)), and each G(t) of `dta.jsonl` its
+emission time `emitted`, for the conformance check.
 RUN/ also holds `throughput.jsonl` (each published y(t) with its publication time), `counters_rx.jsonl`
 (the counter reads that reached the adapter), `monitor_adapter.log`, `emu/counters.jsonl` (every read of
 the emulator) and `vms/<host>/` (`as.jsonl`, `dta.jsonl`, `order.jsonl`, `regulator.jsonl`, broker logs).
@@ -485,6 +497,68 @@ comparison is between distributions. `matrix.py eval --yans E4` writes the cells
 | Clock synchronization | NTP (UDP 123) is marked like the control bridges (UP 6, AC_VO) | the AS takes every AC_BE data frame of a vessel for a data-bridge frame |
 | MQTT `lost` in `mqtt_load.py sub` | counts messages published before the subscriber connected when the experiment starts the publisher first | — |
 
+### Session options of `run.py up`
+
+| Option | Effect |
+|---|---|
+| (always) | QEMU with `-cpu host,+invtsc` (invariant TSC for the TSC clock source of the guests) |
+| `--cpu-ratio R` | each vessel QEMU runs in a systemd user scope with CPUQuota = R of one CPU (`emu/vm/cpu_profile.py wrap`, inside the CPU pinning); off by default; `state.json` "cpu_ratio" |
+| `--clock-inject` | the `emu-host.json` of each vessel names `/etc/fleetdt/clock-schedule.json` in "clock", so `fdt-clockinit` sets only the offset and the frequency error comes from the schedule of each run (`"clock": {"inject": true}`) |
+
+### Post-processing and E0 conformance
+
+`experiments/runner.py` post-processes a paper-stack run with `analysis/paper_post.py RUN` (the metrics of
+the paper from `vms/gs/dta.jsonl` with `fleetdt/analysis.py`, after a warm-up of 240 steps, steps with a
+lag above 1 ms in `steplag.csv` counted in `lag_discarded` and left out; `RUN/metrics.json`), and an as2 run
+with `gtstep.py` and `metrics.py` of the older model.
+
+`python3 emu/experiments/conformance.py RUN` checks a paper-stack run against the model (E0): offline
+replay of eq. (2), the grant limit and Algorithm 1 from the logged D_i(t), y(t - 1), sigma_t and N(t)
+against the published p(t) (and the tables each regulator received and policed, and the JMCS mode of each
+step); forwarded channel bytes per edge <= d_il(t) (regulator step log and r_il of the DTA); the QoS of
+each forwarded PUBLISH in `emu/ap.pcap` equal to its level (no level-0 message; baselines QoS 1; skipped
+without a pcap); no uplink message of step t from a vessel without p(t); every message not forwarded in
+the vessel log with a reason (rx - fwd = log lines = held + drop) and every source message received;
+G(t) against the ground truth (content bytes at the GS at most the IP bytes of `stepbytes.csv`, the
+relative error of r_il against them, M(t) of the DTA equal to the M(t) of the AS, DTI lag <= 1 step).
+`RUN/conformance.json`; exit status 0 when the run conforms. Tests: `tests/test_conformance.py`
+(synthetic run directories with injected defects).
+
+## Video in stripe layers (`vessel/publishers/video_layers.py`)
+
+Every frame splits into 16 horizontal stripes (`stripe_rows`), each encoded as its own JPEG; layer topic
+`video_j` carries stripe rev4(j - 1) of every frame (layers 1, 2, 3, 4, 5 = stripes 0, 8, 4, 12, 2), so
+admitting layers 1..j gives j of 16 stripes spread over the image. A layer topic has one stripe per frame:
+with F = ceil(f Ts) frames per step and a stripe cap cap_j = ceil(s_i frame_cap w_rev(j-1)) split into
+m_j = ceil(cap_j / 1392) messages of bound_j = ceil(cap_j / m_j) + 8 <= 1400 bytes, the DTP declares
+rate_j = m_j F / Ts and bound_j ("jitter": 0), so d_il covers exactly the F stripes of a step.
+`frame_cap` bounds the trace size of a frame (dtp.json: 98774 bytes, the largest frame of
+`water-sbs-q90-s1.txt`) and w_s is the share profile of `emu/traces/stripe-shares.json`
+(`emu/traces/make_stripe_profile.py`: 24 pairs of the water sequence spread over the 4500 frames of the
+traces, each side-by-side frame encoded whole and as 16 stripe JPEGs with OpenCV 4.13.0; w_s = mean
+stripe bytes / whole-frame bytes; profile q90-s1: shares 0.039 (top) to 0.112, sum 1.178 because every
+stripe carries its own JPEG headers; q50-s0p5 sums to 2.10). `fdt_source.py` gives stripe s of frame k
+the size round(F_k w_s) (trace size F_k times the size factor s_i of the vessel and the source scale);
+`zed_publisher.py` encodes each stripe within its cap (lower quality, then half resolution).
+`plan_for_rho(dtp, M, rho, C, frame_max)` picks per cell the smallest frame rate of {8, 16, 24, 32}
+frames per second (an integer number of frames per step) whose frame cap for sum_i sum_l d_il = rho C
+stays within the largest trace frame, and the source scale = frame_cap / frame_max.
+
+Cells of `tests/test_video_layers.py` (C = 320 kB per step, U = 0.8, J = 2 ms, trace q90-s1, vessels
+1..M of dtp.json with size factors 1.0, 0.9, 0.95, 0.85; forwarded / declared from the stripes of
+`fdt_source.Source` with release delays U[0, 3 ms], collection windows [v(t-1), v(t)) and the policing of
+the regulator, 600 steps):
+
+| M | rho | frames/s | frame cap (scale) | layers admitted | fill f (static; per-step variation mean) | forwarded / declared per layer (mean; min) |
+|---|---|---|---|---|---|---|
+| 2 | 1.5 | 16 | 86811 (0.879) | 7 | 0.978; 0.965 | 0.937; 0.928 |
+| 2 | 2.0 | 24 | 77347 (0.783) | 4 | 0.912; 0.952 | 0.932; 0.924 |
+| 4 | 1.5 | 8 | 87640 (0.887) | 6 | 0.932; 0.962 | 0.936; 0.921 |
+| 4 | 2.0 | 16 | 58583 (0.593) | 4 | 0.964; 0.951 | 0.920; 0.894 |
+
+The temporal layering it replaces (frame k on layer rev4(k mod 16) + 1, 8 messages of 1400 B declared per
+step at 15 frames per second) used about 1/8.5 of the declared demand of each layer.
+
 ## Paper scenarios S1 to S9 and queue variants (design v2, item I8)
 
 `python3 emu/scenarios/gen.py --paper --out emu/scenarios [--M 2 4] [--seed 1] [--duration 180]` writes
@@ -594,8 +668,8 @@ chrony rendering and the convergence/warm-up check on a synthetic clock.csv, the
 ## Platform qualification Q (`emu/experiments/qualify.py`)
 
 `qualify.py manifest --out DIR` writes 60 paper-stack runs (M {2, 4} x {S1, S2, S3, S6, S7} x K {1, 3} x 3;
-the same seed for K = 1 and K = 3 of a repetition; K = 1 runs last with `"max_K": 1`; every spec passes
-`--phaseLag` and `--abortLagUs=0` through `emu_args`). Run with
+the same seed for K = 1 and K = 3 of a repetition; K = 1 runs last with `"max_K": 1`; every spec sets
+`"abort_lag_us": 0`, and the paper stack passes `--phaseLag` itself). Run with
 `runner.py DIR --K 3 --retry 0 --lag-exempt S1 S2 S3 S6 S7` (so that the runner neither lowers K nor
 repeats lagging runs during the qualification). `qualify.py analyze RESULTS --manifest DIR/manifest.json
 [--json q.json]` applies the run rule (completed, not aborted, lag of every step <= 1 ms), the step rule

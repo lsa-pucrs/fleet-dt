@@ -18,6 +18,8 @@ sequence of a stereo camera over water, `water-sbs-q<Q>-s0p5.txt`; the traces of
 | `still-q<Q>-s<S>.txt` | sizes of the frames of the camera of Pintado under synthetic motion (cross-check) |
 | `stats.json` | mean, median, quantiles, coefficient of variation, lognormal fit and lag-1 autocorrelation of the log size of every file ("water", "still", "model") |
 | `make_trace.py` | the program that produced the zed and still files (seed 1) |
+| `stripe-shares.json` | share profile of the 16 horizontal stripes of the spatial video layers (`vessel/publishers/video_layers.py`) per quality and scale: 24 pairs of the water sequence (012000 to 016499, evenly spread), each side-by-side frame encoded whole and as 16 stripe JPEGs; share w_s = mean stripe bytes / whole-frame bytes, with its CV and maximum over the pairs and the per-pair sizes |
+| `make_stripe_profile.py` | the program that produced `stripe-shares.json` (HTTP range requests on the ZIP of the dataset; about 10 s) |
 
 ## Water sequence (the traces of the experiments)
 
@@ -41,6 +43,15 @@ indoor laboratory). The recorded sequence varies less than the model of the zed 
 against 0.15) and more slowly (lag-1 autocorrelation 0.997 at 10 frames/s against 0.95). The sources
 replay the sequence at the video rate of the run (4.3 to 42 outputs/s), so one output is one frame of the
 sequence whatever the rate.
+
+Stripe profile (`stripe-shares.json`, `make_stripe_profile.py`): the source replay of the stripe layers
+gives stripe s of frame k the size round(F_k w_s), F_k the trace size of the frame; the sums of the shares
+(expansion of a frame by 16 separate JPEG headers and DC restarts) are 1.18 (q90-s1), 1.28 (q70-s1),
+1.36 (q50-s1), 1.59 (q90-s0p5), 1.88 (q70-s0p5) and 2.10 (q50-s0p5). The profile q90-s1 (stripes 0 to 7
+above the horizon 0.039 to 0.053, stripes 8 to 15 0.086 to 0.112) is the default of dtp.json, whose frame
+cap 98774 is the largest frame of `water-sbs-q90-s1.txt`, the default trace of the paper stack. The share
+of a stripe varies over the pairs (CV 0.07 to 0.41, largest at the horizon); the replay keeps the mean
+profile.
 
 Proposed text for Section VI-C, Sources: "... one video topic of the kind output, whose output sizes replay
 the JPEG sizes of a recorded stereo sequence over water (Pohang Canal Dataset [ref], CC BY-NC 4.0, 4500

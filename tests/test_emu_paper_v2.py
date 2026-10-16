@@ -17,6 +17,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 
 import pytest
 
@@ -281,6 +282,30 @@ def test_emu_stepbytes_selftestset(tmp_path):
         per[k] = per.get(k, 0) + 1
     for r in rows:
         assert abs(per.get(int(r["k"]), 0) - int(r["frames"])) <= 1
+
+
+@needs_emu
+def test_emu_pcap_of_the_ap(tmp_path):
+    """--pcap=1: ap.pcap holds every IPv4 packet that the AP hands to the GS (LINKTYPE_RAW, ns time stamps on
+    the host clock), one per MSDU, the same count as stepbytes.csv"""
+    import conformance as CF
+    sc = gen.make_paper("S1", 2, 4)
+    sp = tmp_path / "s1.json"
+    sp.write_text(json.dumps(sc))
+    run_emu(["--scenario=%s" % sp, "--outdir=%s" % tmp_path, "--vms=0", "--rt=none", "--monitor=none", "--gt=0",
+             "--selftest=2000000,1000", "--shiftS=0.3", "--duration=1.6", "--stepBytes=125000:30000", "--pcap=1"])
+    s = json.load(open(tmp_path / "summary.json"))
+    pk = CF.read_pcap(str(tmp_path / "ap.pcap"))
+    assert s["pcap"]["on"] and s["pcap"]["packets"] == len(pk) > 100 and s["pcap"]["errors"] == 0
+    assert all(p[0] >> 4 == 4 and len(p) == 1000 for _, p in pk)
+    src = {bytes(p[12:16]) for _, p in pk}
+    assert len(src) == 2                                   # both vessels
+    ts = [t for t, _ in pk]
+    origin = s["origin_ns"] / 1e9
+    assert ts == sorted(ts) and origin < ts[0] < origin + 1.7
+    rows = read_csv(tmp_path / "stepbytes.csv")
+    after = [t for t in ts if t >= origin + 0.3]           # scenario time >= 0
+    assert sum(int(r["frames"]) for r in rows) == len(after)
 
 
 @needs_emu
@@ -672,7 +697,11 @@ def test_qualify_manifest(tmp_path):
     assert all(len(v) == 1 for v in seeds.values()) and len({min(v) for v in seeds.values()}) == 30
     s = json.load(open(tmp_path / runs[0]["spec"]))
     assert s["stack"] == "paper" and s["steps"] == 400 and s["scenario"]["scenario_set"] == "paper-v2"
-    assert any(a.startswith("--phaseLag=125000:20000:10000") for a in s["emu_args"])
+    assert s["abort_lag_us"] == 0 and not s.get("emu_args")
+    import fleet
+    args = fleet.paper_emu_args(types.SimpleNamespace(CNT_PORT=9650), dict(s, dtp=json.load(open(os.path.join(ROOT, "dtp.json")))),
+                                fleet.paper_monitor(s))
+    assert "--phaseLag=125000:20000:10000" in args and "--abortLagUs=0" in args
 
 
 def make_run(root, rid, steps, lag, outcomes, status="ok", aborted=False):

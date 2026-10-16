@@ -5,28 +5,31 @@ Source: ZED stereo camera on USB 3.0 through V4L2 (side-by-side frames of 1344x3
 read with OpenCV VideoCapture (CAP_V4L2), or a synthetic moving pattern (--synthetic) for tests and
 bench runs without a camera.
 
-Each published frame is one JPEG (quality --quality). The program publishes one frame out of every
---divider captured frames, and of those a fraction --fps-scale (frame-rate scale of the vessel); the
-experiments set the offered load through the quality, the divider, the frame-rate scale and the
-per-vessel bound of the layer topics.
+The program publishes one frame out of every --divider captured frames, and of those a fraction
+--fps-scale (frame-rate scale of the vessel); the experiments set the offered load through the
+quality, the divider, the frame-rate scale and the per-vessel caps of the layer topics.
 
-Temporal layers (DTP with the topics video_1 .. video_Lv, see video_layers.py): published frame k goes
-to layer topic video_j with j = rev(k mod Lv) + 1 (bit reversal), so the first j layers carry j / Lv of
-the frame rate spread uniformly in time. A frame of layer j fits in ceil(r_j Ts) messages of at most
-bound_j bytes (the arrival curve of the topic in the DTP): when the JPEG exceeds that capacity, the
-publisher encodes it again with a lower quality (steps of --quality-step, down to --min-quality) and
-then at half the resolution, so every frame stays within the demand of its topic. The defaults of
---quality and --fps-scale come from the entry of the vessel in "video_layers"."vessels" of the DTP.
-Without layer topics (DTP with one topic video), every frame goes to video as before.
+Spatial stripe layers (DTP with the topics video_1 .. video_Lv, see video_layers.py): every published
+frame splits into Lv horizontal stripes (video_layers.stripe_rows), each stripe is encoded as its own
+JPEG (quality --quality), and layer topic video_j carries stripe rev(j - 1) (bit reversal) of every
+frame, so the first j layers carry j of the Lv stripes of each frame, spread over the image. A stripe
+of layer j fits in m_j messages of at most bound_j bytes (video_layers.msgs_per_stripe and the bound of
+the topic in the per-vessel DTP): when its JPEG exceeds that cap, the publisher encodes the stripe
+again with a lower quality (steps of --quality-step, down to --min-quality) and then at half the
+resolution, so every stripe stays within the demand of its topic. The stripes of a frame are published
+together, layer 1 first. The defaults of --quality and --fps-scale come from the entry of the vessel in
+"video_layers"."vessels" of the DTP; a common DTP (not resolved for the vessel) is resolved with the
+size_scale of the vessel. Without layer topics (DTP with one topic video), every frame is one JPEG on
+video as before.
 
-Each JPEG is split into messages of at most `bound - 8` bytes of JPEG data, where `bound` is the DTP
-bound of the topic; the content of each message is
+Each JPEG (stripe or frame) is split into messages of at most `bound - 8` bytes of JPEG data, where
+`bound` is the DTP bound of the topic; the content of each message is
 
     frame:u32  k:u16  n:u16  JPEG bytes [k*(bound-8), (k+1)*(bound-8))      (network byte order)
 
-with frame = index of the published frame (mod 2^32), k = index of the message in the frame and
-n = number of messages of the frame, so every content holds at most `bound` bytes. The messages go
-to boat/b<i>/raw/<topic> with QoS 0.
+with frame = index of the published frame (mod 2^32), k = index of the message in the stripe (or
+frame) and n = number of messages of the stripe, so every content holds at most `bound` bytes. The
+messages go to boat/b<i>/raw/<topic> with QoS 0.
 
 Usage:
   zed_publisher.py --dtp /etc/fleetdt/dtp.json --vessel 1 [--device /dev/video0] [--quality 50]
@@ -72,9 +75,21 @@ def split_frame(jpeg: bytes, frame: int, bound: int) -> List[bytes]:
     return [FRAME_HEADER.pack(f, k, n) + jpeg[k * chunk:(k + 1) * chunk] for k in range(n)]
 
 
-def frame_topic(k: int, layers: List[str]) -> str:
-    """Layer topic of published frame k: layers[rev(k mod Lv)] (layers = [video_1, ..., video_Lv])."""
-    return layers[video_layers.layer_of_frame(k, len(layers)) - 1]
+def stripe_images(img: np.ndarray, layers: int) -> List[np.ndarray]:
+    """The horizontal stripes s = 0 (top) .. layers - 1 of a frame (video_layers.stripe_rows)."""
+    return [np.ascontiguousarray(img[r0:r1]) for r0, r1 in video_layers.stripe_rows(img.shape[0], layers)]
+
+
+def encode_stripes(img: np.ndarray, names: List[str], caps: dict, quality: int, step: int = 10,
+                   min_quality: int = 5) -> List[Tuple[str, Optional[Tuple[bytes, int, int]]]]:
+    """[(layer topic, encode_within of its stripe)] in layer order: layer j (names[j - 1]) carries stripe
+    rev(j - 1), each stripe encoded within the cap of its topic."""
+    st = stripe_images(img, len(names))
+    out = []
+    for j, name in enumerate(names, start=1):
+        out.append((name, encode_within(st[video_layers.stripe_of_layer(j, len(names))], quality, caps[name],
+                                        step, min_quality)))
+    return out
 
 
 class FrameRateScale:
@@ -200,6 +215,11 @@ def main(argv=None) -> None:
     logging.basicConfig(level=a.log_level.upper(), format="%(asctime)s %(name)s %(levelname)s %(message)s")
     with open(a.dtp) as f:
         raw = json.load(f)
+    c = video_layers.config(raw)
+    if c is not None and c.get("resolved_for") is None:
+        raw = video_layers.resolve_vessel(raw, a.vessel)   # rates and bounds of this vessel
+    elif c is not None and int(c["resolved_for"]) != a.vessel:
+        ap.error("the DTP is resolved for vessel %s" % c["resolved_for"])
     vc = video_layers.vessel_config(raw, a.vessel)
     if a.quality is None:
         a.quality = int(vc["quality"])
@@ -212,14 +232,20 @@ def main(argv=None) -> None:
     layers = video_layers.layer_topics(raw)
     if layers:
         names = layers
-        log.info("video in %d layer topics %s .. %s (frame k -> layer rev(k mod %d) + 1)",
-                 len(layers), layers[0], layers[-1], len(layers))
+        if len(layers) != int(c["layers"]):
+            raise SystemExit("the DTP lists %d of the %d layer topics" % (len(layers), int(c["layers"])))
+        log.info("video in %d stripe layer topics %s .. %s (layer j -> stripe rev(j - 1))",
+                 len(layers), layers[0], layers[-1])
+        rate_dtp = float(c["fps"]) * a.fps_scale
+        if a.fps / a.divider * a.fps_scale > rate_dtp + 1e-6:
+            log.warning("%.2f frames/s exceed the frame rate of the DTP (%.2f): the regulator withholds the "
+                        "stripes beyond the demand", a.fps / a.divider * a.fps_scale, rate_dtp)
     elif "video" in dtp.topics:
         names = ["video"]
     else:
         raise SystemExit("the DTP has neither the topic video nor the layer topics video_1 ..")
-    bound = {n: dtp.topics[n].bound for n in names}
-    cap = {n: dtp.per_step(n) * (bound[n] - FRAME_HEADER.size) for n in names} if layers else {n: None for n in names}
+    bound = {n: int([t for t in raw["topics"] if t["name"] == n][0]["bound"]) for n in names}
+    cap = {n: video_layers.stripe_cap(raw, n) for n in names} if layers else {n: None for n in names}
     scaler = FrameRateScale(a.fps_scale)
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
@@ -251,30 +277,34 @@ def main(argv=None) -> None:
         captured += 1
         if (captured - 1) % a.divider or not scaler.keep():
             continue
-        name = frame_topic(frame, names) if layers else names[0]
-        res = encode_within(img, a.quality, cap[name], a.quality_step, a.min_quality)
-        if res is None:
-            log.warning("frame %d: no JPEG fits the %s bytes of %s", frame, cap[name], name)
+        if layers:
+            parts = encode_stripes(img, names, cap, a.quality, a.quality_step, a.min_quality)
+        else:
+            parts = [(names[0], encode_within(img, a.quality, None, a.quality_step, a.min_quality))]
+        bad = [n for n, r in parts if r is None]
+        if bad:
+            log.warning("frame %d: no JPEG fits the caps of %s", frame, ",".join(bad))
             continue
-        jpeg, q_used, halvings = res
-        s_reduced += int(q_used != a.quality or halvings > 0)
+        s_reduced += sum(int(r[1] != a.quality or r[2] > 0) for _, r in parts)
         if connected.is_set():
-            msgs = split_frame(jpeg, frame, bound[name])
-            topic = raw_topic(a.vessel, name)
-            for m in msgs:
-                info = client.publish(topic, m, qos=0)
-            if a.save_dir:
-                with open(os.path.join(a.save_dir, "%d.jpg" % (frame & 0xFFFFFFFF)), "wb") as f:
-                    f.write(jpeg)
+            for name, (jpeg, q_used, halvings) in parts:
+                msgs = split_frame(jpeg, frame, bound[name])
+                topic = raw_topic(a.vessel, name)
+                for m in msgs:
+                    info = client.publish(topic, m, qos=0)
+                if a.save_dir:
+                    sfx = "" if not layers else "-s%02d" % video_layers.stripe_of_layer(names.index(name) + 1, len(names))
+                    with open(os.path.join(a.save_dir, "%d%s.jpg" % (frame & 0xFFFFFFFF, sfx)), "wb") as f:
+                        f.write(jpeg)
+                s_msgs += len(msgs)
+                s_bytes += sum(len(m) for m in msgs)
             s_frames += 1
-            s_msgs += len(msgs)
-            s_bytes += sum(len(m) for m in msgs)
             frame += 1
         if a.frames and frame >= a.frames:
             break
         if a.stats_period > 0 and time.time() - s_t >= a.stats_period:
             dt = time.time() - s_t
-            log.info("%.2f frames/s, %.2f messages/s, %.0f content bytes/s, %.0f bytes/frame, %d frames re-encoded",
+            log.info("%.2f frames/s, %.2f messages/s, %.0f content bytes/s, %.0f bytes/frame, %d JPEGs re-encoded",
                      s_frames / dt, s_msgs / dt, s_bytes / dt, s_bytes / max(s_frames, 1), s_reduced)
             if not layers and s_msgs / dt > dtp.topics["video"].rate:
                 log.warning("%.1f messages/s exceed the DTP rate of video (%.1f/s): the vessel regulator "

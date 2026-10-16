@@ -49,6 +49,8 @@
  *                                               regulator polices to the table it sees on that topic
  *   plugin_opt_log /var/log/fleetdt/reg-b1.jsonl  vessel log: one JSON line per message not forwarded
  *                                               (step, topic, seq, bytes, reason); absent: no file
+ *   plugin_opt_step_log /var/log/fleetdt/reg-steps-b1.jsonl  step summaries: the JSON of boat/b<i>/regulator,
+ *                                               one line per step (p, d, rx, fwd, held, police, cost, ...)
  *   plugin_opt_jitter_ms 2                      J_l of the topics without "jitter" in the DTP (internal demand)
  *   plugin_opt_idle 8                           steps without raw messages after which d_l = 0 (0: never)
  *   plugin_opt_p1_offset_us 0                   demand at start(t) + offset (default 0: no offset)
@@ -98,6 +100,7 @@ static struct {
 	struct fdt_pdtp pdtp;
 	struct fdt_preg preg;
 	FILE *plog;
+	FILE *pslog;
 	char demand_topic[96], feedback_topic[96];
 	int warned_foreign;
 	int vessel, mode, n_ports;
@@ -351,7 +354,8 @@ static int register_callbacks(mosquitto_plugin_id_t *identifier)
 }
 
 static int init_paper(mosquitto_plugin_id_t *identifier, const char *dtp_path, const char *ports,
-                      const char *log_path, int max_msgs, struct fdt_preg_opts *po, const char *fb_topic)
+                      const char *log_path, const char *step_log_path, int max_msgs, struct fdt_preg_opts *po,
+                      const char *fb_topic)
 {
 	char err[256];
 	if (fdt_pdtp_load(dtp_path, &g.pdtp, err, sizeof err)) {
@@ -365,8 +369,16 @@ static int init_paper(mosquitto_plugin_id_t *identifier, const char *dtp_path, c
 			return MOSQ_ERR_INVAL;
 		}
 	}
+	if (step_log_path) {
+		g.pslog = fopen(step_log_path, "a");
+		if (!g.pslog) {
+			mosquitto_log_printf(MOSQ_LOG_ERR, "fdt_regulator: cannot open the step log %s", step_log_path);
+			return MOSQ_ERR_INVAL;
+		}
+	}
 	po->max_msgs = max_msgs;
 	po->log = g.plog;
+	po->step_log = g.pslog;
 	snprintf(g.raw_prefix, sizeof g.raw_prefix, "boat/b%d/raw/", g.vessel);
 	snprintf(g.levels_topic, sizeof g.levels_topic, "boat/b%d/levels", g.vessel);
 	snprintf(g.demand_topic, sizeof g.demand_topic, "boat/b%d/demand", g.vessel);
@@ -399,7 +411,7 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 	g.mode = FDT_MODE_FLEETDT;
 	for (int k = 0; k < FDT_DATA_MAX; k++)
 		g.ds[k].fd = -1;
-	const char *dtp_path = NULL, *ports = NULL, *log_path = NULL, *fb_topic = NULL;
+	const char *dtp_path = NULL, *ports = NULL, *log_path = NULL, *fb_topic = NULL, *step_log_path = NULL;
 	int max_msgs = 4096;
 	long long p1_spacing = -1, p1_guard = -1;
 	struct fdt_preg_opts po;
@@ -442,6 +454,8 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 			po.demand_ext = !strcmp(v, "external");
 		} else if (!strcmp(k, "log"))
 			log_path = v;
+		else if (!strcmp(k, "step_log"))
+			step_log_path = v;
 		else if (!strcmp(k, "jitter_ms"))
 			po.jitter_s = atof(v) * 1e-3;
 		else if (!strcmp(k, "idle"))
@@ -468,7 +482,7 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 		return MOSQ_ERR_INVAL;
 	}
 	if (g.paper)
-		return init_paper(identifier, dtp_path, ports, log_path, max_msgs, &po, fb_topic);
+		return init_paper(identifier, dtp_path, ports, log_path, step_log_path, max_msgs, &po, fb_topic);
 	if (fdt2_dtp_load(dtp_path, &g.dtp, err, sizeof err)) {
 		mosquitto_log_printf(MOSQ_LOG_ERR, "fdt_regulator: %s", err);
 		return MOSQ_ERR_INVAL;
@@ -503,6 +517,9 @@ int mosquitto_plugin_cleanup(void *userdata, struct mosquitto_opt *opts, int opt
 		if (g.plog)
 			fclose(g.plog);
 		g.plog = NULL;
+		if (g.pslog)
+			fclose(g.pslog);
+		g.pslog = NULL;
 	} else {
 		fdt_reg_free(&g.reg);
 	}

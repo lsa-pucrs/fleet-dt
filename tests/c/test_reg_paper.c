@@ -273,10 +273,11 @@ static void test_forward(void)
 {
 	struct fdt_preg r;
 	struct fdt_preg_opts o;
-	char *lb = NULL;
-	size_t ll = 0;
+	char *lb = NULL, *sb = NULL;
+	size_t ll = 0, sl = 0;
 	fdt_preg_opts_default(&o);
 	o.log = memlog(&lb, &ll);
+	o.step_log = memlog(&sb, &sl);
 	start_at(&r, &o, 20);
 	/* activity before the demand of step 20 */
 	raw(&r, STATE, 48, S(19) + 15000, 0xA0);
@@ -331,6 +332,10 @@ static void test_forward(void)
 		      cJSON_GetArrayItem(fwd, IMU)->valueint == 2 && cJSON_GetArrayItem(held, VIDEO)->valueint == 1);
 		CHECK(cJSON_IsTrue(cJSON_GetObjectItem(j, "have_p")));
 		cJSON_Delete(j);
+		/* the step log holds the same summary as one line */
+		fflush(o.step_log);
+		const char *line = sb ? strstr(sb, "{\"t\":20,") : NULL;
+		CHECK(line && !strncmp(line, (const char *)sm->p, sm->len) && line[sm->len] == '\n');
 	}
 	/* the message of step 21 has seq 0 of step 21 */
 	p[STATE] = 2;
@@ -341,7 +346,9 @@ static void test_forward(void)
 	CHECK(s21 && fdt_get_u32(s21->p) == 21 && fdt_get_u16(s21->p + 4) == 0 && s21->p[6] == 0x23);
 	fdt_preg_free(&r);
 	fclose(o.log);
+	fclose(o.step_log);
 	free(lb);
+	free(sb);
 }
 
 /* items 3 and 7: no p(t), no uplink of step t; logged; never forwarded later; late and bad tables */

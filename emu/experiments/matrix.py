@@ -35,16 +35,18 @@ of a cell faces the same channel and the same data.
 
 Sources and rho (Section VI-C): the telemetry streams of the DTP and the video of the kind output with
 the frame sizes of emu/traces/water-sbs-q<Q>-s0p5.txt (scale 0.5: 672x188 side by side). The base DTP
-(dtp_base.json, the content of dtp_v2.json) splits the video into 16 temporal layer topics video_1 ..
-video_16 (vessel/publishers/video_layers.py); each layer topic carries 1 / 16 of the frame rate, and the
-source of vessel i scales its frame sizes by the size_scale of "video_layers"."vessels".<i>. For
+(dtp_base.json, the content of dtp_v2.json) splits the video into 16 spatial stripe layer topics video_1 ..
+video_16 (vessel/publishers/video_layers.py); layer topic j carries stripe rev(j - 1) of every frame (one
+output per frame at the frame rate r), the stripe of frame k having round(F_k w_s) bytes with the share
+profile w of the trace (emu/traces/stripe-shares.json, profile q<Q>-s<S> of the trace), and the source of
+vessel i scales its frame sizes by the size_scale of "video_layers"."vessels".<i>. For
 rho = 1, 1.5, 2 the quality is 50, 70, 90 and the frame rate r of the video solves
   sum_i (c_streams + r Ts c_frame,i(Q)) = rho kappa_sat T_W,
 with c_streams the cost (eq. cost) of the telemetry units of one vessel per step, c_frame,i(Q) the mean
 cost of one frame of the trace scaled by the size_scale of vessel i, both at the mean PHY rates of the
 saturation runs, and kappa_sat the mean kappa(t) of the saturation runs of the scenario and M (B1, video
-at quality 90 and scale 1 at 15 frames per second). The DTP of the run declares the rate r / 16 of each
-layer topic and n = ceil(max frame / (s - 8)).
+at quality 90 and scale 1 at 15 frames per second). The DTP of the run declares the rate r of each layer
+topic and n_j = ceil(w_s max frame / (s - 8)) for the stripe s of layer j.
 
 Every experiment runs on the as2 stack ("stack": "as2"): emu/fleet.py and emu/run.py default to the
 paper stack, whose DTP format differs.
@@ -61,7 +63,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "emu", "scenarios"))
+sys.path.insert(0, os.path.join(ROOT, "vessel", "publishers"))
 import gen as scengen  # noqa: E402
+import video_layers  # noqa: E402
 from fleetdt.as2.airtime import Cost, Phy  # noqa: E402
 from fleetdt.as2.dtp import DTP, publish_header  # noqa: E402
 
@@ -110,17 +114,35 @@ def trace_path(q, scale=SCALE):
     return "emu/traces/%s-sbs-q%d-s%s.txt" % (TRACES, q, scale)
 
 
-def make_dtp(M, Ts, video_rate, video_n, lam=None, gamma=None):
+def profile_key(trace_file):
+    """share profile of a trace file emu/traces/<name>-sbs-q<Q>-s<S>.txt: "q<Q>-s<S>" """
+    b = os.path.basename(trace_file)[:-4]
+    return b[b.index("-q") + 1:]
+
+
+def shares(trace_file):
+    return video_layers.load_profile(profile_key(trace_file))
+
+
+def make_dtp(M, Ts, video_rate, video_n, lam=None, gamma=None, profile=None):
+    """DTP v2 of a run. video_n: the messages per stripe of each layer topic (a list in layer order, or one
+    value for every layer); profile: the share profile of the trace (key of stripe-shares.json)."""
     d = copy.deepcopy(base_dtp())
     d["vessels"] = list(range(1, M + 1))
     d["Ts"] = Ts
+    if profile is not None:
+        d["video_layers"]["profile"] = profile
+        d["video_layers"]["shares"] = video_layers.load_profile(profile)
+    d["video_layers"]["fps"] = float(video_rate)
     for tp in d["topics"]:
         if tp["name"] in d["required"]:
             tp["rate"] = round(1.0 / Ts, 6)        # one state per step (Ts = 1 / r_state)
         if tp["kind"] == "output":
-            # a layer topic of the temporal video layers carries 1 / layers of the frame rate
-            tp["rate"] = round(float(video_rate) / int(tp.get("layers") or 1), 6)
-            tp["n"] = int(video_n)
+            # a layer topic of the stripe layers carries one stripe of every frame
+            tp["rate"] = round(float(video_rate), 6)
+            tp["s"] = int(d["video_layers"].get("max_msg", 1400))   # messages of the bound of video_n
+            j = int(tp.get("layer") or 1)
+            tp["n"] = int(video_n[j - 1] if isinstance(video_n, (list, tuple)) else video_n)
     if lam is not None:
         d["lambda"] = float(lam)
     if gamma is not None:
@@ -133,8 +155,13 @@ def key(sid, M, Ts=0.125):
     return "%s-m%d" % (sid, M) + ("" if abs(Ts - 0.125) < 1e-9 else "-ts%g" % (Ts * 1e3))
 
 
-def video_n(sizes, s=1400):
-    return int(math.ceil(max(sizes) / float(s - 8)))
+def video_n(sizes, w=None, s=1400):
+    """messages per stripe of each layer topic: ceil(w_s max frame / (s - 8)) for the stripe s of layer j
+    (w: the share profile; None: one message count for a whole frame)"""
+    if w is None:
+        return int(math.ceil(max(sizes) / float(s - 8)))
+    L = len(w)
+    return [int(math.ceil(max(sizes) * w[video_layers.stripe_of_layer(j, L)] / float(s - 8))) for j in range(1, L + 1)]
 
 
 def size_scales(d, M):
@@ -154,11 +181,20 @@ def costs(d, sizes, Ri, R0):
             continue
         N = tp.rate * dtp.Ts
         cs += c.a(N * tp.n * tp.s, N * tp.n, tp.qos, Ri, R0, tp.h_P, tp.s)
-    vt = [tp for tp in dtp.topics if tp.output][0]
+    # one frame = one stripe on every layer topic, stripe j of round(w x) bytes
+    w = video_layers.config(d)["shares"]
+    lay = [tp for tp in dtp.topics if tp.output]
+    names = [t["name"] for t in d["topics"]]
+    stripe = {}
+    for vt in lay:
+        j = int(d["topics"][names.index(vt.name)].get("layer") or 1)
+        stripe[vt.name] = w[video_layers.stripe_of_layer(j, len(w))] if len(lay) > 1 else 1.0
     cf = 0.0
     for x in sizes:
-        m = int(math.ceil(x / float(vt.s - 8)))
-        cf += c.a(x + 8 * m, m, 0, Ri, R0, vt.h_P, vt.s)
+        for vt in lay:
+            xs = max(1, int(round(x * stripe[vt.name])))
+            m = int(math.ceil(xs / float(vt.s - 8)))
+            cf += c.a(xs + 8 * m, m, 0, Ri, R0, vt.h_P, vt.s)
     return cs, cf / len(sizes)
 
 
@@ -168,8 +204,9 @@ def rho_setting(cal, sid, M, Ts, rho):
     q = QUALITY[float(rho)]
     tp = trace_path(q)
     sizes = trace(tp)
-    n = video_n(sizes)
-    d = make_dtp(M, Ts, 1.0, n)
+    prof = profile_key(tp)
+    n = video_n(sizes, shares(tp))
+    d = make_dtp(M, Ts, 1.0, n, profile=prof)
     T_W = d["Ts"] - d["T1"] - d["T2"] - 2 * d["eps"] - d["d_rx"]
     cs, cf = costs(d, sizes, sat["R_up"], sat["R_down"])
     # frame cost of each vessel with its size_scale (the sources scale every frame, fdt_source.py)
@@ -179,7 +216,8 @@ def rho_setting(cal, sid, M, Ts, rho):
     r = (target - M * cs) / (Ts * sum(cfs))
     if r <= 0:
         raise SystemExit("rho %g in %s: the telemetry alone exceeds the target" % (rho, key(sid, M, Ts)))
-    return {"quality": q, "trace": tp, "rate": round(r, 3), "n": n, "kappa_sat": sat["kappa"], "T_W": T_W,
+    return {"quality": q, "trace": tp, "profile": prof, "rate": round(r, 3), "n": n, "kappa_sat": sat["kappa"],
+            "T_W": T_W,
             "c_streams": cs, "c_frame": cf, "c_frame_vessels": cfs, "target": target, "R_up": sat["R_up"],
             "R_down": sat["R_down"]}
 
@@ -192,7 +230,7 @@ def spec(exp, method, sid, M, Ts, rho, seed, steps, cal=None, predictor="eq", sa
         sc["phy"] = phy
     if sat:
         sizes = trace(SAT_TRACE)
-        d = make_dtp(M, Ts, SAT_RATE, video_n(sizes))
+        d = make_dtp(M, Ts, SAT_RATE, video_n(sizes, shares(SAT_TRACE)), profile=profile_key(SAT_TRACE))
         src = {"trace": SAT_TRACE}
         rs = {"quality": 90, "scale": 1.0, "rate": SAT_RATE, "trace": SAT_TRACE}
     else:
@@ -201,7 +239,7 @@ def spec(exp, method, sid, M, Ts, rho, seed, steps, cal=None, predictor="eq", sa
         # E0 explores with a larger ACI step (gamma 0.05) so that its levels reach their equilibrium and its
         # steps contain failures for the calibration; E1-E4 use the calibrated lambda and gamma
         d = make_dtp(M, Ts, rs["rate"], rs["n"], lam=(e0 or {}).get("lambda"),
-                     gamma=(e0 or {}).get("gamma", E0_GAMMA if exp == "E0" else None))
+                     gamma=(e0 or {}).get("gamma", E0_GAMMA if exp == "E0" else None), profile=rs.get("profile"))
         src = {"trace": rs["trace"]}
     a = {}
     if not sat and exp not in ("E0", "pilot"):
@@ -325,7 +363,8 @@ def main():
         os.makedirs(os.path.join(a.out, "whatif"), exist_ok=True)
         for M, Ts in WHATIF_ONLY:
             rs = rho_setting(cal, "S2", M, Ts, 1.5)
-            d = make_dtp(M, Ts, rs["rate"], rs["n"], lam=cal["e0"].get("lambda"), gamma=cal["e0"].get("gamma"))
+            d = make_dtp(M, Ts, rs["rate"], rs["n"], lam=cal["e0"].get("lambda"), gamma=cal["e0"].get("gamma"),
+                         profile=rs.get("profile"))
             with open(os.path.join(a.out, "whatif", "S2-m%d-ts%g.json" % (M, Ts * 1e3)), "w") as f:
                 json.dump({"M": M, "Ts": Ts, "scenario": "S2", "rho": 1.5, "dtp": d, "rho_setting": rs}, f, indent=1)
     man = {"name": os.path.basename(os.path.abspath(a.out)), "cmd": a.cmd, "order_seed": a.order_seed,

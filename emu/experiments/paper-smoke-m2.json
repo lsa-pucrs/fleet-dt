@@ -15,5 +15,5 @@
  "dti": {"enabled": true, "offset_ms": 1.0, "stagger_ms": 0.0, "idle": 8},
  "jmcs": {"period_s": 10, "first": "survey", "video_prefix": "video"},
  "monitor": {"offset_us": 500, "jitter_us": 300, "quant": "harvest", "harvest_ms": 0, "sigma": 0.0, "backend": "auto"},
- "source": {"kind": "fdt_source", "trace": "emu/traces/water-sbs-q50-s0p5.txt", "scale": 1.0}
+ "source": {"kind": "fdt_source", "trace": "emu/traces/water-sbs-q90-s1.txt", "scale": 1.0}
 }

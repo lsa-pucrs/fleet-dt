@@ -22,6 +22,10 @@
 //                phase 3 and at the end of the step, and the catch-up flag (emu/README.md)
 //   stepbytes.csv with --stepBytes: per step and vessel, the unique IP packets (and their bytes) that the
 //                AP receives without error, in phase 3 and in the whole step (offline subset replays)
+//   ap.pcap      with --pcap=1: the IPv4 packets that the AP node hands to the GS (uplink of the vessels,
+//                once per MSDU) and that the GS hands to the AP node (downlink), LINKTYPE_RAW, time stamps
+//                in nanoseconds of the host clock (origin + simulator time); the E0 conformance check
+//                (emu/experiments/conformance.py) reads the MQTT QoS of every forwarded message from it
 //
 // Usage (from the ns-3 tree):  ./ns3 run "fdt-emu --scenario=S.json --outdir=D --basePort=41000"
 
@@ -1280,6 +1284,70 @@ struct StepBytes
 StepBytes g_sb;
 
 // ---------------------------------------------------------------------------------------------
+// pcap of the AP node (--pcap): IPv4 packets between the AP node and the GS VM
+
+struct ApPcap
+{
+    FILE* f = nullptr;
+    uint32_t snap = 65535;
+    uint64_t packets = 0, bytes = 0, errors = 0;
+
+    bool Open(const std::string& path, uint32_t snaplen)
+    {
+        f = fopen(path.c_str(), "wb");
+        if (!f)
+        {
+            return false;
+        }
+        // a 4 MiB stdio buffer: the writes run in the simulation thread (E0 runs only)
+        setvbuf(f, nullptr, _IOFBF, 4 << 20);
+        snap = snaplen;
+        // pcap global header with nanosecond time stamps (magic a1b23c4d), version 2.4, LINKTYPE_RAW (101)
+        uint32_t magic = 0xa1b23c4d, zone = 0, sigfigs = 0, link = 101;
+        uint16_t vmaj = 2, vmin = 4;
+        bool ok = fwrite(&magic, 4, 1, f) == 1 && fwrite(&vmaj, 2, 1, f) == 1 && fwrite(&vmin, 2, 1, f) == 1 &&
+                  fwrite(&zone, 4, 1, f) == 1 && fwrite(&sigfigs, 4, 1, f) == 1 && fwrite(&snap, 4, 1, f) == 1 &&
+                  fwrite(&link, 4, 1, f) == 1;
+        if (!ok)
+        {
+            errors++;
+        }
+        return true;
+    }
+
+    void Write(Ptr<const Packet> p)
+    {
+        if (!f)
+        {
+            return;
+        }
+        uint32_t len = p->GetSize();
+        uint32_t incl = std::min(len, snap);
+        std::vector<uint8_t> buf(incl);
+        p->CopyData(buf.data(), incl);
+        int64_t ns = g_originNs + Simulator::Now().GetNanoSeconds();
+        uint32_t rec[4] = {uint32_t(ns / 1000000000), uint32_t(ns % 1000000000), incl, len};
+        if (fwrite(rec, sizeof rec, 1, f) != 1 || (incl && fwrite(buf.data(), incl, 1, f) != 1))
+        {
+            errors++;
+        }
+        packets++;
+        bytes += len;
+    }
+
+    void Close()
+    {
+        if (f)
+        {
+            fclose(f);
+            f = nullptr;
+        }
+    }
+};
+
+ApPcap g_pcap;
+
+// ---------------------------------------------------------------------------------------------
 // PHY traces of every Wi-Fi node (ground truth) and of the AP (monitor)
 
 struct RxCtx
@@ -1607,6 +1675,10 @@ FromVm(int h,
     tag.SetPriority(uint8_t(up));
     pkt->ReplacePacketTag(tag);
     Mac48Address wdst = (h != 0 && d == 0) ? g_wifiMac[0] : g_wifiMac[d];
+    if (h == 0)
+    {
+        g_pcap.Write(pkt);
+    }
     if (RelaySend(h, pkt, wdst, uint8_t(up)))
     {
         H.fromVm++;
@@ -1628,6 +1700,10 @@ FromWifi(int h,
          NetDevice::PacketType)
 {
     Host& H = g_hosts[h];
+    if (h == 0 && proto == 0x0800)
+    {
+        g_pcap.Write(p);
+    }
     if (proto != 0x0800 || !H.fd)
     {
         return;
@@ -2195,6 +2271,8 @@ main(int argc, char* argv[])
     std::string phaseLagSpec;     // "TS_US:T1_US:T2_US": steplag.csv
     double phaseLagEveryUs = 250, abortLagUs = 0, catchupUs = 1000;
     std::string probeLoss;        // "A-B[,C-D...]:DT_MS": lossprobe.csv (diagnostics only)
+    bool pcap = false;            // ap.pcap
+    uint32_t pcapSnap = 65535;
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("scenario", "scenario JSON (emu/scenarios)", scenarioPath);
@@ -2252,6 +2330,11 @@ main(int argc, char* argv[])
                  "A-B[,C-D...]:DT_MS: write OUTDIR/lossprobe.csv, the received power of each pair every DT_MS "
                  "(diagnostics: with fading models the probe draws from the fading streams and changes the run)",
                  probeLoss);
+    cmd.AddValue("pcap",
+                 "write OUTDIR/ap.pcap: the IPv4 packets between the AP node and the GS (LINKTYPE_RAW, host-clock "
+                 "time stamps in ns)",
+                 pcap);
+    cmd.AddValue("pcapSnap", "bytes kept of each packet in ap.pcap", pcapSnap);
     cmd.Parse(argc, argv);
 
     mj::Value sc = mj::ParseFile(scenarioPath);
@@ -3071,6 +3154,10 @@ main(int argc, char* argv[])
         g_sb.p3off = v[1];
         g_sb.lastUids.assign(g_M + 1, {});
     }
+    if (pcap)
+    {
+        NS_ABORT_MSG_IF(!g_pcap.Open(outdir + "/ap.pcap", pcapSnap), "cannot write " << outdir << "/ap.pcap");
+    }
     if (!phaseLagSpec.empty() && g_realtime)
     {
         auto v = parseUs(phaseLagSpec, "phaseLag", 3, 3);
@@ -3185,6 +3272,7 @@ main(int argc, char* argv[])
     {
         g_sb.Write(outdir + "/stepbytes.csv");
     }
+    g_pcap.Close();
     if (probe.f)
     {
         fclose(probe.f);
@@ -3224,6 +3312,8 @@ main(int argc, char* argv[])
        << ",\"max_us\":" << g_plag.runMax << ",\"abort_us\":" << g_plag.abortNs / 1000
        << ",\"aborted\":" << (g_plag.aborted ? "true" : "false") << ",\"abort_step\":" << g_plag.abortStep
        << ",\"abort_lag_us\":" << g_plag.abortLagUs << "},\"step_bytes\":" << (g_sb.on ? "true" : "false")
+       << ",\"pcap\":{\"on\":" << (pcap ? "true" : "false") << ",\"packets\":" << g_pcap.packets
+       << ",\"bytes\":" << g_pcap.bytes << ",\"errors\":" << g_pcap.errors << "}"
        << ",\"qdisc\":{";
     {
         bool first = true;

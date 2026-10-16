@@ -241,6 +241,7 @@ int fdt_preg_init(struct fdt_preg *r, const struct fdt_pdtp *d, int vessel, cons
 	r->idle = o->idle;
 	r->p1_off_us = o->p1_off_us > 0 && o->p1_off_us < d->T1_us ? o->p1_off_us : 0;
 	r->log = o->log;
+	r->step_log = o->step_log;
 	if (io)
 		r->io = *io;
 	for (int k = 0; k < FDT_P_STEPS; k++)
@@ -792,6 +793,9 @@ static void do_end(struct fdt_preg *r, int64_t t)
 		struct jbuf j = {r->json, 0, r->json_cap};
 		summary_json(r, &j, s);
 		pub(r, r->log_topic, 0, j.p, j.n);
+		if (r->step_log && (fwrite(j.p, 1, j.n, r->step_log) != j.n || fputc('\n', r->step_log) == EOF ||
+		                    fflush(r->step_log)))
+			r->s.log_err++;
 		step_reset(s, -1);
 	}
 	r->s.steps++;

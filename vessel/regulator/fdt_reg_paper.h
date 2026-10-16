@@ -26,7 +26,9 @@
  *                  the message in its topic and step from 0.
  *  start(t+1)      end of step t: every message of step t not forwarded is logged (one JSON line per
  *                  message in the vessel log file: step, topic, sequence number, bytes, reason) and
- *                  is never forwarded later; the step summary goes to boat/b<i>/regulator (QoS 0).
+ *                  is never forwarded later; the step summary goes to boat/b<i>/regulator (QoS 0) and,
+ *                  with a step log, to one JSON line of that file (the vessel-side record of p(t), d,
+ *                  the received, forwarded and held messages and the forwarded cost of each topic).
  *
  * Ablations: paper_nopolice (B5a) forwards every message of a topic of level 1 or 2; paper_noeos (B5b)
  * has no end-of-step rule: a message not forwarded in its step stays queued and is offered again at
@@ -155,6 +157,7 @@ struct fdt_preg {
 	int64_t next_p1, next_v, next_end;
 	uint64_t arr;
 	FILE *log;                      /* vessel log, one JSON line per message not forwarded; NULL: off */
+	FILE *step_log;                 /* step summaries (the JSON of boat/b<i>/regulator), one line per step */
 	struct fdt_preg_stats s;
 	char *json;
 	size_t json_cap;
@@ -183,6 +186,7 @@ struct fdt_preg_opts {
 	double jitter_s;         /* J_l of the topics without "jitter" in the DTP (0.002 s) */
 	int64_t p1_off_us;       /* offset of the demand after start(t) (0) */
 	FILE *log;               /* vessel log (NULL: off); the core does not close it */
+	FILE *step_log;          /* step summaries, one JSON line per step (NULL: off); not closed by the core */
 	double U;                /* b8: U before a feedback with U (<= 0: "U" of the DTP) */
 	int64_t lw_bytes;        /* paper_tdma: L_w (16384) */
 	int64_t tick_us;         /* paper_tdma: release period in the slot (1000) */

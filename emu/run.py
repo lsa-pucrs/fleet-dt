@@ -4,6 +4,10 @@
   emu/run.py build                         copy emu/ns3 into the ns-3 tree (scratch/fdt-emu) and build it
   emu/run.py image                         build the base image (emu/vm/build_image.sh)
   emu/run.py up --scenario S.json          VMs (GS + M vessels), emulator, monitor bridge, clock probe
+               [--cpu-ratio R]             vessel VMs under the CPU profile of emu/vm/cpu_profile.py (QEMU in a
+                                           systemd scope with CPUQuota = R of one CPU; off by default)
+               [--clock-inject]            vessel clocks from a schedule (E1): emu-host.json names
+                                           /etc/fleetdt/clock-schedule.json, which emu/fleet.py installs per run
   emu/run.py sync                          copy this repository into every VM (~/fleet-dt)
   emu/run.py ssh HOST [CMD...]             HOST: gs, v1..vM (interactive without CMD)
   emu/run.py run EXP.json [--stack paper|as2]   one experiment; results in EMU/runs/<time>-<name>/ (or the
@@ -91,6 +95,17 @@ configure_slot(int(os.environ.get("FDT_SLOT", "0")))
 
 def pinned(cmd, cpus):
     return (["taskset", "-c", cpus] + cmd) if cpus else cmd
+
+
+CLOCK_SCHEDULE = "/etc/fleetdt/clock-schedule.json"   # E1 (emu/fleet.py installs the schedule of each run)
+
+
+def cpu_profile_mod():
+    d = os.path.join(ROOT, "emu", "vm")
+    if d not in sys.path:
+        sys.path.insert(0, d)
+    import cpu_profile
+    return cpu_profile
 
 
 def log(*a):
@@ -204,13 +219,21 @@ def parallel(fn, items):
 # ------------------------------------------------------------------------------------------------
 # VMs
 
-def seed_iso(h, M, d, clock, chrony):
+def emu_host_json(h, M, clock, clock_inject=False):
+    """/etc/fleetdt/emu-host.json of host h; with clock_inject a vessel's "clock" names the schedule file, so
+    fdt-clockinit sets only the offset and the frequency error comes from the schedule (fdt-clockerr.py)"""
+    if clock_inject and h != 0:
+        clock = dict(clock, schedule=CLOCK_SCHEDULE)
+    hosts = {str(k): {"ip": host_ip(k), "mac": vm_mac(k)} for k in range(M + 1)}
+    return {"index": h, "hosts": hosts, "prefix": 24, "subnet": "10.10.0.0/24", "mtu": 1500,
+            "route_opts": "quickack 1 rto_min 20ms",
+            "sysctl": {"net.ipv4.tcp_slow_start_after_idle": "0"}, "clock": clock}
+
+
+def seed_iso(h, M, d, clock, chrony, clock_inject=False):
     os.makedirs(d, exist_ok=True)
     pub = open(KEY + ".pub").read().strip()
-    hosts = {str(k): {"ip": host_ip(k), "mac": vm_mac(k)} for k in range(M + 1)}
-    emu_host = {"index": h, "hosts": hosts, "prefix": 24, "subnet": "10.10.0.0/24", "mtu": 1500,
-                "route_opts": "quickack 1 rto_min 20ms",
-                "sysctl": {"net.ipv4.tcp_slow_start_after_idle": "0"}, "clock": clock}
+    emu_host = emu_host_json(h, M, clock, clock_inject)
     if h == 0:
         chrony_conf = ("# GS: follows the clock of the emulation host (ptp_kvm) and serves the vessels\n"
                        "refclock PHC /dev/ptp0 poll -2 dpoll -2\n"
@@ -242,7 +265,32 @@ def seed_iso(h, M, d, clock, chrony):
     return iso
 
 
-def start_vm(h, M, clock, chrony, mem=768):
+def qemu_cmd(h, name, disk, iso, fwd, pidf, mem=768):
+    """QEMU command of host h; -cpu host,+invtsc exposes the invariant TSC, so the guest keeps the TSC
+    clock source (design item I9)"""
+    d = os.path.join(VMS, host_name(h))
+    return [QEMU, "-name", "%s,process=%s" % (name, name), "-enable-kvm", "-cpu", "host,+invtsc", "-smp", "1",
+            "-m", str(mem), "-drive", "file=%s,if=virtio,cache=unsafe" % disk,
+            "-drive", "file=%s,media=cdrom,readonly=on" % iso,
+            "-netdev", "user,id=m0," + fwd, "-device", "virtio-net-pci,netdev=m0,mac=%s" % mgmt_mac(h),
+            "-netdev", "dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port=%d,"
+                       "remote.type=inet,remote.host=127.0.0.1,remote.port=%d" % (BASE_PORT + 2 * h,
+                                                                                    BASE_PORT + 2 * h + 1),
+            "-device", "virtio-net-pci,netdev=d0,mac=%s" % vm_mac(h),
+            "-device", "vhost-vsock-pci,guest-cid=%d" % (CID_BASE + h),
+            "-serial", "file:%s" % os.path.join(d, "serial.log"), "-monitor", "none", "-display", "none",
+            "-pidfile", pidf, "-daemonize"]
+
+
+def vm_launch_cmd(h, cmd, cpu_ratio=None):
+    """the QEMU command of host h as launched: a vessel with a CPU ratio runs in a systemd scope with the
+    CPU quota of emu/vm/cpu_profile.py (wrap), all of it pinned to the VM CPUs"""
+    if cpu_ratio and h != 0:
+        cmd = cpu_profile_mod().wrap_cmd(cmd, float(cpu_ratio), unit="%s-%s-cpu" % (VM_PREFIX, host_name(h)))
+    return pinned(cmd, VM_CPUS)
+
+
+def start_vm(h, M, clock, chrony, mem=768, cpu_ratio=None, clock_inject=False):
     d = os.path.join(VMS, host_name(h))
     if os.path.isdir(d):
         shutil.rmtree(d)
@@ -250,24 +298,14 @@ def start_vm(h, M, clock, chrony, mem=768):
     disk = os.path.join(d, "disk.qcow2")
     subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b",
                     os.path.join(IMG, "base.qcow2"), disk], check=True)
-    iso = seed_iso(h, M, os.path.join(d, "seed"), clock, chrony)
+    iso = seed_iso(h, M, os.path.join(d, "seed"), clock, chrony, clock_inject)
     fwd = "hostfwd=tcp:127.0.0.1:%d-:22" % (SSH_PORT + h)
     if h == 0:
         fwd += ",hostfwd=tcp:127.0.0.1:%d-:1883" % MQTT_FWD
     pidf = os.path.join(d, "qemu.pid")
     name = "%s-%s" % (VM_PREFIX, host_name(h))
-    cmd = [QEMU, "-name", "%s,process=%s" % (name, name), "-enable-kvm", "-cpu", "host", "-smp", "1",
-           "-m", str(mem), "-drive", "file=%s,if=virtio,cache=unsafe" % disk,
-           "-drive", "file=%s,media=cdrom,readonly=on" % iso,
-           "-netdev", "user,id=m0," + fwd, "-device", "virtio-net-pci,netdev=m0,mac=%s" % mgmt_mac(h),
-           "-netdev", "dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port=%d,"
-                      "remote.type=inet,remote.host=127.0.0.1,remote.port=%d" % (BASE_PORT + 2 * h,
-                                                                                   BASE_PORT + 2 * h + 1),
-           "-device", "virtio-net-pci,netdev=d0,mac=%s" % vm_mac(h),
-           "-device", "vhost-vsock-pci,guest-cid=%d" % (CID_BASE + h),
-           "-serial", "file:%s" % os.path.join(d, "serial.log"), "-monitor", "none", "-display", "none",
-           "-pidfile", pidf, "-daemonize"]
-    subprocess.run(pinned(cmd, VM_CPUS), check=True, stdin=subprocess.DEVNULL)
+    cmd = qemu_cmd(h, name, disk, iso, fwd, pidf, mem)
+    subprocess.run(vm_launch_cmd(h, cmd, cpu_ratio), check=True, stdin=subprocess.DEVNULL)
     return int(open(pidf).read().strip()), name
 
 
@@ -287,6 +325,17 @@ def wait_ssh(h, timeout=180):
 # ------------------------------------------------------------------------------------------------
 # emulator, bridge, probe
 
+_EMU_PROCS = {}   # pid -> Popen of the emulators started by this process (exit status of a run)
+
+
+def emulator_status(pid):
+    """exit status of an emulator started by this process, None while it runs (or when unknown)"""
+    p = _EMU_PROCS.get(pid)
+    if p is None:
+        return None
+    return p.poll()
+
+
 def start_emulator(scenario, outdir, M, gt=True, rt="HardLimit", extra=(), run_start_us=None, gt_states=None):
     os.makedirs(outdir, exist_ok=True)
     out = open(os.path.join(outdir, "emu.out"), "w")
@@ -298,6 +347,7 @@ def start_emulator(scenario, outdir, M, gt=True, rt="HardLimit", extra=(), run_s
         cmd.append("--gtStates=%s" % gt_states)
     p = subprocess.Popen(pinned(cmd, EMU_CPUS), stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                          start_new_session=True)
+    _EMU_PROCS[p.pid] = p
     t = time.time()
     while time.time() - t < 15:
         txt = open(os.path.join(outdir, "emu.out")).read()
@@ -386,11 +436,14 @@ def cmd_up(a):
         shutil.rmtree(sess)
     os.makedirs(sess)
     chrony = {"minpoll": a.chrony_minpoll, "maxpoll": a.chrony_maxpoll}
+    if a.cpu_ratio is not None:
+        cpu_profile_mod().profile(a.cpu_ratio)     # rejects a ratio that cgroup v2 cannot express
     st = {"M": M, "scenario": os.path.abspath(a.scenario), "clocks": clocks, "procs": [], "t_up": time.time(),
-          "vm_pids": {}, "slot": SLOT, "clock_seed": a.clock_seed}
+          "vm_pids": {}, "slot": SLOT, "clock_seed": a.clock_seed, "cpu_ratio": a.cpu_ratio,
+          "clock_inject": bool(a.clock_inject)}
     log("starting %d VMs" % (M + 1))
     for h in range(M + 1):
-        pid, name = start_vm(h, M, clocks[h], chrony, mem=a.mem)
+        pid, name = start_vm(h, M, clocks[h], chrony, mem=a.mem, cpu_ratio=a.cpu_ratio, clock_inject=a.clock_inject)
         st["procs"].append([pid, name])
         st["vm_pids"][host_name(h)] = pid
     # the probe starts with the VMs, so clock.csv shows the convergence of chrony from the boot
@@ -634,6 +687,10 @@ def main():
     u.add_argument("--mem", type=int, default=768)
     u.add_argument("--rt", default="HardLimit")
     u.add_argument("--sync", action="store_true")
+    u.add_argument("--cpu-ratio", type=float, default=None,
+                   help="vessel VMs under the CPU profile (emu/vm/cpu_profile.py wrap; e.g. 0.25 of one CPU)")
+    u.add_argument("--clock-inject", action="store_true",
+                   help="vessel clocks from the schedule of each run (E1; emu-host.json names %s)" % CLOCK_SCHEDULE)
     sub.add_parser("sync")
     s = sub.add_parser("ssh")
     s.add_argument("host")

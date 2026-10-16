@@ -6,14 +6,15 @@ Two stacks (emu/run.py run EXP.json --stack paper|as2; default: the "stack" of t
   paper  the model of the paper (Sections III to V): fleetdt.as_service (AS, Algorithm 1) with the outer
          loop fleetdt.outer, the VE collector (fleetdt.ve live, the DTA file), the v1 DTI program
          vessel/dti/fdt_dti.c, the JMCS stub emu/jmcs_stub.py (fleet/order, survey/transit every 10 s),
-         the vessel brokers with the regulator plugin in "plugin_opt_mode paper", the layered video
-         source vessel/publishers/fdt_source.py (replay of a frame-size trace into the 16 layer topics),
+         the vessel brokers with the regulator plugin in "plugin_opt_mode paper", the stripe video
+         source vessel/publishers/fdt_source.py (replay of a frame-size trace into the 16 stripe layer
+         topics), the vessel sampler of the bridge send queues (emu/tools/outq_sampler.c),
          and the channel monitor of R6: the emulator exports the nl80211 counters of the AP (fdt-emu
          --cnt) and fleetdt.monitor_adapter computes y(t) by the logic of fdt_chmon.c and publishes it on
          fleet/throughput. See run_fleet_paper() and emu/README.md.
 
          Each vessel gets its own DTP, RUN/dtp_vessel.json = `video_layers.py resolve` of the DTP of the
-         run (layer bounds scaled by its size_scale), which its regulator, its DTI program and its
+         run (rates and bounds of the layer topics from its size_scale), which its regulator, its DTI program and its
          source read, so the demand tables differ between vessels; the GS reads RUN/dtp.json.
          The DTI program runs with --jitter-ms equal to plugin_opt_jitter_ms of the regulator
          (paper_jitter_ms: "plugin_opts"."jitter_ms", default 2), so the table that the regulator
@@ -22,6 +23,12 @@ Two stacks (emu/run.py run EXP.json --stack paper|as2; default: the "stack" of t
          "method" (paper stack) sets the AS policy, the regulator mode, the data bridges and the fleet
          feedback (PAPER_METHODS, design Section 5): fleetdt, B1, B2, B3, B4, B5a, B5b, B7, B8, B9, B10.
          B4 needs "as": {"C_ref": bytes per step}; B8 takes its U from "feedback": {"U"} (else "as"."U").
+
+         The emulator runs with --phaseLag and --abortLagUs ("abort_lag_us", default 1000 us; a lag abort
+         fails the run) and --stepBytes, with --pcap for "pcap": true (E0); "clock": {"inject": true}
+         installs the oscillator schedule of each vessel (E1); "replay_subsets": true runs the C(t)
+         replays after the run (E2); result.json records the CPU profile of the VMs before and after the
+         run (emu/README.md, "Paper stack").
   as2    the older model of SPEC_v2.md (fleetdt.as2.service, fleetdt.as2.opctl), described below.
 
 Every run records the git commit and a digest of the files of the stack in RUN/result.json
@@ -409,13 +416,23 @@ PAPER_FILES = ["fleetdt/__init__.py", "fleetdt/as_service.py", "fleetdt/as_model
                "vessel/dti/*.c", "vessel/regulator/*.[ch]", "vessel/publishers/*.py", "common/*.[ch]",
                "radio/channel_monitor/fdt_chmon.c", "radio/channel_monitor/build_host.sh", "emu/fleet.py",
                "emu/run.py", "emu/jmcs_stub.py", "emu/monitor_bridge.py", "emu/ns3/*", "Makefile",
-               "mosquitto/patches/*.patch", "system/nftables-fdt.nft", "fleetdt/feedback.py", "emu/traces/*.txt"]
+               "mosquitto/patches/*.patch", "system/nftables-fdt.nft", "fleetdt/feedback.py", "emu/traces/*.txt",
+               "emu/traces/stripe-shares.json", "emu/tools/outq_sampler.c", "emu/vm/guest/fdt_clock_schedule.py"]
 PAPER_MONITOR = {"offset_us": 500, "jitter_us": 0, "quant": "harvest", "harvest_ms": 0, "sigma": 0.0,
                  "noise_seed": None, "backend": "auto"}
 # plugin_opt_jitter_ms of the regulator when the experiment gives none (fdt_preg_opts_default)
 PAPER_JITTER_MS = 2.0
-# frame sizes of the default source (Pohang Canal Dataset, quality 50, half scale; emu/traces/README.md)
-PAPER_TRACE = "emu/traces/water-sbs-q50-s0p5.txt"
+# frame sizes of the default source (Pohang Canal Dataset, quality 90, full scale 1344x376: the trace of the
+# stripe share profile q90-s1 and of the frame cap of dtp.json; emu/traces/README.md)
+PAPER_TRACE = "emu/traces/water-sbs-q90-s1.txt"
+# lag at which the emulator stops a run (--abortLagUs; "abort_lag_us" of the experiment, 0 for Q)
+PAPER_ABORT_LAG_US = 1000
+# options of the emulator that the paper stack sets itself (not through "emu_args")
+PAPER_EMU_OWN = ("--phaseLag=", "--abortLagUs=", "--stepBytes=", "--pcap=")
+# E1: oscillator schedule of a vessel (fdt-clockerr.py reads it) and the log of the injector
+CLOCK_SCHEDULE = "/etc/fleetdt/clock-schedule.json"
+CLOCK_LOG = "/var/log/fdt-clockerr.jsonl"
+CLOCK_KEYS = ("ramp_ppm", "ramp_s", "hold_s", "loss_n", "loss_s", "loss_windows", "warm_s")
 # method -> (AS policy, None: no AS; regulator mode; data bridges; fleet feedback), design Section 5.
 # The AS runs only where the method takes priority tables; fdt_dti runs for every method, so the DTA
 # holds M(t) and D_i(t) for the metrics. The paper_* modes and b8 are the baselines of the paper core
@@ -541,7 +558,7 @@ def _video_layers():
 
 
 def paper_vessel_dtp(dtp, h):
-    """DTP of vessel h: `video_layers.py resolve` (the bounds of the layer topics scaled by its size_scale)"""
+    """DTP of vessel h: `video_layers.py resolve` (rates and bounds of the layer topics from its size_scale)"""
     return _video_layers().resolve_vessel(dtp, h)
 
 
@@ -577,11 +594,15 @@ def paper_prepare_cmd(R, spec, h, M):
         lines += [# the DTP of this vessel (video_layers.py resolve): its regulator, DTI program and source
                   "echo %s | base64 -d > %s/dtp_vessel.json" % (b64(paper_vessel_dtp(spec["dtp"], h)), RUN),
                   "make -s build/fdt_regulator.so build/fdt_dti MOSQ=/opt/mosquitto-2.1 > %s/make.log 2>&1" % RUN,
-                  "sha256sum build/fdt_regulator.so build/fdt_dti > %s/build.sha256" % RUN,
+                  # the vessel sampler of the unsent bytes of the bridge sockets (SIOCOUTQ; saturation of C(t))
+                  "cc -O2 -Wall -o build/fdt_outq emu/tools/outq_sampler.c -lm >> %s/make.log 2>&1" % RUN,
+                  "sha256sum build/fdt_regulator.so build/fdt_dti build/fdt_outq > %s/build.sha256" % RUN,
                   ("python3 -m fleetdt.gsconf vessel --vessel %d --dtp %s/dtp_vessel.json --plugin $HOME/fleet-dt/build/"
                    "fdt_regulator.so --mode %s --log-dest 'file %s/mosquitto.log' > %s/m.conf") % (h, RUN, pm, RUN, RUN),
                   # the vessel log of the regulator (the messages of each step that it did not forward)
                   "echo 'plugin_opt_log %s/regulator.jsonl' >> %s/m.conf" % (RUN, RUN),
+                  # the step summaries of the regulator (p(t), d, received, forwarded, held, cost per topic)
+                  "echo 'plugin_opt_step_log %s/regsteps.jsonl' >> %s/m.conf" % (RUN, RUN),
                   # D_i(t) comes from the v1 DTI program (fdt_dti); the regulator polices to the table it sees
                   "echo 'plugin_opt_demand %s' >> %s/m.conf" % ("external" if ext else "internal", RUN),
                   # the jitter allowance J of the regulator; fdt_dti runs with --jitter-ms J (paper_dti_cmd)
@@ -731,11 +752,162 @@ def paper_monitor(spec):
 
 
 def paper_emu_args(R, spec, mon):
-    Ts_us = int(round(float(spec["dtp"]["Ts"]) * 1e6))
-    return ["--cnt=%d:%d:%d" % (Ts_us, int(mon["offset_us"]), int(mon["jitter_us"])),
-            "--cntDst=127.0.0.1:%d" % R.CNT_PORT, "--cntQuant=%s" % mon["quant"],
-            "--cntHarvestMs=%g" % float(mon["harvest_ms"]),
-            "--cntSeed=%d" % int(spec.get("seed", 1))] + list(spec.get("emu_args", []))
+    """Options of the emulator of a paper-stack run: the nl80211 counter export, the per-step lag of the
+    phases (--phaseLag from the DTP) with the lag abort (--abortLagUs = "abort_lag_us", default 1000 us;
+    0 records only, as in the qualification Q), the bytes per step and vessel at the AP (--stepBytes,
+    ground truth of r_il), the pcap of the AP with "pcap": true (E0), then "emu_args"."""
+    d = spec["dtp"]
+    us = lambda x: int(round(float(x) * 1e6))   # noqa: E731
+    Ts_us, T1_us, T2_us = us(d["Ts"]), us(d["T1"]), us(d["T2"])
+    extra = [str(x) for x in spec.get("emu_args", [])]
+    own = [x for x in extra if x.startswith(PAPER_EMU_OWN)]
+    if own:
+        raise SystemExit("emu_args %s: the paper stack sets these options itself (\"abort_lag_us\", \"pcap\")" % own)
+    abort = spec.get("abort_lag_us", PAPER_ABORT_LAG_US)
+    if abort is None or float(abort) < 0:
+        raise SystemExit("abort_lag_us must be >= 0")
+    out = ["--cnt=%d:%d:%d" % (Ts_us, int(mon["offset_us"]), int(mon["jitter_us"])),
+           "--cntDst=127.0.0.1:%d" % R.CNT_PORT, "--cntQuant=%s" % mon["quant"],
+           "--cntHarvestMs=%g" % float(mon["harvest_ms"]),
+           "--cntSeed=%d" % int(spec.get("seed", 1)),
+           "--phaseLag=%d:%d:%d" % (Ts_us, T1_us, T2_us), "--abortLagUs=%g" % float(abort),
+           "--stepBytes=%d:%d" % (Ts_us, T1_us + T2_us)]
+    if spec.get("pcap"):
+        out.append("--pcap=1")
+    return out + extra
+
+
+def paper_outq_cmd(spec, S0, steps, bridges="single"):
+    """vessel sampler of SIOCOUTQ (emu/tools/outq_sampler.c, built by the preparation): the bridge sockets of
+    the vessel broker (data bridge 1884, B2 also 1885 and 1886, control bridge 1883), steps S0 .. S0 + steps"""
+    d = spec["dtp"]
+    us = lambda x: str(int(round(float(x) * 1e6)))   # noqa: E731
+    c = ["build/fdt_outq", "--epoch", repr(paper_epoch(d)), "--ts-us", us(d["Ts"]), "--t1-us", us(d["T1"]),
+         "--t2-us", us(d["T2"])]
+    for port in [1884] + ([1885, 1886] if bridges == "b2" else []) + [1883]:
+        c += ["--port", str(port)]
+    c += ["--out", RUN + "/outq.jsonl", "--start-step", str(int(S0)), "--steps", str(int(steps))]
+    o = spec.get("outq") or {}
+    if o.get("fifo"):
+        c += ["--fifo", str(int(o["fifo"]))]
+    return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in c)
+
+
+def paper_outq_enabled(spec):
+    return bool((spec.get("outq") or {}).get("enabled", True))
+
+
+def _emu_module(*parts):
+    d = os.path.join(os.path.dirname(os.path.abspath(__file__)), *parts)
+    if d not in sys.path:
+        sys.path.insert(0, d)
+
+
+def paper_clock(spec):
+    """"clock" of an E1 experiment: {"inject": true, ...parameters of fdt_clock_schedule.make}, or None"""
+    c = spec.get("clock") or {}
+    if not c.get("inject"):
+        return None
+    bad = [k for k in c if k not in CLOCK_KEYS + ("inject", "seed")]
+    if bad:
+        raise SystemExit("clock: unknown keys %s (allowed: inject, seed, %s)" % (bad, ", ".join(CLOCK_KEYS)))
+    return c
+
+
+def clock_schedules(spec, st, M, t_origin, duration):
+    """Schedule of the oscillator error of each vessel (emu/vm/guest/fdt_clock_schedule.py make), with the
+    origin at start(S0): ppm0 = the frequency error of the vessel in the session (st "clocks"), seed =
+    (clock seed or run seed, vessel); loss windows in seconds after start(S0)."""
+    _emu_module("vm", "guest")
+    import fdt_clock_schedule
+    c = paper_clock(spec)
+    clocks = st.get("clocks") or {}
+    out = {}
+    for h in range(1, M + 1):
+        ck = clocks.get(str(h), clocks.get(h)) or {}
+        kw = {k: (tuple(c[k]) if k.endswith("_s") and isinstance(c[k], list) else c[k]) for k in CLOCK_KEYS if k in c}
+        out[h] = fdt_clock_schedule.make("%s:%d" % (c.get("seed", spec.get("seed", 1)), h), float(duration),
+                                         float(ck.get("ppm", 0.0)), float(t_origin), **kw)
+    return out
+
+
+def cpu_status(st):
+    """cpu.max and cpu.stat (throttling) of the QEMU process of every VM (emu/vm/cpu_profile.py status)"""
+    _emu_module("vm")
+    import cpu_profile
+    out = {}
+    for name, pid in sorted((st.get("vm_pids") or {}).items()):
+        try:
+            out[name] = cpu_profile.status(int(pid))
+        except (OSError, TypeError, ValueError) as e:
+            out[name] = {"pid": pid, "error": str(e)}
+    return out
+
+
+def emulator_exit(R, pid):
+    """exit status of the emulator of the run, None while it runs (or when the session cannot tell)"""
+    f = getattr(R, "emulator_status", None)
+    return f(pid) if f else None
+
+
+def check_emulator(R, pid, res):
+    """raises RuntimeError when the emulator of the run has exited (status 3: lag above abort_lag_us)"""
+    rc = emulator_exit(R, pid)
+    if rc is not None:
+        res["emu_exit"] = rc
+        raise RuntimeError("the emulator exited before the end of the run (status %s%s)" % (
+            rc, ": lag above abort_lag_us" if rc == 3 else ""))
+
+
+def run_replay_subsets(R, rd, jobs=4):
+    """offline subset replays of C(t) of a run (emu/replay_subsets.py RUN --jobs J), on the auxiliary CPUs"""
+    cmd = ["nice", "-n", "5", R.sys.executable, os.path.join(R.ROOT, "emu", "replay_subsets.py"), rd,
+           "--jobs", str(int(jobs))]
+    pin = getattr(R, "pinned", None)
+    if pin and getattr(R, "AUX_CPUS", None):
+        cmd = pin(cmd, R.AUX_CPUS)
+    t = time.time()
+    with open(os.path.join(rd, "replay_subsets.log"), "w") as f:
+        r = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
+    return {"rc": r.returncode, "seconds": round(time.time() - t, 1), "jobs": int(jobs), "cmd": cmd}
+
+
+def paper_video_check(spec, root):
+    """Source and DTP of the layered video agree: the trace replay keeps every stripe within its cap
+    (largest trace frame times the source scale at most the frame cap of "video_layers") and the share
+    profile of the DTP is the profile of the trace. Returns the record of result.json; refuses a run whose
+    stripes would exceed their caps (the source would truncate them) unless "source": {"allow_trunc": true}."""
+    src = spec.get("source") or {}
+    c = _video_layers().config(spec["dtp"])
+    if c is None or src.get("cmd") or src.get("kind", "fdt_source") != "fdt_source":
+        return None
+    trace = src.get("trace", None if src.get("median") else PAPER_TRACE)
+    rec = {"fps": float(c["fps"]), "frame_cap": int(c["frame_cap"]), "profile": c.get("profile"), "trace": trace,
+           "scale": float(src.get("scale", 1.0)), "load_mode": src.get("load_mode", "size")}
+    if not trace:
+        return rec
+    sizes = []
+    with open(os.path.join(root, trace)) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                sizes.append(float(line.split()[0]))
+    scale = rec["scale"] if rec["load_mode"] == "size" else 1.0
+    rec.update(trace_max=max(sizes), trace_mean=sum(sizes) / len(sizes),
+               mean_over_cap=scale * sum(sizes) / len(sizes) / rec["frame_cap"])
+    b = os.path.basename(trace)[:-4]
+    rec["trace_profile"] = b[b.index("-q") + 1:] if "-q" in b else None
+    over = scale * rec["trace_max"] > rec["frame_cap"] * 1.0005
+    rec["truncates"] = over
+    if not src.get("allow_trunc"):
+        if over:
+            raise SystemExit("video: the largest trace frame times the scale (%.0f) exceeds the frame cap %d of "
+                             "video_layers: the source would truncate stripes" % (scale * rec["trace_max"],
+                                                                                   rec["frame_cap"]))
+        if rec["trace_profile"] and c.get("profile") and rec["trace_profile"] != c["profile"]:
+            raise SystemExit("video: the share profile %s of the DTP is not the profile %s of the trace"
+                             % (c["profile"], rec["trace_profile"]))
+    return rec
 
 
 def paper_adapter_cmd(R, rd, mon, chmon):
@@ -797,6 +969,12 @@ def run_fleet_paper(R, spec, a):
     method, mcfg = paper_method(spec)
     jit = paper_jitter_ms(spec)
     paper_source_cmd(spec, 1, 0.0, 1.0)   # rejects an unknown source kind before the run starts
+    paper_emu_args(R, spec, mon)          # rejects emu_args that the stack sets itself
+    clock = paper_clock(spec)
+    if clock and not st.get("clock_inject"):
+        raise SystemExit("clock.inject needs a session up with --clock-inject (emu/run.py up): fdt-clockinit "
+                         "must leave the frequency error to the schedule")
+    video = paper_video_check(spec, R.ROOT)
     rev = paper_revision(R.ROOT)
     pin = spec.get("stack_commit")
     if pin and (not rev.get("commit") or not rev["commit"].startswith(pin) or rev.get("dirty_stack")):
@@ -828,7 +1006,9 @@ def run_fleet_paper(R, spec, a):
            "monitor": mon, "clocks": st.get("clocks"), "clock_seed": st.get("clock_seed"),
            "epoch": paper_epoch(dtp), "step_clock": "start(t) = epoch + t Ts (0-based)",
            "plugin_mode": paper_plugin_mode(spec),
-           "demand": "external (fdt_dti)" if (spec.get("dti") or {}).get("enabled", True) else "internal (plugin)"}
+           "demand": "external (fdt_dti)" if (spec.get("dti") or {}).get("enabled", True) else "internal (plugin)",
+           "video": video, "abort_lag_us": float(spec.get("abort_lag_us", PAPER_ABORT_LAG_US)),
+           "pcap": bool(spec.get("pcap")), "cpu_profile": {"ratio": st.get("cpu_ratio")}}
 
     def save():
         with open(os.path.join(rd, "result.json"), "w") as f:
@@ -840,6 +1020,8 @@ def run_fleet_paper(R, spec, a):
     cap = adp = None
     started = False
     cpu0 = None
+    epid = None
+    clock_hosts = []
     try:
         if spec.get("sync", True):
             R.cmd_sync(a)
@@ -863,6 +1045,7 @@ def run_fleet_paper(R, spec, a):
             with open(p, "w") as f:
                 json.dump(j["modes"], f)
             R.rsync_to(0, p, RUN + "/jmcs_modes.json")
+        res["cpu_profile"]["before"] = cpu_status(st)
         want = repo_patches(R.ROOT)
         got = parse_sha_list(R.ssh(0, "cat %s/guest-patches.sha256" % RUN, timeout=20).stdout)
         res["patches"] = {"repo": want, "guest": got, "equal": want == got}
@@ -875,6 +1058,23 @@ def run_fleet_paper(R, spec, a):
         t_end = paper_start(dtp, S0 + steps) + float(dtp["T1"]) + 1.5
         res.update({"S0": S0, "t0": t0, "steps": steps, "t_end_plan": t_end})
         save()
+        if clock:
+            # E1: the oscillator schedule of each vessel, origin start(S0); fdt-clockerr.py reloads it
+            sched = clock_schedules(spec, st, M, t0, steps * Ts + float(dtp["T1"]) + 5.0)
+            for h, sc in sched.items():
+                with open(os.path.join(rd, "clock_schedule_v%d.json" % h), "w") as f:
+                    json.dump(sc, f, indent=1)
+            clock_hosts = list(sched)
+            out = R.parallel(lambda h: R.ssh(h, "echo %s | base64 -d | sudo tee %s > /dev/null && echo installed" % (
+                b64(sched[h]), CLOCK_SCHEDULE), timeout=30), clock_hosts)
+            bad = [h for h, r in out.items() if isinstance(r, Exception) or r.returncode != 0 or "installed" not in r.stdout]
+            if bad:
+                raise RuntimeError("clock schedule not installed on %s" % [R.host_name(h) for h in bad])
+            res["clock"] = {"inject": True, "schedule": CLOCK_SCHEDULE, "origin": t0,
+                            "params": {k: clock[k] for k in clock if k != "inject"},
+                            "sha256": {R.host_name(h): hashlib.sha256(json.dumps(sc, sort_keys=True).encode()).hexdigest()
+                                       for h, sc in sched.items()}}
+            save()
         # channel monitor: the adapter listens before the emulator sends the first counter read
         adp = R.start_daemon(paper_adapter_cmd(R, rd, mon, chmon), os.path.join(rd, "monitor_adapter.log"))
         R.stop_emulator(st.get("emu_pid"))
@@ -896,6 +1096,10 @@ def run_fleet_paper(R, spec, a):
         res["bridges"]["wait"] = r.stdout.strip()[-500:]
         if r.returncode != 0:
             raise RuntimeError("bridges not connected: %s" % r.stdout)
+        # vessels: the sampler of the unsent bytes of the bridge sockets over the steps of the run
+        if paper_outq_enabled(spec):
+            for h in range(1, M + 1):
+                bg(R, h, paper_outq_cmd(spec, S0, steps, bridges), "outq")
         # GS: VE (writes the DTA), JMCS stub, fleet feedback (B3, B8, B9), AS (methods with tables);
         # vessels: DTI program and sources
         bg(R, 0, paper_ve_cmd(spec), "ve")
@@ -913,7 +1117,9 @@ def run_fleet_paper(R, spec, a):
             bg(R, h, paper_source_cmd(spec, h, t0, dur), "src")
         res["commands"] = {"gs": {"as": paper_as_cmd(spec), "ve": paper_ve_cmd(spec),
                                   "jmcs": paper_jmcs_cmd(spec, S0), "feedback": paper_feedback_cmd(spec)},
-                           "vessel_1": {"dti": paper_dti_cmd(spec, 1), "src": paper_source_cmd(spec, 1, t0, dur)},
+                           "vessel_1": {"dti": paper_dti_cmd(spec, 1), "src": paper_source_cmd(spec, 1, t0, dur),
+                                        "outq": paper_outq_cmd(spec, S0, steps, bridges)
+                                        if paper_outq_enabled(spec) else None},
                            "adapter": paper_adapter_cmd(R, rd, mon, chmon),
                            "emulator_extra": paper_emu_args(R, spec, mon)}
         res["t_started"] = time.time()
@@ -923,9 +1129,11 @@ def run_fleet_paper(R, spec, a):
             raise RuntimeError("start too late: %.2f s before start(S0)" % (t0 - time.time()))
         while time.time() < t_end:
             time.sleep(min(5.0, max(0.0, t_end - time.time())))
+            check_emulator(R, epid, res)
             r = R.ssh(0, "kill -0 $(cat %s/%s.pid) 2>/dev/null && echo alive || echo dead" % (RUN, watch), timeout=20)
             if "dead" in r.stdout and time.time() < t_end - 2.0:
                 raise RuntimeError("the %s stopped before the end of the run" % ("AS" if watch == "as" else "VE"))
+        check_emulator(R, epid, res)
         res["status"] = "ok"
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         res["status"] = "failed"
@@ -935,8 +1143,8 @@ def run_fleet_paper(R, spec, a):
         res["t_end"] = time.time()
         if started and cpu0 is not None:
             res["cpu_cores"] = R.cpu_report(cpu0, R.cpu_snapshot(st))
-        # sources, DTI, stub, feedback, AS, VE; then the brokers (the plugin writes its log and statistics on exit)
-        for proc in ("src", "dti", "jmcs", "fb", "as", "ve"):
+        # sampler, sources, DTI, stub, feedback, AS, VE; then the brokers (the plugin writes its logs on exit)
+        for proc in ("outq", "src", "dti", "jmcs", "fb", "as", "ve"):
             R.parallel(lambda h: R.ssh(h, "[ -f {r}/{n}.pid ] && kill -TERM -- -$(cat {r}/{n}.pid) 2>/dev/null; true".format(
                 r=RUN, n=proc), timeout=20), hosts)
         time.sleep(0.5)
@@ -951,6 +1159,13 @@ def run_fleet_paper(R, spec, a):
         if adp:
             R.kill_pid(adp, "monitor_adapter")
         res["monitor"]["backend_used"] = adapter_backend(os.path.join(rd, "monitor_adapter.log"))
+        if clock_hosts:
+            # E1: the log of the injector into the run directory; the schedule goes away with the run
+            R.parallel(lambda h: R.ssh(h, ("sudo cp {log} {r}/clockerr.jsonl 2>/dev/null; sudo chmod a+r {r}/clockerr.jsonl "
+                                           "2>/dev/null; sudo rm -f {s}; true").format(log=CLOCK_LOG, r=RUN, s=CLOCK_SCHEDULE),
+                                       timeout=30), clock_hosts)
+        if "before" in res["cpu_profile"]:
+            res["cpu_profile"]["after"] = cpu_status(st)
         for h in hosts:
             r = R.rsync_from(h, RUN + "/", os.path.join(rd, "vms", R.host_name(h)) + "/")
             if r.returncode != 0:
@@ -961,9 +1176,15 @@ def run_fleet_paper(R, spec, a):
         try:
             with open(os.path.join(rd, "emu", "summary.json")) as f:
                 res["emu_summary"] = {k: v for k, v in json.load(f).items() if k in (
-                    "lag_us", "lag_us_all", "monitor", "nl80211", "shift_s", "origin_ns")}
+                    "lag_us", "lag_us_all", "monitor", "nl80211", "shift_s", "origin_ns", "phase_lag", "qdisc",
+                    "conf", "pcap", "step_bytes")}
         except (OSError, ValueError):
             pass
+        if ((res.get("emu_summary") or {}).get("phase_lag") or {}).get("aborted") and res["status"] == "ok":
+            res["status"] = "failed"
+            res["error"] = "the emulator stopped on the lag (phase_lag.aborted)"
+        if res["status"] == "ok" and spec.get("replay_subsets"):
+            res["replay_subsets"] = run_replay_subsets(R, rd, int(spec.get("replay_jobs", 4)))
         save()
         epid = R.start_emulator(st["scenario"], os.path.join(R.SESS, "emu-idle"), M, gt=False)
         st["emu_pid"] = epid

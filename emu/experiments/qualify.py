@@ -60,7 +60,6 @@ def q_spec(profile, M, K, rep, seed, steps, dtp, U, scale, Ts=0.125, T1=0.020, T
     import gen
     dur = steps * Ts + 30.0
     rid = "Q-%s-m%d-k%d-r%d" % (profile, M, K, rep)
-    us = lambda x: int(round(x * 1e6))
     return {"kind": "fleet", "stack": "paper", "name": rid, "exp": "Q", "method": "fleetdt", "M": M, "Ts": Ts,
             "seed": seed, "steps": steps, "lead_s": 15, "dtp": dtp,
             "scenario": gen.make_paper(profile, M, seed, dur),
@@ -71,9 +70,10 @@ def q_spec(profile, M, K, rep, seed, steps, dtp, U, scale, Ts=0.125, T1=0.020, T
                         "backend": "auto"},
             "source": {"scale": scale, "size": "random", "min_frac": 0.5},
             "rt": "HardLimit",
-            # per-step lag of each phase; record only (the analysis applies the 1 ms rule), ns-3's own
-            # HardLimit of 50 ms stays as a backstop
-            "emu_args": ["--phaseLag=%d:%d:%d" % (us(Ts), us(T1), us(T2)), "--abortLagUs=0"],
+            # the paper stack passes the per-step lag of each phase (--phaseLag from the DTP); record only
+            # (--abortLagUs=0: the analysis applies the 1 ms rule), ns-3's own HardLimit of 50 ms stays as
+            # a backstop
+            "abort_lag_us": 0,
             "qualify": {"profile": profile, "K": K, "rep": rep}}
 
 

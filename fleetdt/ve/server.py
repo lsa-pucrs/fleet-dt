@@ -30,6 +30,7 @@ class Hub:
 
     async def publish(self, g: Graph) -> None:
         d = g.to_dict()
+        d.setdefault("emitted", time.time())   # GS time at which G(t) left the VE (lag of the DTI)
         self.history.append(d)
         if self.dta:
             self.dta.write(json.dumps(d, separators=(",", ":")) + "\n")

@@ -145,13 +145,15 @@ class AS:
             if self.last_t is not None and t <= self.last_t:
                 raise ValueError("step %d already closed" % t)
             # eq. (2), once per step since the last step closed; a missing or late y(k-1) keeps C_hat(k-1)
+            y_used = None
             if self.last_t is None:
                 C = self.C0
             else:
                 C = self.C_hat
                 for k in range(self.last_t + 1, t + 1):
                     yk = self._y.get(k - 1)
-                    C = smooth(C, yk[0] if yk is not None and yk[1] < self.deadline(k) else None, self.alpha)
+                    y_used = yk[0] if yk is not None and yk[1] < self.deadline(k) else None
+                    C = smooth(C, y_used, self.alpha)
             self.C_hat, self.last_t = C, t
             for k in [k for k in self._y if k < t]:
                 del self._y[k]
@@ -167,8 +169,11 @@ class AS:
             M = sorted(D)
             m = len(M)
             K_hat = self.U * C * self.dtp.T3 / self.dtp.Ts     # eq. (3)
+            # D (the demand tables of M(t)) and y_used (the y(t - 1) of eq. (2), None when missing or late)
+            # make the decision reproducible offline (emu/experiments/conformance.py)
             dec = {"t": t, "C_hat": C, "K_hat": K_hat, "b": None, "U": self.U, "alpha": self.alpha,
-                   "m": m, "p": None, "M": M, "order": list(self.sigma), "needed": list(self.N)}
+                   "m": m, "p": None, "M": M, "order": list(self.sigma), "needed": list(self.N),
+                   "D": {str(i): list(D[i]) for i in M}, "y_used": y_used}
             self.last = dec
             if m == 0:
                 return None

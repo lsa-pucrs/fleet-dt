@@ -72,7 +72,11 @@ def test_matrix_runs_the_as2_stack_with_the_layers():
     s = matrix.spec("SAT", "b1", "S1", 4, 0.125, None, 9101, 40, sat=True)
     assert s["stack"] == "as2"
     lay = [t for t in s["dtp"]["topics"] if t["name"] in LAYERS]
-    assert len(lay) == 16 and all(abs(t["rate"] * 16 - matrix.SAT_RATE) < 1e-6 for t in lay)
+    # stripe layers: every layer topic carries one stripe of every frame; n_j from the share of its stripe
+    assert len(lay) == 16 and all(abs(t["rate"] - matrix.SAT_RATE) < 1e-6 and t["s"] == 1400 for t in lay)
+    w = vl.load_profile(matrix.profile_key(matrix.SAT_TRACE))
+    mx = max(matrix.trace(matrix.SAT_TRACE))
+    assert [t["n"] for t in lay] == [math.ceil(mx * w[vl.stripe_of_layer(j)] / 1392.0) for j in range(1, 17)]
     from fleetdt.as2.dtp import DTP as DTP2
     assert DTP2.from_dict(s["dtp"]).L == 22
     # rho: the frame rate solves sum_i (c_streams + r Ts c_frame,i) = rho kappa T_W with per-vessel scales
@@ -159,8 +163,10 @@ def test_source_reads_the_paper_dtp(tmp_path):
     tps = {t.name: t for t in dtp["topics"]}
     assert tps["state"].kind == "stream" and tps["state"].n == 1 and tps["state"].s == 48
     lay = [tps[n] for n in LAYERS]
-    assert all(t.kind == "output" and t.n == 8 and t.s == round(0.9 * 1400) and t.layers == 16 for t in lay)
-    assert [t.layer for t in lay] == list(range(1, 17)) and abs(lay[0].rate - 15 / 16) < 1e-12
+    raw = {t["name"]: t for t in d["topics"]}
+    assert all(t.kind == "output" and t.n == vl.msgs_per_stripe(d, t.name) and t.s == raw[t.name]["bound"] and
+               t.layers == 16 for t in lay)
+    assert [t.layer for t in lay] == list(range(1, 17)) and all(abs(t.rate - 16.0) < 1e-12 for t in lay)
     # replay of the default trace: each frame within the frame cap of the vessel, on its layer topic
     a = types.SimpleNamespace(dtp=str(p), vessel=2, topics=set(LAYERS), stream_size="max", median=None, sigma=0.5,
                               size_trace=str(ROOT / fleet.PAPER_TRACE), load=1.0, load_mode="size", phase="zero",
@@ -169,13 +175,13 @@ def test_source_reads_the_paper_dtp(tmp_path):
     for tp in lay[:4]:
         for j in range(3):
             msgs, size, trunc, k = src.messages(tp, j, 0)
-            assert len(msgs) <= 8 and all(len(m) <= tp.s for m in msgs)
-            assert vl.layer_of_frame(k) == tp.layer
+            assert len(msgs) <= tp.n and all(len(m) <= tp.s for m in msgs) and not trunc
+            assert k == j and tp.stripe == vl.stripe_of_layer(tp.layer)   # output j: stripe of frame j
 
 
 def test_layer_topics_claim_one_frame():
     """dtp.json declares "jitter": 0 for the layer topics: the jitter allowance of the telemetry does not
-    add a ninth message to a frame of eight."""
+    add a message to the F m_j messages of the stripes of a step."""
     d = root_dtp()
     for n in LAYERS:
         assert vl.channel_demand(d, n, jitter_s=0.002) == vl.channel_demand(d, n)

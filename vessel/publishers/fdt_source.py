@@ -21,20 +21,26 @@ vessel broker:
 * the socket of the MQTT client runs without the Nagle algorithm (TCP_NODELAY);
 * every published output is logged as one JSON line {"topic", "out", "n", "bytes", "t_us", "trunc"}
   (t_us: release time, microseconds of the Unix time) to --log (default: none);
-* temporal video layers (topics with "group", "layer" and "layers", e.g. video_1 .. video_16 of
-  dtp_v2.json, see video_layers.py): frame k of the group (frames at k / f, f = layers * rate of a layer,
-  times --fps-scale) is output j = (k - rev(layer - 1)) / layers of topic <group>_<rev(k mod layers) + 1>,
-  so the layer topics interleave and the first j layers carry j / layers of the frame rate spread
-  uniformly; the phase of the group is common to its layers, the size of frame k comes from the trace
-  (one position per frame of the group, a seeded offset per group) or from the lognormal model seeded by
-  (seed, vessel, group, k), times --video-scale; "out" is the frame index k. The defaults of
-  --video-scale and --fps-scale come from "video_layers"."vessels".<vessel> of the DTP (size_scale and
-  fps_scale), so the vessels offer different video loads;
+* spatial video layers (topics with "group", "layer" and "layers", e.g. video_1 .. video_16 of dtp.json
+  and dtp_v2.json, see video_layers.py): every frame k of the group (frames at k / f, f = the frame rate
+  of the layers times --fps-scale) splits into 16 horizontal stripes, and output k of layer topic
+  <group>_<j> is stripe rev(j - 1) of frame k, so all layer topics release at the frame instants and the
+  first j layers carry j of the 16 stripes of every frame, spread over the image; the size of stripe s
+  of frame k is round(F_k w_s) with F_k the size of frame k (one trace position per frame, a seeded
+  offset per group, or the lognormal model seeded by (seed, vessel, group, k)) times --video-scale and
+  w_s the share profile of "video_layers"."shares" (emu/traces/stripe-shares.json); a stripe above
+  n_l (s_l - 8) bytes is truncated (logged); "out" is the frame index k. The phase of the group is
+  common to its layers; with --phase random and an integer number of frames per step the frames fall
+  at least a quarter of a frame period away from the collection boundaries v(t) of the regulator, so a
+  step holds exactly f Ts stripes of each layer. The defaults of --video-scale and --fps-scale come
+  from "video_layers"."vessels".<vessel> of the DTP (size_scale and fps_scale), so the vessels offer
+  different video loads;
 * the DTP of the paper stack (dtp.json, SPEC.md format: "rate" in messages per second and "bound")
-  works as well: its layer topics become the output topics of the layers (frame rate fps / layers,
-  n = ceil(rate Ts) messages of at most "bound" bytes per frame) and the other topics streams of one
-  message of "bound" bytes; J_l is the "jitter" of the topic, else --jitter-ms (default 0). The
-  per-vessel DTP of `video_layers.py resolve` gives the bounds of the vessel.
+  works as well: its layer topics become the output topics of the stripes (frame rate "fps" of
+  "video_layers", n = the messages of one stripe, video_layers.msgs_per_stripe, of at most "bound"
+  bytes) and the other topics streams of one message of "bound" bytes; J_l is the "jitter" of the
+  topic, else --jitter-ms (default 0). The per-vessel DTP of `video_layers.py resolve` gives the rates
+  and bounds of the vessel.
 
 Python >= 3.7, paho-mqtt 1.x or 2.x.
 
@@ -58,6 +64,9 @@ import time
 
 import paho.mqtt.client as mqtt
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import video_layers  # noqa: E402
+
 OUT_HEADER = struct.Struct("!IHH")   # out:u32, k:u16, n:u16
 DEFAULT_EPOCH = 1767225600.0
 
@@ -77,9 +86,10 @@ class Topic(object):
         if self.layer is not None:
             if self.group is None or not self.layers or not 1 <= self.layer <= self.layers:
                 raise ValueError("topic %s: a layer topic needs group, layers and 1 <= layer <= layers" % self.name)
-            self.residue = bitrev(self.layer - 1, layer_bits(self.layers))
+            self.stripe = bitrev(self.layer - 1, layer_bits(self.layers))
         else:
-            self.residue = None
+            self.stripe = None
+        self.share = 1.0        # w of the stripe (load_dtp sets it from "video_layers"."shares")
         if self.kind not in ("stream", "output"):
             raise ValueError("topic %s: kind must be stream or output" % self.name)
         if self.kind == "output" and self.s <= OUT_HEADER.size:
@@ -102,32 +112,22 @@ def bitrev(k, bits):
     return r
 
 
-LAYER_DEFAULTS = {"base": "video", "layers": 16, "fps": 15.0}
-
-
 def v1_topic(t, d, jitter_s):
     """Topic of a DTP in the format of SPEC.md (dtp.json of the paper stack: "name", "rate" in messages per
     second, "bound" in bytes, optional "jitter") in the terms of this source.
 
-    A layer topic <base>_<j> of "video_layers" (video_layers.py) becomes the output topic of layer j:
-    one frame every layers / fps seconds, split into at most n = ceil(rate Ts) messages of at most
-    "bound" bytes (the msgs_per_frame of the DTP). Every other topic is a stream of one message of
-    "bound" bytes per output at "rate". J_l is the "jitter" of the topic, else jitter_s."""
+    A layer topic <base>_<j> of "video_layers" (video_layers.py) becomes the output topic of the stripes
+    of layer j: one stripe per frame at the frame rate "fps" of "video_layers", split into at most
+    n = video_layers.msgs_per_stripe messages of at most "bound" bytes. Every other topic is a stream of
+    one message of "bound" bytes per output at "rate". J_l is the "jitter" of the topic, else jitter_s."""
     J = float(t["jitter"]) if t.get("jitter") is not None else float(jitter_s)
-    vl = dict(LAYER_DEFAULTS)
-    vl.update({k: v for k, v in (d.get("video_layers") or {}).items() if k in LAYER_DEFAULTS})
-    L = int(vl["layers"])
-    base = str(vl["base"])
+    c = video_layers.config(d)
     name = str(t["name"])
-    j = None
-    if d.get("video_layers") is not None or name.startswith(base + "_"):
-        suffix = name[len(base) + 1:] if name.startswith(base + "_") else ""
-        if suffix.isdigit() and 1 <= int(suffix) <= L:
-            j = int(suffix)
+    j = video_layers.layer_index(name, c["base"], int(c["layers"])) if c is not None else None
     if j is not None:
-        n = max(1, int(math.ceil(float(t["rate"]) * float(d["Ts"]) - 1e-9)))
-        return Topic({"name": name, "rate": float(vl["fps"]) / L, "jitter": J, "n": n, "s": int(t["bound"]),
-                      "kind": "output", "group": base, "layer": j, "layers": L})
+        n = video_layers.msgs_per_stripe(d, name)
+        return Topic({"name": name, "rate": float(c["fps"]), "jitter": J, "n": n, "s": int(t["bound"]),
+                      "kind": "output", "group": c["base"], "layer": j, "layers": int(c["layers"])})
     return Topic({"name": name, "rate": float(t["rate"]), "jitter": J, "n": 1, "s": int(t["bound"]), "kind": "stream"})
 
 
@@ -137,6 +137,12 @@ def load_dtp(path, jitter_s=0.0):
         d = json.load(f)
     epoch = d.get("epoch")
     topics = [Topic(t) if "s" in t else v1_topic(t, d, jitter_s) for t in d["topics"]]
+    c = video_layers.config(d) if any(tp.layer is not None for tp in topics) else None
+    for tp in topics:
+        if tp.layer is not None:
+            if len(c["shares"]) != tp.layers:
+                raise ValueError("topic %s: video_layers.shares needs %d shares" % (tp.name, tp.layers))
+            tp.share = float(c["shares"][tp.stripe])
     return {"epoch": DEFAULT_EPOCH if epoch is None else float(epoch), "Ts": float(d["Ts"]),
             "T1": float(d.get("T1", 0.0)), "T2": float(d.get("T2", 0.0)),
             "required": set(d.get("required", [])), "topics": topics,
@@ -206,14 +212,29 @@ class Source(object):
         self.count = {}
 
     def rate(self, tp):
-        r = tp.rate * (self.a.fps_scale if tp.layer is not None else 1.0)
+        r = tp.rate * (getattr(self.a, "fps_scale", 1.0) if tp.layer is not None else 1.0)
         if tp.kind == "output" and self.a.load_mode == "rate":
             return r * self.a.load
         return r
 
     def frame(self, tp, j):
-        """Frame index k of the group of a layer topic for its output j: k = rev(layer - 1) + layers j."""
-        return tp.residue + tp.layers * j
+        """Frame index k of output j of a layer topic: every layer topic outputs one stripe of every frame."""
+        return j
+
+    def frame_size(self, tp, k, cap):
+        """Size of frame k of the group of layer topic tp (before the stripe share): one trace position or
+        one seeded lognormal draw per frame, times --video-scale and, in mode size, --load."""
+        if self.trace is not None:
+            off = random.Random("%d:%d:%s:trace" % (self.a.seed, self.a.vessel, tp.group)).randrange(len(self.trace))
+            size = self.trace[(off + k) % len(self.trace)]
+        else:
+            median = self.a.median if self.a.median else 0.5 * cap / tp.share
+            rng = random.Random("%d:%d:%s:%d:size" % (self.a.seed, self.a.vessel, tp.group, k))
+            size = rng.lognormvariate(math.log(median), self.a.sigma)
+        size = size * getattr(self.a, "video_scale", 1.0)
+        if self.a.load_mode == "size":
+            size = size * self.a.load
+        return size
 
     def draw(self, tp, j, what):
         """random.Random of (seed, vessel, topic, j, what): the draws of output j do not depend on the
@@ -222,19 +243,8 @@ class Source(object):
 
     def output_size(self, tp, j=None):
         cap = tp.n * (tp.s - OUT_HEADER.size)
-        if tp.layer is not None:   # frame k of the group: one trace position or one seeded draw per frame
-            k = self.frame(tp, j)
-            if self.trace is not None:
-                off = random.Random("%d:%d:%s:trace" % (self.a.seed, self.a.vessel, tp.group)).randrange(len(self.trace))
-                size = self.trace[(off + k) % len(self.trace)]
-            else:
-                median = self.a.median if self.a.median else 0.5 * cap
-                rng = random.Random("%d:%d:%s:%d:size" % (self.a.seed, self.a.vessel, tp.group, k))
-                size = int(round(rng.lognormvariate(math.log(median), self.a.sigma)))
-            size = int(round(size * self.a.video_scale))
-            if self.a.load_mode == "size":
-                size = int(round(size * self.a.load))
-            size = max(1, size)
+        if tp.layer is not None:   # stripe of frame k: share w of the frame size
+            size = max(1, int(round(self.frame_size(tp, self.frame(tp, j), cap) * tp.share)))
             return min(size, cap), size > cap
         if self.trace is not None:
             if j is not None:     # mode --t0: a seeded start position in the trace, then output j
@@ -291,14 +301,20 @@ class Source(object):
         return msgs, size, trunc, oid
 
     def group_phase(self, tp, period):
-        """Phase of layer topic tp: a phase common to the group (zero, or seeded in one frame period)
-        plus rev(layer - 1) frame periods, so frame k of the group is released at phase + k / f."""
-        fp = period / tp.layers
+        """Phase of layer topic tp, common to the group, so frame k of the group is released at
+        phase + k / f by every layer topic: zero, or seeded in one frame period; with an integer number
+        of frames per step, seeded in [1/4, 3/4] of a frame period after a collection boundary
+        v(t) = start(t) + T1 + T2 (so release delays below a quarter period keep the stripes of a frame
+        in one collection window)."""
         if self.a.phase == "zero":
-            g = 0.0
-        else:
-            g = random.Random("%d:%d:%s:phase" % (self.a.seed, self.a.vessel, tp.group)).uniform(0, fp)
-        return g + tp.residue * fp
+            return 0.0
+        rng = random.Random("%d:%d:%s:phase" % (self.a.seed, self.a.vessel, tp.group))
+        d = self.dtp
+        per_step = d["Ts"] / period
+        if abs(per_step - round(per_step)) < 1e-6 and round(per_step) >= 1:
+            v = (d["T1"] + d["T2"]) % period
+            return (v + rng.uniform(0.25, 0.75) * period) % period
+        return rng.uniform(0, period)
 
     def phase(self, tp, period):
         """seeded phase of topic tp relative to t0 (mode --t0)"""

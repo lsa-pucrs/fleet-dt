@@ -7,8 +7,10 @@
 Each slot k (0 .. K-1) brings up its own session (GS + M vessel VMs, emulator, monitor bridge, clock
 probe) with the M of its next run, copies the repository into the VMs once, and then runs the pending runs
 of that M in the order of the manifest; a run that needs another M takes the session down and up again.
-After each run the slot computes the ground truth per step (emu/analysis/gtstep.py) and the metrics
-(emu/analysis/metrics.py) and compresses gt.bin and monitor.jsonl with zstd (unless --keep-raw).
+After each run the slot post-processes it and compresses gt.bin and monitor.jsonl with zstd (unless
+--keep-raw): a run of the as2 stack gets the ground truth per step (emu/analysis/gtstep.py) and the metrics
+of the older model (emu/analysis/metrics.py); a run of the paper stack gets the metrics of the paper from
+its DTA with fleetdt/analysis.py (emu/analysis/paper_post.py), never the older-model scripts.
 
 Real-time check (Section VI-B): a run is "lagging" when the p99 of the lag of the emulator after its
 warm-up exceeds 300 us or more than 1 % of its steps have a lag above 1 ms; a lagging run is queued again
@@ -131,18 +133,25 @@ def run_py(slot, *args, log_path=None, timeout=None):
             out.close()
 
 
-def postprocess(rd, keep_raw):
+def postprocess_cmds(rd, stack="as2"):
+    """post-processing commands of a run directory: the paper stack has its own metrics (paper_post.py,
+    fleetdt/analysis.py); the as2 stack the ground truth per step and the metrics of the older model"""
+    if stack == "paper":
+        return [[sys.executable, os.path.join(ROOT, "emu", "analysis", "paper_post.py"), rd]]
+    return [[sys.executable, os.path.join(ROOT, "emu", "analysis", "gtstep.py"), rd],
+            [sys.executable, os.path.join(ROOT, "emu", "analysis", "metrics.py"), rd]]
+
+
+def postprocess(rd, keep_raw, stack="as2"):
     env = dict(os.environ)
     pin = ["taskset", "-c", "16-23", "nice", "-n", "5"]
-    r1 = subprocess.run(pin + [sys.executable, os.path.join(ROOT, "emu", "analysis", "gtstep.py"), rd],
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
-    r2 = subprocess.run(pin + [sys.executable, os.path.join(ROOT, "emu", "analysis", "metrics.py"), rd],
-                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+    rs = [subprocess.run(pin + c, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+          for c in postprocess_cmds(rd, stack)]
     if not keep_raw:
         for p in (os.path.join(rd, "emu", "gt.bin"), os.path.join(rd, "monitor.jsonl")):
             if os.path.exists(p):
                 subprocess.run(pin + ["zstd", "-q", "-9", "-T2", "--rm", "-f", p], check=False)
-    return r1.returncode == 0 and r2.returncode == 0, (r1.stdout[-500:] + r2.stdout[-1500:])
+    return all(r.returncode == 0 for r in rs), "".join(r.stdout[-1000:] for r in rs)
 
 
 def lag_verdict(rd, exempt=False):
@@ -221,7 +230,8 @@ class Runner:
                 log("slot %d: %s" % (k, r["id"]))
                 t0 = time.time()
                 rc = run_py(k, "run", sp, log_path=lp, timeout=int(spec["steps"] * spec["Ts"]) + 600)
-                ok_pp, pp = postprocess(rd, self.a.keep_raw) if os.path.isdir(rd) else (False, "no run dir")
+                ok_pp, pp = postprocess(rd, self.a.keep_raw, spec.get("stack", "as2")) if os.path.isdir(rd) \
+                    else (False, "no run dir")
                 exempt = r.get("scenario") in self.a.lag_exempt
                 lagging, info = lag_verdict(rd, exempt)
                 st = "done" if rc == 0 and ok_pp else "failed"
