@@ -461,6 +461,11 @@ static void test_police(void)
 	from = nsent;
 	fdt_preg_tick(&r, V(42));
 	CHECK(count_topic("boat/b1/tx/imu", from) == 4);
+	/* C17: the first message that would raise the sum above d_l and every later message of the topic in the
+	 * step are withheld, the 1-byte message that would still fit included */
+	fdt_preg_tick(&r, S(43));
+	fflush(o.log);
+	CHECK(log_count(lb, 42, "imu", "police") == 2);
 	fdt_preg_free(&r);
 	fclose(o.log);
 	free(lb);

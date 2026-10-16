@@ -682,6 +682,12 @@ static void do_v(struct fdt_preg *r, int64_t t, int64_t now_us)
 				m->reason = FDT_PR_LEVEL0;
 				continue;
 			}
+			/* Policing (C17), the rule of the "Vessel regulator" Definition of the paper: the regulator
+			 * "withholds the first message that would raise the sum above d_{i,l}(t) and every later message
+			 * of the topic in step t". The sum is that of c_b (x + 6) + c_m,l over the messages of topic l of
+			 * step t in arrival order; once one message does not fit, `stop` keeps every later message of l in
+			 * step t (a smaller later message that would still fit is not forwarded either), so the forwarded
+			 * messages of a topic are a prefix of its arrivals and the GS sees no gap. */
 			double c = fdt_p_cost(d, l, m->len);
 			if (stop || (police && cum + c > (double)s->d[l] + 1e-6)) {
 				stop = 1;   /* no gap: the later messages of the topic stay too */
