@@ -34,6 +34,15 @@ Calibration (repeat after any change of the host, the image or the vessel comput
                                    root: create the cgroup, write cpu.max and move PID (QEMU) into it
   python3 emu/vm/cpu_profile.py status PID                        cpu.max and cpu.stat (throttling) of PID
   python3 emu/vm/cpu_profile.py check-delegation
+  python3 emu/vm/cpu_profile.py mechanism                         cgroup (cpu delegated to the user) or user
+
+Mechanism "user" (hosts with cgroup v1 or without the cpu controller delegated and without root, e.g.
+hydra, Rocky Linux 8): build/fdt_cpucap (emu/vm/cpucap.c) applies the same rule as cpu.max from user
+space: it reads the CPU time of each QEMU process (one perf task-clock counter per thread, exact at the
+read) every poll interval (100 us), sends SIGSTOP when the CPU time of the current period reaches the
+quota and SIGCONT at the next period boundary; quota and period are those of profile(). Its statistics
+(nr_throttled, throttled_usec, the overrun of the quota and the lateness of the resume, p50/p99/max) are
+in the stats file of the session (status_user()).
 """
 import argparse
 import json
@@ -100,6 +109,8 @@ def read(p):
 
 def status(pid):
     cg = cgroup_of(pid)
+    if cg is None:          # cgroup v1 host: no unified hierarchy
+        return {"pid": pid, "cgroup": None, "cpu.max": None, "cpu.stat": {}}
     st = {}
     for line in (read(os.path.join(cg, "cpu.stat")) or "").splitlines():
         k, _, v = line.partition(" ")
@@ -121,6 +132,41 @@ def apply(pid, ratio, cg):
     with open(os.path.join(cg, "cgroup.procs"), "w") as f:
         f.write(str(pid))
     return status(pid)
+
+
+def mechanism():
+    """"cgroup" when the cpu controller is delegated to the user (systemd-run --user --scope with CPUQuota
+    works), else "user" (build/fdt_cpucap); env FDT_CPU_CAP overrides"""
+    m = os.environ.get("FDT_CPU_CAP")
+    if m:
+        return m
+    try:
+        return "cgroup" if check_delegation()["cpu_delegated"] else "user"
+    except OSError:
+        return "user"
+
+
+def cap_cmd(binary, pids, ratio=ASSUMED_RATIO, stats=None, poll_us=100):
+    """command line of the user-space cap (build/fdt_cpucap) of the processes pids at the ratio"""
+    q, p = profile(ratio)
+    c = [binary, "--quota-us", str(q), "--period-us", str(p), "--poll-us", str(int(poll_us))]
+    if stats:
+        c += ["--stats", stats]
+    return c + [str(int(x)) for x in pids]
+
+
+def status_user(stats, pid):
+    """statistics of pid in the stats file of fdt_cpucap (None when absent)"""
+    try:
+        with open(stats) as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    r = (d.get("procs") or {}).get(str(pid))
+    if r is None:
+        return None
+    return dict(r, pid=pid, mechanism="user", quota_us=d.get("quota_us"), period_us=d.get("period_us"),
+                poll_us=d.get("poll_us"), source=d.get("source"))
 
 
 def check_delegation():
@@ -154,6 +200,7 @@ def main():
     s = sub.add_parser("status")
     s.add_argument("pid", type=int)
     sub.add_parser("check-delegation")
+    sub.add_parser("mechanism")
     a = ap.parse_args()
     if a.cmd == "profile":
         q, p = profile(a.ratio)
@@ -187,6 +234,8 @@ def main():
         print(json.dumps(apply(a.pid, a.ratio, cg)))
     elif a.cmd == "status":
         print(json.dumps(status(a.pid)))
+    elif a.cmd == "mechanism":
+        print(mechanism())
     elif a.cmd == "check-delegation":
         d = check_delegation()
         print(json.dumps(d))

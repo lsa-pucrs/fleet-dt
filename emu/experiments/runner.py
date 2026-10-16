@@ -144,7 +144,8 @@ def postprocess_cmds(rd, stack="as2"):
 
 def postprocess(rd, keep_raw, stack="as2"):
     env = dict(os.environ)
-    pin = ["taskset", "-c", "16-23", "nice", "-n", "5"]
+    # the auxiliary CPUs of the sessions (emu/run.py: FDT_AUX_CPUS, default 16-23 of the i7-14700)
+    pin = ["taskset", "-c", os.environ.get("FDT_AUX_CPUS") or "16-23", "nice", "-n", "5"]
     rs = [subprocess.run(pin + c, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
           for c in postprocess_cmds(rd, stack)]
     if not keep_raw:

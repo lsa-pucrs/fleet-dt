@@ -41,6 +41,8 @@ import threading
 import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:      # fleet.py imports the fleetdt package of the repository (no install needed)
+    sys.path.insert(1, ROOT)
 EMU = os.path.expanduser(os.environ.get("FDT_EMU", "~/fleetdt-deploy/emu"))
 NS3 = os.path.expanduser(os.environ.get("FDT_NS3", "~/fleetdt-deploy/ns3/ns-3.48"))
 QEMU = os.environ.get("QEMU", "/opt/qemu-upstream/bin/qemu-system-x86_64")
@@ -67,6 +69,20 @@ VM_PREFIX = "fdt-emu"
 EMU_CPUS = "8,9"
 VM_CPUS = "16-23"
 AUX_CPUS = "16-23"         # monitor bridge, clock probe, monitor capture
+# FDT_EMU_CPUS_SLOTS="a,b;c,d;..." gives the emulator CPUs of each slot (entry K for slot K; e.g. on hydra,
+# where the CPUs of the user differ from those of the i7-14700); FDT_EMU_CPUS still applies to every slot.
+
+
+def slot_emu_cpus(k):
+    """CPU list of the emulator of slot k: FDT_EMU_CPUS, else entry k of FDT_EMU_CPUS_SLOTS, else the default"""
+    if "FDT_EMU_CPUS" in os.environ:
+        return os.environ["FDT_EMU_CPUS"]
+    slots = [x.strip() for x in os.environ.get("FDT_EMU_CPUS_SLOTS", "").split(";") if x.strip()]
+    if slots:
+        if k >= len(slots):
+            raise SystemExit("FDT_EMU_CPUS_SLOTS has no entry for slot %d" % k)
+        return slots[k]
+    return "%d,%d" % (8 + 2 * k, 9 + 2 * k) if k < 4 else "8-15"
 
 
 def configure_slot(k):
@@ -85,7 +101,7 @@ def configure_slot(k):
     CNT_PORT = 9650 + k
     CID_BASE = 100 + 20 * k
     VM_PREFIX = "fdt-emu" if k == 0 else "fdt-emu-s%d" % k
-    EMU_CPUS = os.environ.get("FDT_EMU_CPUS", "%d,%d" % (8 + 2 * k, 9 + 2 * k) if k < 4 else "8-15")
+    EMU_CPUS = slot_emu_cpus(k)
     VM_CPUS = os.environ.get("FDT_VM_CPUS", "16-23")
     AUX_CPUS = os.environ.get("FDT_AUX_CPUS", "16-23")
 
@@ -98,6 +114,45 @@ def pinned(cmd, cpus):
 
 
 CLOCK_SCHEDULE = "/etc/fleetdt/clock-schedule.json"   # E1 (emu/fleet.py installs the schedule of each run)
+
+
+_QEMU_NETDEVS = None
+
+
+def qemu_netdevs():
+    """netdev backends of the QEMU binary (`-netdev help`), cached"""
+    global _QEMU_NETDEVS
+    if _QEMU_NETDEVS is None:
+        try:
+            r = subprocess.run([QEMU, "-netdev", "help"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               text=True, timeout=30)
+            _QEMU_NETDEVS = {x.strip() for x in r.stdout.splitlines()[1:] if x.strip()}
+        except (OSError, subprocess.SubprocessError):
+            _QEMU_NETDEVS = set()
+    return _QEMU_NETDEVS
+
+
+def data_netdev_mode():
+    """backend of the data NIC: "dgram" (QEMU >= 7.2) or "socket" (UDP mode of -netdev socket, the same raw
+    Ethernet frames in UDP datagrams, e.g. the QEMU 6.2 of RHEL 8); env FDT_QEMU_NETDEV overrides"""
+    m = os.environ.get("FDT_QEMU_NETDEV")
+    if m:
+        return m
+    return "dgram" if "dgram" in qemu_netdevs() else "socket"
+
+
+def clock_channel():
+    """channel of the clock probe: "vsock" (vhost-vsock-pci, needs read/write access to /dev/vhost-vsock) or
+    "serial" (virtio-serial port fdt.clock on a unix socket of the VM directory; rootless hosts such as
+    hydra, where /dev/vhost-vsock is root-only); env FDT_CLOCK_CHANNEL overrides"""
+    m = os.environ.get("FDT_CLOCK_CHANNEL")
+    if m:
+        return m
+    return "vsock" if os.access("/dev/vhost-vsock", os.R_OK | os.W_OK) else "serial"
+
+
+def clock_sock(h):
+    return os.path.join(VMS, host_name(h), "clock.sock")
 
 
 def cpu_profile_mod():
@@ -260,8 +315,11 @@ def seed_iso(h, M, d, clock, chrony, clock_inject=False):
     with open(os.path.join(d, "network-config"), "w") as f:
         f.write(nc)
     iso = os.path.join(os.path.dirname(d), "seed.iso")
-    subprocess.run(["xorriso", "-as", "mkisofs", "-quiet", "-o", iso, "-V", "cidata", "-J", "-r", d], check=True,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    vmdir = os.path.join(ROOT, "emu", "vm")
+    if vmdir not in sys.path:
+        sys.path.insert(0, vmdir)
+    import seed     # xorriso when present, else pycdlib (hosts without xorriso and root)
+    seed.make_seed(d, iso)
     return iso
 
 
@@ -269,28 +327,37 @@ def qemu_cmd(h, name, disk, iso, fwd, pidf, mem=768):
     """QEMU command of host h; -cpu host,+invtsc exposes the invariant TSC, so the guest keeps the TSC
     clock source (design item I9)"""
     d = os.path.join(VMS, host_name(h))
+    local, remote = BASE_PORT + 2 * h, BASE_PORT + 2 * h + 1
+    if data_netdev_mode() == "dgram":
+        data = ("dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port=%d,"
+                "remote.type=inet,remote.host=127.0.0.1,remote.port=%d" % (local, remote))
+    else:
+        data = "socket,id=d0,udp=127.0.0.1:%d,localaddr=127.0.0.1:%d" % (remote, local)
+    if clock_channel() == "vsock":
+        clk = ["-device", "vhost-vsock-pci,guest-cid=%d" % (CID_BASE + h)]
+    else:
+        clk = ["-device", "virtio-serial-pci,id=vser0",
+               "-chardev", "socket,id=clk0,path=%s,server=on,wait=off" % os.path.join(d, "clock.sock"),
+               "-device", "virtserialport,bus=vser0.0,chardev=clk0,name=fdt.clock"]
     return [QEMU, "-name", "%s,process=%s" % (name, name), "-enable-kvm", "-cpu", "host,+invtsc", "-smp", "1",
             "-m", str(mem), "-drive", "file=%s,if=virtio,cache=unsafe" % disk,
             "-drive", "file=%s,media=cdrom,readonly=on" % iso,
             "-netdev", "user,id=m0," + fwd, "-device", "virtio-net-pci,netdev=m0,mac=%s" % mgmt_mac(h),
-            "-netdev", "dgram,id=d0,local.type=inet,local.host=127.0.0.1,local.port=%d,"
-                       "remote.type=inet,remote.host=127.0.0.1,remote.port=%d" % (BASE_PORT + 2 * h,
-                                                                                    BASE_PORT + 2 * h + 1),
-            "-device", "virtio-net-pci,netdev=d0,mac=%s" % vm_mac(h),
-            "-device", "vhost-vsock-pci,guest-cid=%d" % (CID_BASE + h),
+            "-netdev", data, "-device", "virtio-net-pci,netdev=d0,mac=%s" % vm_mac(h)] + clk + [
             "-serial", "file:%s" % os.path.join(d, "serial.log"), "-monitor", "none", "-display", "none",
             "-pidfile", pidf, "-daemonize"]
 
 
-def vm_launch_cmd(h, cmd, cpu_ratio=None):
+def vm_launch_cmd(h, cmd, cpu_ratio=None, cap="cgroup"):
     """the QEMU command of host h as launched: a vessel with a CPU ratio runs in a systemd scope with the
-    CPU quota of emu/vm/cpu_profile.py (wrap), all of it pinned to the VM CPUs"""
-    if cpu_ratio and h != 0:
+    CPU quota of emu/vm/cpu_profile.py (wrap), all of it pinned to the VM CPUs; with cap "user" the QEMU
+    runs unwrapped and cmd_up starts build/fdt_cpucap on the vessel QEMUs (cpu_profile.py, mechanism)"""
+    if cpu_ratio and h != 0 and cap == "cgroup":
         cmd = cpu_profile_mod().wrap_cmd(cmd, float(cpu_ratio), unit="%s-%s-cpu" % (VM_PREFIX, host_name(h)))
     return pinned(cmd, VM_CPUS)
 
 
-def start_vm(h, M, clock, chrony, mem=768, cpu_ratio=None, clock_inject=False):
+def start_vm(h, M, clock, chrony, mem=768, cpu_ratio=None, clock_inject=False, cap="cgroup"):
     d = os.path.join(VMS, host_name(h))
     if os.path.isdir(d):
         shutil.rmtree(d)
@@ -305,7 +372,7 @@ def start_vm(h, M, clock, chrony, mem=768, cpu_ratio=None, clock_inject=False):
     pidf = os.path.join(d, "qemu.pid")
     name = "%s-%s" % (VM_PREFIX, host_name(h))
     cmd = qemu_cmd(h, name, disk, iso, fwd, pidf, mem)
-    subprocess.run(vm_launch_cmd(h, cmd, cpu_ratio), check=True, stdin=subprocess.DEVNULL)
+    subprocess.run(vm_launch_cmd(h, cmd, cpu_ratio, cap), check=True, stdin=subprocess.DEVNULL)
     return int(open(pidf).read().strip()), name
 
 
@@ -436,20 +503,38 @@ def cmd_up(a):
         shutil.rmtree(sess)
     os.makedirs(sess)
     chrony = {"minpoll": a.chrony_minpoll, "maxpoll": a.chrony_maxpoll}
+    cap = None
     if a.cpu_ratio is not None:
         cpu_profile_mod().profile(a.cpu_ratio)     # rejects a ratio that cgroup v2 cannot express
+        cap = os.environ.get("FDT_CPU_CAP") or cpu_profile_mod().mechanism()
+        if cap == "user":
+            capbin = os.path.join(ROOT, "build", "fdt_cpucap")
+            subprocess.run(["make", "-s", "-C", ROOT, "build/fdt_cpucap"], check=True, stdin=subprocess.DEVNULL)
     st = {"M": M, "scenario": os.path.abspath(a.scenario), "clocks": clocks, "procs": [], "t_up": time.time(),
+          "qemu": {"binary": QEMU, "data_netdev": data_netdev_mode(), "clock_channel": clock_channel()},
           "vm_pids": {}, "slot": SLOT, "clock_seed": a.clock_seed, "cpu_ratio": a.cpu_ratio,
-          "clock_inject": bool(a.clock_inject)}
+          "clock_inject": bool(a.clock_inject), "cpu_cap": {"mechanism": cap} if cap else None}
     log("starting %d VMs" % (M + 1))
     for h in range(M + 1):
-        pid, name = start_vm(h, M, clocks[h], chrony, mem=a.mem, cpu_ratio=a.cpu_ratio, clock_inject=a.clock_inject)
+        pid, name = start_vm(h, M, clocks[h], chrony, mem=a.mem, cpu_ratio=a.cpu_ratio, clock_inject=a.clock_inject,
+                             cap=cap or "cgroup")
         st["procs"].append([pid, name])
         st["vm_pids"][host_name(h)] = pid
+    if cap == "user":
+        # user-space CPU cap of the vessel QEMUs (cpu.max rule; emu/vm/cpucap.c), on the auxiliary CPUs
+        stats = os.path.join(sess, "cpucap.json")
+        cpid = start_daemon(cpu_profile_mod().cap_cmd(capbin, [st["vm_pids"][host_name(h)] for h in range(1, M + 1)],
+                                                      a.cpu_ratio, stats), os.path.join(sess, "cpucap.log"))
+        st["procs"].append([cpid, "fdt_cpucap"])
+        st["cpu_cap"].update(pid=cpid, stats=stats)
+        log("CPU cap (user space, fdt_cpucap %d) of the vessels at %.3g of one CPU" % (cpid, a.cpu_ratio))
     # the probe starts with the VMs, so clock.csv shows the convergence of chrony from the boot
-    ppid = start_daemon([sys.executable, os.path.join(ROOT, "emu", "clockprobe", "probe.py"),
-                         "--cids", ",".join(str(CID_BASE + h) for h in range(M + 1)),
-                         "--names", ",".join(host_name(h) for h in range(M + 1)),
+    if clock_channel() == "vsock":
+        chan = ["--cids", ",".join(str(CID_BASE + h) for h in range(M + 1))]
+    else:
+        chan = ["--socks", ",".join(clock_sock(h) for h in range(M + 1))]
+    ppid = start_daemon([sys.executable, os.path.join(ROOT, "emu", "clockprobe", "probe.py")] + chan +
+                        ["--names", ",".join(host_name(h) for h in range(M + 1)),
                          "--out", os.path.join(sess, "clock.csv")], os.path.join(sess, "probe.log"))
     st["probe_pid"] = ppid
     st["procs"].append([ppid, "probe.py"])
