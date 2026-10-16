@@ -66,8 +66,20 @@ class Assembler:
         self.last_t: Optional[int] = None
         self._y_prev: Optional[float] = None
         self.index = {name: k + 1 for k, name in enumerate(dtp.topics)}
+        # G(t) is emitted once: a datum of a step whose G(t) has closed (t <= closed_t) is counted here per
+        # step and dropped; re-opening the step would emit a second, partial G(t) (no M(t), no y(t), the
+        # C_hat of the VE replay) that replaces the first one for every reader ("the last record of a
+        # repeated t wins", fleetdt.outer.series), and would move last_t back
+        self.closed_t: Optional[int] = None
+        self.after_close: Dict[int, int] = {}
 
     # ------------------------------------------------------------------ helpers
+    def _closed(self, t: int) -> bool:
+        if self.closed_t is not None and t <= self.closed_t:
+            self.after_close[t] = self.after_close.get(t, 0) + 1
+            return True
+        return False
+
     def _graph(self, t: int) -> Graph:
         g = self.open.get(t)
         if g is None:
@@ -99,7 +111,7 @@ class Assembler:
                         cand = at - t * self.clock.Ts - 0.001
                         if self.clock.epoch is None or cand < self.clock.epoch:
                             self.clock.epoch = cand
-                    if len(d) != self.dtp.L:
+                    if len(d) != self.dtp.L or self._closed(t):
                         return
                     in_phase1 = at <= self.clock.start(t) + self.dtp.T1 + self.tol
                     g = self._graph(t)
@@ -110,7 +122,7 @@ class Assembler:
                         g.edge(i, l).d = dl
                 elif kind == "levels":
                     t, p = decode_levels(payload)
-                    if len(p) != self.dtp.L:
+                    if len(p) != self.dtp.L or self._closed(t):
                         return
                     g = self._graph(t)
                     if not hasattr(g, "_levels"):
@@ -122,7 +134,7 @@ class Assembler:
                 elif kind == "regulator":
                     o = json.loads(payload)
                     t = int(o["t"])
-                    if self.clock.step(at) > t + 1 and t not in self.open:
+                    if self._closed(t) or (self.clock.step(at) > t + 1 and t not in self.open):
                         return  # G(t) already closed
                     g = self._graph(t)
                     for l, (f, h) in enumerate(zip(o.get("fwd", []), o.get("held", [])), start=1):
@@ -134,6 +146,8 @@ class Assembler:
                     if l is None:
                         return
                     t, s = decode_step_header(payload)
+                    if self._closed(t):
+                        return
                     g = self._graph(t)
                     e = g.edge(i, l)
                     if self.clock.step(at) != t:
@@ -177,6 +191,7 @@ class Assembler:
     def _finish(self, t: int) -> Graph:
         g = self.open.pop(t)
         self.seen.pop(t, None)
+        self.closed_t = t if self.closed_t is None else max(self.closed_t, t)
         p = getattr(g, "_levels", None)
         if p is not None:
             by = g._levels_by
