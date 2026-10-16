@@ -678,6 +678,51 @@ static void test_resync(void)
 	free(r);
 }
 
+
+/* modes b3 and tdma of this core with the layered DTP v2 of the repository (dtp_v2.json, L = 22): the as2
+ * stack runs B3 and B9 with them (the paper stack uses paper_b3 and paper_tdma of fdt_reg_paper.c) */
+static void test_layered_dtp_v2(void)
+{
+	const char *path = getenv("FDT_DTP_V2") ? getenv("FDT_DTP_V2") : "dtp_v2.json";
+	struct fdt_dtp2 saved = D, L22;
+	char err[256];
+	if (fdt2_dtp_load(path, &L22, err, sizeof err)) {
+		fprintf(stderr, "test_reg: %s not read (%s): layered DTP v2 test skipped\n", path, err);
+		return;
+	}
+	CHECK(L22.L == 22 && !strcmp(L22.topic[8].name, "video_3") && L22.topic[8].kind == FDT2_OUTPUT);
+	D = L22;
+	struct fdt_reg *r = calloc(1, sizeof *r);
+	int idx[64];
+	int64_t t = 5000;
+	uint8_t b[2048];
+	for (int mode = 0; mode < 2; mode++) {
+		start(r, mode ? FDT_MODE_TDMA : FDT_MODE_B3, t);
+		stream_msg(r, 0, 48, V(t - 1) + 100);   /* state */
+		for (int k = 0; k < 3; k++) {            /* one frame of layer video_3 in 3 messages */
+			memset(b, 0xa5, sizeof b);
+			fdt_put_u32(b, 2);
+			fdt_put_u16(b + 4, (uint16_t)k);
+			fdt_put_u16(b + 6, 3);
+			CHECK(fdt_reg_on_raw(r, 8, b, 300, V(t - 1) + 200 + k) == 0);
+		}
+		fdt_reg_tick(r, S(t));
+		int64_t nx = fdt_reg_tick(r, V(t));
+		int64_t w0 = fdt2_w_start_us(&D, t), tw = fdt2_w_end_us(&D, t) - w0;
+		if (mode) {   /* vessel 2 at position 1 of 4: the second quarter of W(t) */
+			CHECK(tx_of(0, NULL, idx, 64) == 0 && nx == w0 + tw / 4);
+			run(r, w0 + tw / 4, w0 + tw / 2 - D.T_tick_us);
+		} else {
+			run(r, V(t), V(t) + 2000);
+		}
+		int n = tx_of(0, NULL, idx, 64);
+		CHECK(n == 4 && strstr(sent[idx[0]].topic, "/tx/state") && strstr(sent[idx[1]].topic, "/tx/video_3"));
+		fdt_reg_free(r);
+	}
+	free(r);
+	D = saved;
+}
+
 int main(void)
 {
 	test_dtp();
@@ -688,6 +733,7 @@ int main(void)
 	test_modes();
 	test_held_fallback();
 	test_resync();
+	test_layered_dtp_v2();
 	if (failures) {
 		fprintf(stderr, "test_reg: %d of %d checks failed\n", failures, checks);
 		return 1;

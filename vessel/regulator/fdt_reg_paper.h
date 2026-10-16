@@ -32,6 +32,39 @@
  * has no end-of-step rule: a message not forwarded in its step stays queued and is offered again at
  * v(t+1), v(t+2), ... before the newer messages of its topic, under the table and the policing of that
  * step, with its own step index in the header (so the GS sees it as late).
+ *
+ * Baselines of the paper stack (design Section 5). They keep the clock, the payload t:u32, s:u16, the
+ * collection windows, the end-of-step rule, the vessel log and the step summary of mode paper, take no
+ * priority table (a table that arrives is stored and ignored), and forward every message with QoS 1:
+ * without a table no topic has level 2, and the GS records repeated copies (by t, s) in the log of the
+ * operation and excludes them from the step (Corollary 2), so
+ * QoS 1 gives the at-least-once delivery that every baseline needs and keeps the PUBACK exchange of
+ * level 1. The modes take the names paper_<x> because b1, b2, b3 and tdma name the modes of the older
+ * core (fdt_reg.c, as2 stack: DTP v2, 1-based clock, JSON tables).
+ *  paper_b1    (B1, B10) no regulation: each raw message is forwarded when it reaches the regulator, with
+ *              the step t = floor((now - epoch) / Ts) of that instant in its header.
+ *  paper_b2    (B2) paper_b1 on boat/b<i>/tx2/<class>/<topic>, one data bridge per class (fleetdt/gsconf.py
+ *              --b2): ef for the topics of "required" (without "required": the first topic of "order"),
+ *              be for the video topics, af41 for the other topics.
+ *  paper_b3    (B3) strict priority without phases 1 and 2: at v(t) every message of step t, topic by topic
+ *              in sigma_t, each topic in order of reception.
+ *  b8          (B8, LIMERIC/DCC-like rate control) paper_b3 with the budget
+ *              B(t) = U y(t-1) T3 / (Ts m): the messages leave in the order of paper_b3 while the sum of
+ *              c_b (x + 6) + c_m,l stays within B(t); the first message that does not fit and every
+ *              message after it in that order stay (reason budget: no message of a later topic passes
+ *              it). y, U and m come from the last fleet feedback (below), y = "C0" of the DTP before the
+ *              first one, U = plugin_opt_U (default: "U" of the DTP), m = the vessels of the DTP.
+ *  paper_tdma  (B9, overlay TDMA) fixed equal slots of phase 3 in the order of "vessels" of the DTP: vessel
+ *              at position k of M sends in [v(t) + k T3 / M, v(t) + (k + 1) T3 / M); in its slot it releases
+ *              the messages of step t in the order of paper_b3 at every tick (tick_us) while the unsent
+ *              bytes of the data bridge (SIOCOUTQNSD) plus the bytes released in the tick stay below
+ *              lw_bytes; the messages left at the end of the slot stay (reason slot).
+ * Fleet feedback (paper_b3, b8, paper_tdma): fleet/feedback, published by the GS once per step
+ * (fleetdt/feedback.py) and carried by the control bridge: t:u32, y:f64 (y(t), bytes per step; NaN when
+ * missing), U:f32 (0: keep the own U), m:u8 (0: keep), L:u8, sigma_1..sigma_L:u8 (1-based topics).
+ * The last feedback received before v(t) (normally that of step t - 1, published when y(t - 1) is known)
+ * sets sigma_t and the y of B(t); a missing feedback keeps the last values (sigma of the DTP, y = C0
+ * before the first one).
  */
 #ifndef FDT_REG_PAPER_H
 #define FDT_REG_PAPER_H
@@ -44,15 +77,25 @@
 
 #define FDT_P_STEPS 4
 
-enum fdt_pmode { FDT_PMODE_PAPER = 0, FDT_PMODE_NOPOLICE = 1, FDT_PMODE_NOEOS = 2 };
+enum fdt_pmode { FDT_PMODE_PAPER = 0, FDT_PMODE_NOPOLICE = 1, FDT_PMODE_NOEOS = 2, FDT_PMODE_B1 = 3,
+                 FDT_PMODE_B2 = 4, FDT_PMODE_B3 = 5, FDT_PMODE_B8 = 6, FDT_PMODE_TDMA = 7, FDT_PMODE_N };
 
 /* reasons of the vessel log */
 enum fdt_preason { FDT_PR_NONE = 0, FDT_PR_FWD, FDT_PR_NO_TABLE, FDT_PR_NO_DEMAND, FDT_PR_LEVEL0, FDT_PR_POLICE,
-                   FDT_PR_OVERFLOW, FDT_PR_RESYNC, FDT_PR_EOS, FDT_PR_SHUTDOWN, FDT_PR_N };
+                   FDT_PR_OVERFLOW, FDT_PR_RESYNC, FDT_PR_EOS, FDT_PR_SHUTDOWN, FDT_PR_BUDGET, FDT_PR_SLOT,
+                   FDT_PR_N };
 
-int fdt_pmode_parse(const char *s);          /* paper | paper_nopolice | paper_noeos; -1 otherwise */
+/* paper | paper_nopolice | paper_noeos | paper_b1 | paper_b2 | paper_b3 | b8 (alias paper_b8) | paper_tdma;
+ * -1 otherwise */
+int fdt_pmode_parse(const char *s);
 const char *fdt_pmode_name(int mode);
 const char *fdt_preason_name(int reason);
+/* the mode takes the priority table (paper and its ablations) */
+int fdt_pmode_table(int mode);
+/* traffic class of topic l in paper_b2: 2 ef, 1 af41, 0 be (the order of fdt_class) */
+int fdt_pclass(const struct fdt_pdtp *d, int l);
+
+#define FDT_FEEDBACK_MIN 18   /* t:u32, y:f64, U:f32, m:u8, L:u8 */
 
 struct fdt_pmsg {
 	uint8_t *buf;          /* FDT_STEP_HEADER bytes of room + content */
@@ -84,11 +127,15 @@ struct fdt_pstep {
 	uint32_t carried[FDT_L_MAX];   /* paper_noeos: messages of step <= t still queued at the end of t */
 	uint64_t xfwd[FDT_L_MAX];      /* forwarded bytes at v(t), step header included */
 	double cost[FDT_L_MAX];        /* channel bytes of the messages forwarded at v(t) */
+	double budget;                 /* b8: B(t) (-1: not b8) */
+	double y_used;                 /* b8: the y(t-1) of B(t) */
+	int64_t fb_t;                  /* step of the feedback used at v(t) (-1: none) */
+	int64_t gate_s, gate_e;        /* paper_tdma: slot of the vessel */
 };
 
 struct fdt_preg_stats {
 	uint64_t raw, fwd, late_fwd, logged, overflow, steps, tab_ok, tab_none, tab_late, tab_bad, dem_pub,
-	    dem_ext, dem_late, dem_bad, dem_foreign, resync, pub_err, log_err;
+	    dem_ext, dem_late, dem_bad, dem_foreign, resync, pub_err, log_err, fb_ok, fb_old, fb_bad;
 	uint64_t reason[FDT_PR_N];
 	int64_t late_max_us;
 };
@@ -111,6 +158,20 @@ struct fdt_preg {
 	struct fdt_preg_stats s;
 	char *json;
 	size_t json_cap;
+	/* baselines */
+	uint8_t sigma[FDT_L_MAX];       /* sigma_t, 0-based topic indices */
+	double U;                       /* b8: own U */
+	int have_fb;
+	int64_t fb_t;                   /* step of the last feedback */
+	double fb_y, fb_U;              /* y of the last feedback with a measurement (C0 before), its U */
+	int fb_m;
+	int64_t lw_bytes, tick_us;      /* paper_tdma */
+	int slot_pos, slot_n;
+	int64_t gate_t;                 /* paper_tdma: step whose slot is open or ahead (-1: none) */
+	int gate_left;                  /* messages of that step not yet released */
+	uint8_t *scratch;               /* paper_b1, paper_b2: header + content of one message */
+	size_t scratch_cap;
+	char tx2_topic[FDT_L_MAX][160];
 };
 
 /* Options of the core; fdt_preg_opts_default() fills the defaults. */
@@ -122,6 +183,9 @@ struct fdt_preg_opts {
 	double jitter_s;         /* J_l of the topics without "jitter" in the DTP (0.002 s) */
 	int64_t p1_off_us;       /* offset of the demand after start(t) (0) */
 	FILE *log;               /* vessel log (NULL: off); the core does not close it */
+	double U;                /* b8: U before a feedback with U (<= 0: "U" of the DTP) */
+	int64_t lw_bytes;        /* paper_tdma: L_w (16384) */
+	int64_t tick_us;         /* paper_tdma: release period in the slot (1000) */
 };
 
 void fdt_preg_opts_default(struct fdt_preg_opts *o);
@@ -136,6 +200,8 @@ int fdt_preg_on_levels(struct fdt_preg *r, const void *payload, size_t len, int6
 /* boat/b<i>/demand seen on the vessel broker; returns 0 stored (external) or own table (internal),
  * 1 late (external), 2 a table that the regulator did not publish (internal), -1 malformed */
 int fdt_preg_on_demand(struct fdt_preg *r, const void *payload, size_t len, int64_t now_us);
+/* fleet/feedback; returns 0 stored, 1 older than the last one (ignored), -1 malformed */
+int fdt_preg_on_feedback(struct fdt_preg *r, const void *payload, size_t len, int64_t now_us);
 /* runs the events due at now; returns the next instant at which a tick is needed */
 int64_t fdt_preg_tick(struct fdt_preg *r, int64_t now_us);
 /* record of step t in the ring, or NULL */

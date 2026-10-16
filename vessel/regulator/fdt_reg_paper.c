@@ -2,27 +2,57 @@
 #include "fdt_reg_paper.h"
 
 #include <inttypes.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------------ names */
 
-static const char *const pmode_names[] = {"paper", "paper_nopolice", "paper_noeos"};
+static const char *const pmode_names[FDT_PMODE_N] = {"paper", "paper_nopolice", "paper_noeos", "paper_b1",
+                                                      "paper_b2", "paper_b3", "b8", "paper_tdma"};
 static const char *const reason_names[FDT_PR_N] = {"none", "forwarded", "no_table", "no_demand", "level0",
-                                                   "police", "overflow", "resync", "eos", "shutdown"};
+                                                   "police", "overflow", "resync", "eos", "shutdown",
+                                                   "budget", "slot"};
+static const char *const pclass_names[3] = {"be", "af41", "ef"};
 
 int fdt_pmode_parse(const char *s)
 {
-	for (int k = 0; k < 3; k++)
+	for (int k = 0; k < FDT_PMODE_N; k++)
 		if (!strcmp(s, pmode_names[k]))
 			return k;
+	if (!strcmp(s, "paper_b8"))
+		return FDT_PMODE_B8;
 	return -1;
 }
 
 const char *fdt_pmode_name(int mode)
 {
-	return mode >= 0 && mode < 3 ? pmode_names[mode] : "?";
+	return mode >= 0 && mode < FDT_PMODE_N ? pmode_names[mode] : "?";
+}
+
+int fdt_pmode_table(int mode)
+{
+	return mode == FDT_PMODE_PAPER || mode == FDT_PMODE_NOPOLICE || mode == FDT_PMODE_NOEOS;
+}
+
+int fdt_pclass(const struct fdt_pdtp *d, int l)
+{
+	if (d->topic[l].required || (d->n_required == 0 && d->L > 0 && d->order[0] == l))
+		return 2;
+	return d->topic[l].video ? 0 : 1;
+}
+
+/* paper_b1, paper_b2: forwarded when the raw message arrives */
+static int immediate(const struct fdt_preg *r)
+{
+	return r->mode == FDT_PMODE_B1 || r->mode == FDT_PMODE_B2;
+}
+
+/* paper_b3, b8, paper_tdma: strict priority in sigma_t at v(t), without the table */
+static int prio_mode(const struct fdt_preg *r)
+{
+	return r->mode == FDT_PMODE_B3 || r->mode == FDT_PMODE_B8 || r->mode == FDT_PMODE_TDMA;
 }
 
 const char *fdt_preason_name(int reason)
@@ -59,6 +89,9 @@ static void step_reset(struct fdt_pstep *s, int64_t t)
 	s->t = t;
 	s->late_p1 = s->late_v = -1;
 	s->outq = s->nsd = -1;
+	s->budget = -1;
+	s->fb_t = -1;
+	s->gate_s = s->gate_e = -1;
 }
 
 static struct fdt_pstep *step_get(struct fdt_preg *r, int64_t t)
@@ -173,6 +206,9 @@ void fdt_preg_opts_default(struct fdt_preg_opts *o)
 	o->max_msgs = 4096;
 	o->idle = 8;
 	o->jitter_s = 0.002;
+	o->U = -1;
+	o->lw_bytes = 16384;
+	o->tick_us = 1000;
 }
 
 static void reset_clock(struct fdt_preg *r, int64_t now_us)
@@ -215,6 +251,23 @@ int fdt_preg_init(struct fdt_preg *r, const struct fdt_pdtp *d, int vessel, cons
 		r->dmax[l] = fdt_p_demand(d, l, r->jitter_s[l]);
 		r->last_raw[l] = INT64_MIN / 2;
 	}
+	for (int j = 0; j < d->L; j++)
+		r->sigma[j] = (uint8_t)d->order[j];
+	if (r->mode == FDT_PMODE_B2)
+		for (int l = 0; l < d->L; l++)
+			snprintf(r->tx2_topic[l], sizeof r->tx2_topic[l], "boat/b%d/tx2/%s/%s", vessel,
+			         pclass_names[fdt_pclass(d, l)], d->topic[l].name);
+	r->U = o->U > 0 ? o->U : d->U;
+	r->fb_t = -1;
+	r->fb_y = d->C0;
+	r->lw_bytes = o->lw_bytes > 0 ? o->lw_bytes : 16384;
+	r->tick_us = o->tick_us > 0 ? o->tick_us : 1000;
+	r->slot_n = d->M > 0 ? d->M : 1;
+	r->slot_pos = 0;
+	for (int k = 0; k < d->M; k++)
+		if (d->vessels[k] == vessel)
+			r->slot_pos = k;
+	r->gate_t = -1;
 	snprintf(r->demand_topic, sizeof r->demand_topic, "boat/b%d/demand", vessel);
 	snprintf(r->log_topic, sizeof r->log_topic, "boat/b%d/regulator", vessel);
 	r->json_cap = 16384 + (size_t)d->L * 256;
@@ -240,6 +293,43 @@ void fdt_preg_free(struct fdt_preg *r)
 	}
 	free(r->json);
 	r->json = NULL;
+	free(r->scratch);
+	r->scratch = NULL;
+	r->scratch_cap = 0;
+}
+
+/* paper_b1, paper_b2: forwards the raw message at once, in step floor((now - epoch) / Ts) */
+static int forward_now(struct fdt_preg *r, int l, const void *payload, size_t len, int64_t now_us)
+{
+	const struct fdt_pdtp *d = r->d;
+	int64_t t = fdt_p_step_at(d, now_us);
+	struct fdt_pstep *s = step_get(r, t);
+	s->rx[l]++;
+	if (s->seq[l] >= (uint32_t)r->max_msgs) {
+		struct fdt_pmsg m = {NULL, (uint32_t)len, t, (uint16_t)s->seq[l], FDT_PR_OVERFLOW, 0};
+		s->drop[l]++;
+		r->s.overflow++;
+		log_msg(r, l, &m, FDT_PR_OVERFLOW, t);
+		return 1;
+	}
+	size_t n = FDT_STEP_HEADER + len;
+	if (n > r->scratch_cap) {
+		uint8_t *b = realloc(r->scratch, n);
+		if (!b)
+			return -1;
+		r->scratch = b;
+		r->scratch_cap = n;
+	}
+	uint16_t seq = (uint16_t)s->seq[l]++;
+	fdt_put_u32(r->scratch, (uint32_t)t);
+	fdt_put_u16(r->scratch + 4, seq);
+	memcpy(r->scratch + FDT_STEP_HEADER, payload, len);
+	pub(r, r->mode == FDT_PMODE_B2 ? r->tx2_topic[l] : r->tx_topic[l], 1, r->scratch, n);
+	s->fwd[l]++;
+	s->xfwd[l] += n;
+	s->cost[l] += fdt_p_cost(d, l, len);
+	r->s.fwd++;
+	return 0;
 }
 
 /* ------------------------------------------------------------------ inputs */
@@ -254,6 +344,8 @@ int fdt_preg_on_raw(struct fdt_preg *r, int l, const void *payload, size_t len, 
 	if (c < r->next_v)   /* never into a step already applied (clock stepped back) */
 		c = r->next_v;
 	r->last_raw[l] = c;
+	if (immediate(r))
+		return forward_now(r, l, payload, len, now_us);
 	struct fdt_pstep *s = step_get(r, c);
 	struct fdt_pq *q = &r->q[l];
 	s->rx[l]++;
@@ -341,6 +433,61 @@ int fdt_preg_on_demand(struct fdt_preg *r, const void *payload, size_t len, int6
 	return 0;
 }
 
+static double get_f64(const uint8_t *p)
+{
+	uint64_t v = (uint64_t)fdt_get_u32(p) << 32 | fdt_get_u32(p + 4);
+	double x;
+	memcpy(&x, &v, sizeof x);
+	return x;
+}
+
+static float get_f32(const uint8_t *p)
+{
+	uint32_t v = fdt_get_u32(p);
+	float x;
+	memcpy(&x, &v, sizeof x);
+	return x;
+}
+
+int fdt_preg_on_feedback(struct fdt_preg *r, const void *payload, size_t len, int64_t now_us)
+{
+	const struct fdt_pdtp *d = r->d;
+	const uint8_t *p = payload;
+	(void)now_us;
+	if (len < FDT_FEEDBACK_MIN || p[17] != d->L || len != FDT_FEEDBACK_MIN + (size_t)d->L) {
+		r->s.fb_bad++;
+		return -1;
+	}
+	int seen[FDT_L_MAX] = {0};
+	for (int j = 0; j < d->L; j++) {
+		int l = p[FDT_FEEDBACK_MIN + j];
+		if (l < 1 || l > d->L || seen[l - 1]) {
+			r->s.fb_bad++;
+			return -1;
+		}
+		seen[l - 1] = 1;
+	}
+	int64_t t = (int64_t)fdt_get_u32(p);
+	if (r->have_fb && t < r->fb_t) {
+		r->s.fb_old++;
+		return 1;
+	}
+	double y = get_f64(p + 4);
+	double U = (double)get_f32(p + 12);
+	r->have_fb = 1;
+	r->fb_t = t;
+	if (isfinite(y) && y > 0)
+		r->fb_y = y;
+	if (isfinite(U) && U > 0)
+		r->fb_U = U;
+	if (p[16] > 0)
+		r->fb_m = p[16];
+	for (int j = 0; j < d->L; j++)
+		r->sigma[j] = (uint8_t)(p[FDT_FEEDBACK_MIN + j] - 1);
+	r->s.fb_ok++;
+	return 0;
+}
+
 /* ------------------------------------------------------------------ events */
 
 /* phase 1 of step t: D_i(t) */
@@ -371,6 +518,115 @@ static int cmp_arr(const void *a, const void *b)
 	return x->arr < y->arr ? -1 : x->arr > y->arr;
 }
 
+/* publishes message k of topic l (QoS qos) and frees it; counts it in step s */
+static void fwd_msg(struct fdt_preg *r, struct fdt_pstep *s, int l, int k, int qos)
+{
+	const struct fdt_pdtp *d = r->d;
+	struct fdt_pmsg *m = &r->q[l].m[k];
+	fdt_put_u32(m->buf, (uint32_t)m->t);
+	fdt_put_u16(m->buf + 4, m->seq);
+	pub(r, r->tx_topic[l], qos, m->buf, FDT_STEP_HEADER + (size_t)m->len);
+	if (m->t == s->t) {
+		s->fwd[l]++;
+	} else {
+		s->late_fwd[l]++;
+		r->s.late_fwd++;
+	}
+	s->xfwd[l] += FDT_STEP_HEADER + (uint64_t)m->len;
+	s->cost[l] += fdt_p_cost(d, l, m->len);
+	r->s.fwd++;
+	free(m->buf);
+	m->buf = NULL;
+}
+
+/* paper_tdma: releases the messages of the step of the open slot while the unsent bytes of the data
+ * bridge plus the bytes released in this tick stay below lw_bytes */
+static void tdma_release(struct fdt_preg *r, int64_t now_us)
+{
+	const struct fdt_pdtp *d = r->d;
+	struct fdt_pstep *s = r->gate_t >= 0 ? fdt_preg_step(r, r->gate_t) : NULL;
+	if (!s || r->gate_left <= 0 || now_us < s->gate_s || now_us >= s->gate_e)
+		return;
+	int64_t unsent = 0;
+	if (r->io.sock) {
+		struct fdt_sock sk;
+		memset(&sk, 0, sizeof sk);
+		r->io.sock(r->io.ctx, &sk);
+		for (int k = 0; k < sk.n && k < FDT_DATA_MAX; k++)
+			unsent += sk.s[k].nsd > 0 ? sk.s[k].nsd : 0;
+	}
+	int64_t rel = 0;
+	for (int j = 0; j < d->L && unsent + rel < r->lw_bytes; j++) {
+		int l = r->sigma[j];
+		struct fdt_pq *q = &r->q[l];
+		int any = 0;
+		for (int k = 0; k < q->n && unsent + rel < r->lw_bytes; k++) {
+			struct fdt_pmsg *m = &q->m[k];
+			if (!m->buf || m->t != r->gate_t || m->reason != FDT_PR_SLOT)
+				continue;
+			rel += FDT_STEP_HEADER + (int64_t)m->len;
+			m->reason = FDT_PR_FWD;
+			fwd_msg(r, s, l, k, 1);
+			r->gate_left--;
+			any = 1;
+		}
+		if (any)
+			q_remove_marked(q);
+	}
+}
+
+/* paper_b3, b8, paper_tdma at v(t): the messages of step t in sigma_t, each topic in order of reception */
+static void do_v_prio(struct fdt_preg *r, int64_t t, struct fdt_pstep *s, int64_t now_us)
+{
+	const struct fdt_pdtp *d = r->d;
+	double B = INFINITY, cum = 0;
+	int stop = 0;
+	s->fb_t = r->have_fb ? r->fb_t : -1;
+	if (r->mode == FDT_PMODE_B8) {
+		double U = r->fb_U > 0 ? r->fb_U : r->U;
+		int m = r->fb_m > 0 ? r->fb_m : (d->M > 0 ? d->M : 1);
+		B = U * r->fb_y * (d->Ts - d->T1 - d->T2) / d->Ts / m;
+		s->budget = B;
+		s->y_used = r->fb_y;
+	}
+	if (r->mode == FDT_PMODE_TDMA) {
+		int64_t v = fdt_p_v_us(d, t), T3 = d->Ts_us - d->T1_us - d->T2_us;
+		s->gate_s = v + T3 * r->slot_pos / r->slot_n;
+		s->gate_e = v + T3 * (r->slot_pos + 1) / r->slot_n;
+		r->gate_t = t;
+		r->gate_left = 0;
+	}
+	for (int j = 0; j < d->L; j++) {
+		int l = r->sigma[j];
+		struct fdt_pq *q = &r->q[l];
+		int any = 0;
+		for (int k = 0; k < q->n; k++) {
+			struct fdt_pmsg *m = &q->m[k];
+			if (m->t > t)   /* arrived after v(t): step t + 1 */
+				continue;
+			if (r->mode == FDT_PMODE_TDMA) {
+				m->reason = FDT_PR_SLOT;   /* released in the slot, else logged as slot */
+				r->gate_left++;
+				continue;
+			}
+			double c = fdt_p_cost(d, l, m->len);
+			if (stop || cum + c > B + 1e-6) {
+				stop = 1;   /* strict priority: nothing after it in sigma_t leaves */
+				m->reason = FDT_PR_BUDGET;
+				continue;
+			}
+			cum += c;
+			m->reason = FDT_PR_FWD;
+			fwd_msg(r, s, l, k, 1);
+			any = 1;
+		}
+		if (any)
+			q_remove_marked(q);
+	}
+	if (r->mode == FDT_PMODE_TDMA)
+		tdma_release(r, now_us);
+}
+
 /* phase 3 of step t */
 static void do_v(struct fdt_preg *r, int64_t t, int64_t now_us)
 {
@@ -398,6 +654,12 @@ static void do_v(struct fdt_preg *r, int64_t t, int64_t now_us)
 		r->s.tab_ok++;
 	else
 		r->s.tab_none++;
+	if (immediate(r))
+		return;   /* forwarded on arrival: nothing is queued */
+	if (prio_mode(r)) {
+		do_v_prio(r, t, s, now_us);
+		return;
+	}
 	int police = policing(r);
 	int block = !s->have_p ? FDT_PR_NO_TABLE : (police && !s->have_d) ? FDT_PR_NO_DEMAND : FDT_PR_NONE;
 	size_t nf = 0, capf = 0;
@@ -496,6 +758,14 @@ static void summary_json(struct fdt_preg *r, struct jbuf *j, const struct fdt_ps
 	JARR(j, "cost", d->L, "%.0f", s->cost[l_]);
 	JARR(j, "late_fwd", d->L, "%u", s->late_fwd[l_]);
 	JARR(j, "carried", d->L, "%u", s->carried[l_]);
+	if (prio_mode(r)) {
+		jp(j, ",\"fb_t\":%" PRId64, s->fb_t);
+		JARR(j, "sigma", d->L, "%u", (unsigned)r->sigma[l_] + 1);
+	}
+	if (r->mode == FDT_PMODE_B8)
+		jp(j, ",\"budget\":%.0f,\"y\":%.0f", s->budget, s->y_used);
+	if (r->mode == FDT_PMODE_TDMA)
+		jp(j, ",\"slot\":[%" PRId64 ",%" PRId64 "]", s->gate_s, s->gate_e);
 	jp(j, "}");
 }
 
@@ -503,6 +773,10 @@ static void summary_json(struct fdt_preg *r, struct jbuf *j, const struct fdt_ps
 static void do_end(struct fdt_preg *r, int64_t t)
 {
 	const struct fdt_pdtp *d = r->d;
+	if (r->gate_t >= 0 && r->gate_t <= t) {
+		r->gate_t = -1;
+		r->gate_left = 0;
+	}
 	if (end_of_step_rule(r)) {
 		q_log_upto(r, t, 0, t);   /* never forwarded later */
 	} else {
@@ -531,6 +805,8 @@ static void resync(struct fdt_preg *r, int64_t now_us)
 		return;
 	q_log_upto(r, INT64_MAX, FDT_PR_RESYNC, cur);
 	log_flush(r);
+	r->gate_t = -1;
+	r->gate_left = 0;
 	for (int k = 0; k < FDT_P_STEPS; k++)
 		step_reset(&r->st[k], -1);
 	reset_clock(r, now_us);
@@ -550,8 +826,20 @@ int64_t fdt_preg_tick(struct fdt_preg *r, int64_t now_us)
 		for (int k = 1; k < 3; k++)
 			if (at[k] < at[ev])
 				ev = k;
-		if (at[ev] > now_us)
+		if (at[ev] > now_us) {
+			if (r->mode == FDT_PMODE_TDMA && r->gate_t >= 0) {
+				tdma_release(r, now_us);
+				const struct fdt_pstep *s = fdt_preg_step(r, r->gate_t);
+				if (s && r->gate_left > 0 && now_us < s->gate_e) {
+					int64_t nx = now_us < s->gate_s ? s->gate_s : now_us + r->tick_us;
+					if (nx > s->gate_e)
+						nx = s->gate_e;
+					if (nx < at[ev])
+						return nx;
+				}
+			}
 			return at[ev];
+		}
 		if (ev == 0) {
 			do_end(r, r->next_end);
 			r->next_end++;

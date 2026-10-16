@@ -5,7 +5,7 @@ Requires=fleetdt-broker.service
 
 [Service]
 EnvironmentFile=/etc/fleetdt/fleetdt.env
-ExecStart=/opt/fleet-dt/bin/fdt_dti --dtp ${FDT_DTP} --vessel ${FDT_VESSEL} --broker 127.0.0.1:1883 --prio 50
+ExecStart=/opt/fleet-dt/bin/fdt_dti --dtp ${FDT_DTP} --vessel ${FDT_VESSEL} --broker 127.0.0.1:1883 --prio 50 --jitter-ms ${FDT_JITTER_MS}
 Restart=always
 RestartSec=1
 AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK

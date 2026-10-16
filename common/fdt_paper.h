@@ -14,6 +14,11 @@
  * When the file holds no "c_b" (or no "c_m"), the reader computes the cost bound of the paper:
  *   c_b = 1 + 2 (h_T + h_W) / MSS,  c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_W)
  * with h_P,l the PUBLISH header of boat/b<V>/tx/<name> (QoS 2) and h_W the top-level "h_W" (0 when absent).
+ *
+ * The reader also keeps what the baseline modes of the regulator use (fdt_reg_paper.h): "U" and "C0"
+ * (defaults 0.8 and 300000), the order "order" (topics left out go last, in file order), "required"
+ * (v2), and per topic whether it carries video (a layer topic <base>_<j> of "video_layers", default base
+ * "video", or a v2 topic of kind output).
  */
 #ifndef FDT_PAPER_H
 #define FDT_PAPER_H
@@ -32,13 +37,18 @@ struct fdt_ptopic {
 	double jitter;    /* J_l, s (0 when absent) */
 	int has_jitter;   /* the file gives "jitter" for this topic */
 	double c_m;       /* c_m of this topic */
+	int required;     /* listed in "required" */
+	int video;        /* a video layer topic, or a v2 output topic */
 };
 
 struct fdt_pdtp {
 	double epoch, Ts, T1, T2;
 	double c_b;
+	double U, C0;     /* "U" (0.8) and "C0" (300000 bytes per step) */
 	int L;
 	struct fdt_ptopic topic[FDT_L_MAX];
+	int n_required;
+	int order[FDT_L_MAX];   /* 0-based topic indices of "order", then the topics left out */
 	int M;
 	int vessels[FDT_P_V_MAX];
 	int64_t epoch_us, Ts_us, T1_us, T2_us;

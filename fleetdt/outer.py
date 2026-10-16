@@ -335,6 +335,31 @@ def outer_loop(records: Sequence[Dict], target: float = 0.99, window: Optional[i
     return res
 
 
+def _jsonable(o):
+    if isinstance(o, np.integer):
+        return int(o)
+    if isinstance(o, np.floating):
+        return float(o)
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    raise TypeError("%r is not JSON serializable" % type(o))
+
+
+def run_job(dta: str, target: float, window: Optional[int], out: str) -> None:
+    """Outer loop of fleetdt.as_service in a child process: outer_loop over the DTA file `dta`, written to
+    `out` as {"result": ...} (or {"error": ...} when the DTA cannot be read); the file appears complete
+    (written to out.tmp, then renamed)."""
+    import os
+    try:
+        recs = load_dta(dta)
+        msg = {"result": outer_loop(recs, target=target, window=window) if recs else None}
+    except (OSError, ValueError) as e:
+        msg = {"error": str(e)}
+    with open(out + ".tmp", "w", encoding="utf-8") as f:
+        json.dump(msg, f, default=_jsonable)
+    os.replace(out + ".tmp", out)
+
+
 def run_M(records: Sequence[Dict]) -> int:
     """Number of vessels M of a run: the largest m(t) of its steps."""
     return max([len(r.get("vessels") or []) if r.get("vessels") is not None else int(r.get("m") or 0)

@@ -21,11 +21,22 @@ sudo install -m 755 "$SRC"/emu/vm/guest/*.py /usr/local/lib/fdt/
 sudo install -m 644 "$SRC"/emu/vm/guest/*.service /etc/systemd/system/
 sudo install -m 644 "$SRC/emu/vm/guest/chrony.conf" /etc/chrony/chrony.conf
 sudo rm -f /etc/chrony/sources.d/* /etc/chrony/conf.d/*
+# oscillator error below chronyd (design item I9): preloaded shim + injector (idle without a schedule)
+sudo cc -O2 -Wall -shared -fPIC -o /usr/local/lib/fdt/fdt-freqshim.so "$SRC/emu/vm/guest/fdt-freqshim.c" -ldl
+# the AppArmor profile of chronyd (Debian) must allow the preloaded library and the shared page
+if [ -d /etc/apparmor.d/local ]; then
+	printf '%s\n' '/usr/local/lib/fdt/fdt-freqshim.so mr,' '/run/fdt-clock/ rw,' '/run/fdt-clock/freq.shm rw,' \
+		| sudo tee /etc/apparmor.d/local/usr.sbin.chronyd > /dev/null
+fi
+sudo install -d /etc/systemd/system/chrony.service.d
+sudo install -m 644 "$SRC/emu/vm/guest/chrony-freqshim.conf" /etc/systemd/system/chrony.service.d/fdt-freqshim.conf
 sudo systemctl daemon-reload
-sudo systemctl enable fdt-netsetup.service fdt-clockinit.service fdt-clockd.service chrony.service
+sudo systemctl enable fdt-netsetup.service fdt-clocksource.service fdt-clockinit.service fdt-clockerr.service \
+	fdt-clockd.service chrony.service
 echo ptp_kvm | sudo tee /etc/modules-load.d/ptp_kvm.conf > /dev/null
 # IPv6 off (SPEC_v2 Section 7), quiet console, no predictable-name surprises are needed (MAC lookup)
-echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT ipv6.disable=1"' | sudo tee /etc/default/grub.d/90-fdt.cfg > /dev/null
+# clock source TSC instead of kvm-clock (design item I9; checked at boot by fdt-clocksource.service)
+echo 'GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT ipv6.disable=1 clocksource=tsc tsc=reliable"' | sudo tee /etc/default/grub.d/90-fdt.cfg > /dev/null
 sudo update-grub > /dev/null 2>&1
 # the mosquitto service of the distribution is not installed (source build); the stack starts its brokers
 sudo sed -i 's/^#\?MaxRetentionSec=.*/MaxRetentionSec=1week/' /etc/systemd/journald.conf
@@ -33,6 +44,7 @@ sudo sed -i 's/^#\?MaxRetentionSec=.*/MaxRetentionSec=1week/' /etc/systemd/journ
 python3 -c "import paho.mqtt; print('paho-mqtt', paho.mqtt.__version__)"
 iperf3 --version | head -1
 /usr/sbin/chronyd --version
+ldd /usr/local/lib/fdt/fdt-freqshim.so > /dev/null && echo "fdt-freqshim.so: ok"
 sudo cloud-init clean --logs --machine-id --seed > /dev/null
 sudo rm -f /etc/ssh/ssh_host_*
 echo provision-base: done

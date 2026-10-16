@@ -6,10 +6,22 @@ Two stacks (emu/run.py run EXP.json --stack paper|as2; default: the "stack" of t
   paper  the model of the paper (Sections III to V): fleetdt.as_service (AS, Algorithm 1) with the outer
          loop fleetdt.outer, the VE collector (fleetdt.ve live, the DTA file), the v1 DTI program
          vessel/dti/fdt_dti.c, the JMCS stub emu/jmcs_stub.py (fleet/order, survey/transit every 10 s),
-         the vessel brokers with the regulator plugin in "plugin_opt_mode paper", and the channel
-         monitor of R6: the emulator exports the nl80211 counters of the AP (fdt-emu --cnt) and
-         fleetdt.monitor_adapter computes y(t) by the logic of fdt_chmon.c and publishes it on
+         the vessel brokers with the regulator plugin in "plugin_opt_mode paper", the layered video
+         source vessel/publishers/fdt_source.py (replay of a frame-size trace into the 16 layer topics),
+         and the channel monitor of R6: the emulator exports the nl80211 counters of the AP (fdt-emu
+         --cnt) and fleetdt.monitor_adapter computes y(t) by the logic of fdt_chmon.c and publishes it on
          fleet/throughput. See run_fleet_paper() and emu/README.md.
+
+         Each vessel gets its own DTP, RUN/dtp_vessel.json = `video_layers.py resolve` of the DTP of the
+         run (layer bounds scaled by its size_scale), which its regulator, its DTI program and its
+         source read, so the demand tables differ between vessels; the GS reads RUN/dtp.json.
+         The DTI program runs with --jitter-ms equal to plugin_opt_jitter_ms of the regulator
+         (paper_jitter_ms: "plugin_opts"."jitter_ms", default 2), so the table that the regulator
+         polices holds the jitter allowance.
+
+         "method" (paper stack) sets the AS policy, the regulator mode, the data bridges and the fleet
+         feedback (PAPER_METHODS, design Section 5): fleetdt, B1, B2, B3, B4, B5a, B5b, B7, B8, B9, B10.
+         B4 needs "as": {"C_ref": bytes per step}; B8 takes its U from "feedback": {"U"} (else "as"."U").
   as2    the older model of SPEC_v2.md (fleetdt.as2.service, fleetdt.as2.opctl), described below.
 
 Every run records the git commit and a digest of the files of the stack in RUN/result.json
@@ -54,6 +66,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 
 DEFAULT_EPOCH = 1767225600.0
@@ -396,9 +409,32 @@ PAPER_FILES = ["fleetdt/__init__.py", "fleetdt/as_service.py", "fleetdt/as_model
                "vessel/dti/*.c", "vessel/regulator/*.[ch]", "vessel/publishers/*.py", "common/*.[ch]",
                "radio/channel_monitor/fdt_chmon.c", "radio/channel_monitor/build_host.sh", "emu/fleet.py",
                "emu/run.py", "emu/jmcs_stub.py", "emu/monitor_bridge.py", "emu/ns3/*", "Makefile",
-               "mosquitto/patches/*.patch", "system/nftables-fdt.nft"]
+               "mosquitto/patches/*.patch", "system/nftables-fdt.nft", "fleetdt/feedback.py", "emu/traces/*.txt"]
 PAPER_MONITOR = {"offset_us": 500, "jitter_us": 0, "quant": "harvest", "harvest_ms": 0, "sigma": 0.0,
                  "noise_seed": None, "backend": "auto"}
+# plugin_opt_jitter_ms of the regulator when the experiment gives none (fdt_preg_opts_default)
+PAPER_JITTER_MS = 2.0
+# frame sizes of the default source (Pohang Canal Dataset, quality 50, half scale; emu/traces/README.md)
+PAPER_TRACE = "emu/traces/water-sbs-q50-s0p5.txt"
+# method -> (AS policy, None: no AS; regulator mode; data bridges; fleet feedback), design Section 5.
+# The AS runs only where the method takes priority tables; fdt_dti runs for every method, so the DTA
+# holds M(t) and D_i(t) for the metrics. The paper_* modes and b8 are the baselines of the paper core
+# (vessel/regulator/fdt_reg_paper.h).
+PAPER_METHODS = {
+    "fleetdt": ("alg1", "paper", "single", False),
+    "B1": (None, "paper_b1", "single", False),          # DCF, one bridge, no regulator
+    "B2": (None, "paper_b2", "b2", False),              # EDCA, one bridge per access category
+    "B3": (None, "paper_b3", "single", True),           # strict priority in sigma_t, no phases 1 and 2
+    "B4": ("b4", "paper", "single", False),             # Algorithm 1 with C_hat = C_ref constant
+    "B5a": ("alg1", "paper_nopolice", "single", False),  # regulator without policing
+    "B5b": ("alg1", "paper_noeos", "single", False),    # regulator without the end-of-step rule
+    "B7": ("b7", "paper", "single", False),             # per-vessel grants with redistribution
+    "B8": (None, "b8", "single", True),                 # LIMERIC/DCC-like rate control from y(t)
+    "B9": (None, "paper_tdma", "single", True),         # overlay TDMA
+    "B10": (None, "paper_b1", "per_topic", False),      # one data bridge per topic
+}
+_METHOD_KEY = {k.lower(): k for k in PAPER_METHODS}
+_PLUGIN_METHOD = {"paper": "fleetdt", "paper_nopolice": "B5a", "paper_noeos": "B5b"}
 
 
 def paper_epoch(dtp):
@@ -463,6 +499,61 @@ def check_paper_spec(spec, M):
         raise SystemExit("the DTP vessels %s do not match the session (M=%d)" % (vessels, M))
 
 
+def paper_method(spec):
+    """(method, config) of a paper-stack experiment: "method" (case-insensitive), else the method of
+    "plugin_mode" (paper, paper_nopolice, paper_noeos); a "plugin_mode" must match the method."""
+    pm = spec.get("plugin_mode")
+    m = spec.get("method")
+    if m is None:
+        m = _PLUGIN_METHOD.get(pm or "paper")
+        if m is None:
+            raise SystemExit("plugin_mode %s needs the \"method\" of the baseline" % pm)
+    key = _METHOD_KEY.get(str(m).lower())
+    if key is None:
+        raise SystemExit("method %s: one of %s" % (m, ", ".join(PAPER_METHODS)))
+    cfg = dict(zip(("as", "plugin", "bridges", "feedback"), PAPER_METHODS[key]))
+    if pm is not None and pm != cfg["plugin"]:
+        raise SystemExit("plugin_mode %s does not match method %s (mode %s)" % (pm, key, cfg["plugin"]))
+    if key == "B4" and (spec.get("as") or {}).get("C_ref") is None:
+        raise SystemExit("method B4 needs \"as\": {\"C_ref\": ...} (constant prediction, bytes per step)")
+    return key, cfg
+
+
+def paper_jitter_ms(spec):
+    """J of the regulator (plugin_opt_jitter_ms) and of the DTI program (--jitter-ms): one value"""
+    po = spec.get("plugin_opts") or {}
+    d = spec.get("dti") or {}
+    if po.get("jitter_ms") is not None and d.get("jitter_ms") is not None and \
+            float(po["jitter_ms"]) != float(d["jitter_ms"]):
+        raise SystemExit("plugin_opts.jitter_ms and dti.jitter_ms differ: the regulator polices the table of fdt_dti")
+    j = po.get("jitter_ms", d.get("jitter_ms", PAPER_JITTER_MS))
+    if float(j) < 0:
+        raise SystemExit("jitter_ms must be >= 0")
+    return float(j)
+
+
+def _video_layers():
+    pub = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vessel", "publishers")
+    if pub not in sys.path:
+        sys.path.insert(0, pub)
+    import video_layers
+    return video_layers
+
+
+def paper_vessel_dtp(dtp, h):
+    """DTP of vessel h: `video_layers.py resolve` (the bounds of the layer topics scaled by its size_scale)"""
+    return _video_layers().resolve_vessel(dtp, h)
+
+
+def paper_bridges(spec, M):
+    """data bridges of the method and the number of bridges of the GS broker"""
+    from fleetdt.gsconf import bridge_count
+    _, cfg = paper_method(spec)
+    names = [t["name"] for t in spec["dtp"]["topics"]]
+    return cfg["bridges"], bridge_count(M, b2=cfg["bridges"] == "b2",
+                                        per_topic=names if cfg["bridges"] == "per_topic" else None)
+
+
 def paper_prepare_cmd(R, spec, h, M):
     """bash script of the preparation of host h (paper stack)"""
     lines = ["set -e", "rm -rf %s" % RUN, "mkdir -p %s" % RUN, "cd ~/fleet-dt",
@@ -474,21 +565,30 @@ def paper_prepare_cmd(R, spec, h, M):
              "/opt/mosquitto-2.1/sbin/mosquitto -h 2>&1 | head -1 > %s/mosquitto-version.txt || true" % RUN,
              "chronyc -n tracking > %s/chrony-before.txt 2>&1 || true" % RUN]
     if h == 0:
+        _, cfg = paper_method(spec)
         vs = " ".join("--vessel %d=%s" % (i, R.host_ip(i)) for i in range(1, M + 1))
-        lines += ["python3 -m fleetdt.gsconf gs %s > %s/m.conf" % (vs, RUN),
+        opt = {"single": "", "b2": " --b2", "per_topic": " --per-topic %s/dtp.json" % RUN}[cfg["bridges"]]
+        opt += " --feedback" if cfg["feedback"] else ""
+        lines += ["python3 -m fleetdt.gsconf gs %s%s > %s/m.conf" % (vs, opt, RUN),
                   "echo 'log_dest file %s/mosquitto.log' >> %s/m.conf" % (RUN, RUN)]
     else:
         pm = paper_plugin_mode(spec)
         ext = (spec.get("dti") or {}).get("enabled", True)
-        lines += ["make -s build/fdt_regulator.so build/fdt_dti MOSQ=/opt/mosquitto-2.1 > %s/make.log 2>&1" % RUN,
+        lines += [# the DTP of this vessel (video_layers.py resolve): its regulator, DTI program and source
+                  "echo %s | base64 -d > %s/dtp_vessel.json" % (b64(paper_vessel_dtp(spec["dtp"], h)), RUN),
+                  "make -s build/fdt_regulator.so build/fdt_dti MOSQ=/opt/mosquitto-2.1 > %s/make.log 2>&1" % RUN,
                   "sha256sum build/fdt_regulator.so build/fdt_dti > %s/build.sha256" % RUN,
-                  ("python3 -m fleetdt.gsconf vessel --vessel %d --dtp %s/dtp.json --plugin $HOME/fleet-dt/build/"
+                  ("python3 -m fleetdt.gsconf vessel --vessel %d --dtp %s/dtp_vessel.json --plugin $HOME/fleet-dt/build/"
                    "fdt_regulator.so --mode %s --log-dest 'file %s/mosquitto.log' > %s/m.conf") % (h, RUN, pm, RUN, RUN),
                   # the vessel log of the regulator (the messages of each step that it did not forward)
                   "echo 'plugin_opt_log %s/regulator.jsonl' >> %s/m.conf" % (RUN, RUN),
                   # D_i(t) comes from the v1 DTI program (fdt_dti); the regulator polices to the table it sees
-                  "echo 'plugin_opt_demand %s' >> %s/m.conf" % ("external" if ext else "internal", RUN)]
+                  "echo 'plugin_opt_demand %s' >> %s/m.conf" % ("external" if ext else "internal", RUN),
+                  # the jitter allowance J of the regulator; fdt_dti runs with --jitter-ms J (paper_dti_cmd)
+                  "echo 'plugin_opt_jitter_ms %g' >> %s/m.conf" % (paper_jitter_ms(spec), RUN)]
         for k, v in sorted((spec.get("plugin_opts") or {}).items()):
+            if k == "jitter_ms":
+                continue
             lines.append("echo %s >> %s/m.conf" % (shlex.quote("plugin_opt_%s %s" % (k, v)), RUN))
         lines.append("grep -q '^plugin_opt_mode %s$' %s/m.conf" % (pm, RUN))
     lines.append("echo prepared")
@@ -496,23 +596,32 @@ def paper_prepare_cmd(R, spec, h, M):
 
 
 def paper_plugin_mode(spec):
-    """plugin_opt_mode of the vessel brokers: paper, or the ablations paper_nopolice (B5a) and
-    paper_noeos (B5b) of the same regulator"""
-    pm = spec.get("plugin_mode", "paper")
-    if pm not in ("paper", "paper_nopolice", "paper_noeos"):
-        raise SystemExit("plugin_mode: paper, paper_nopolice or paper_noeos")
-    return pm
+    """plugin_opt_mode of the vessel brokers: the mode of the method (paper, the ablations paper_nopolice
+    (B5a) and paper_noeos (B5b), or a baseline mode of the paper core)"""
+    return paper_method(spec)[1]["plugin"]
 
 
 def paper_as_cmd(spec):
-    """AS of the paper (Algorithm 1) with the outer loop on the DTA (fleetdt.outer)"""
+    """AS of the paper (Algorithm 1) with the outer loop on the DTA (fleetdt.outer); B4: --alpha 0 and
+    --C0 C_ref without the outer loop; B7: --policy b7. None for a method without the AS."""
+    key, cfg = paper_method(spec)
+    if cfg["as"] is None:
+        return None
     a = spec.get("as") or {}
     c = ["python3", "-m", "fleetdt.as_service", "--dtp", RUN + "/dtp.json", "--broker", "127.0.0.1:1883",
          "--epoch", repr(paper_epoch(spec["dtp"])), "--log", RUN + "/as.jsonl", "-v"]
     if a.get("U") is not None:
         c += ["--U", repr(float(a["U"]))]
+    if cfg["as"] == "b4":      # constant prediction C_hat(t) = C_ref; U tuned per baseline
+        c += ["--alpha", "0.0", "--C0", repr(float(a["C_ref"]))]
+        c += [str(x) for x in a.get("extra", [])]
+        return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in c)
     if a.get("alpha") is not None:
         c += ["--alpha", repr(float(a["alpha"]))]
+    if a.get("C0") is not None:
+        c += ["--C0", repr(float(a["C0"]))]
+    if cfg["as"] == "b7":
+        c += ["--policy", "b7"]
     o = spec.get("outer") or {}
     if o.get("every"):
         c += ["--outer-dta", RUN + ("/outer_dta.jsonl" if o.get("dta_file") else "/dta.jsonl"),
@@ -520,6 +629,22 @@ def paper_as_cmd(spec):
         if o.get("window"):
             c += ["--outer-window", str(int(o["window"]))]
     c += [str(x) for x in a.get("extra", [])]
+    return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in c)
+
+
+def paper_feedback_cmd(spec):
+    """fleet feedback of the GS (fleetdt.feedback) for paper_b3, b8 and paper_tdma; None otherwise"""
+    _, cfg = paper_method(spec)
+    if not cfg["feedback"]:
+        return None
+    f = spec.get("feedback") or {}
+    U = f.get("U", (spec.get("as") or {}).get("U"))
+    c = ["python3", "-m", "fleetdt.feedback", "--dtp", RUN + "/dtp.json", "--broker", "127.0.0.1:1883",
+         "--epoch", repr(paper_epoch(spec["dtp"])), "--log", RUN + "/feedback.jsonl"]
+    if U is not None:
+        c += ["--U", repr(float(U))]
+    if f.get("m") is not None:
+        c += ["--m", str(int(f["m"]))]
     return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in c)
 
 
@@ -547,22 +672,47 @@ def paper_dti_cmd(spec, h):
     """v1 DTI program: D_i(t) on boat/b<i>/demand at start(t) + offset (SCHED_FIFO through chrt)"""
     d = spec.get("dti") or {}
     off = float(d.get("offset_ms", 1.0)) + (h - 1) * float(d.get("stagger_ms", 0.0))
-    c = ["build/fdt_dti", "--dtp", RUN + "/dtp.json", "--vessel", str(h), "--broker", "127.0.0.1:1883",
-         "--offset-ms", repr(off), "--idle", str(int(d.get("idle", 8))), "--prio", "0"]
+    c = ["build/fdt_dti", "--dtp", RUN + "/dtp_vessel.json", "--vessel", str(h), "--broker", "127.0.0.1:1883",
+         "--offset-ms", repr(off), "--idle", str(int(d.get("idle", 8))), "--prio", "0",
+         "--jitter-ms", "%g" % paper_jitter_ms(spec)]
     return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in c)
 
 
 def paper_source_cmd(spec, h, t0, dur):
+    """Sources of vessel h. Default ("kind": "fdt_source"): the layered video publisher fdt_source.py on
+    the DTP of the vessel, frame sizes replayed from "trace" (default PAPER_TRACE; null: the lognormal
+    model of "median" and "sigma"), seeded draws relative to t0, "scale" rho of the frame sizes
+    (--load, "load_mode" size or rate); "kind": "raw_load" keeps the synthetic load raw_load.py;
+    "cmd" a command line with {dtp}, {dtp_vessel}, {vessel}, {seed}, {t0}, {duration} and {run}."""
     src = spec.get("source") or {}
     seed = int(spec.get("seed", 1))
+    dtp = RUN + "/dtp_vessel.json"
     if src.get("cmd"):
-        c = src["cmd"].format(dtp=RUN + "/dtp.json", vessel=h, seed=seed, t0="%.6f" % t0, duration="%.1f" % dur,
-                              run=RUN)
+        c = src["cmd"].format(dtp=RUN + "/dtp.json", dtp_vessel=dtp, vessel=h, seed=seed, t0="%.6f" % t0,
+                              duration="%.1f" % dur, run=RUN)
         return "cd ~/fleet-dt && exec " + c
-    c = ["python3", "vessel/publishers/raw_load.py", "--dtp", RUN + "/dtp.json", "--vessel", str(h),
-         "--host", "127.0.0.1", "--port", "1883", "--scale", repr(float(src.get("scale", 1.0))),
-         "--size", str(src.get("size", "random")), "--min-frac", repr(float(src.get("min_frac", 0.5))),
-         "--seed", str(seed), "--duration", "%.1f" % dur]
+    kind = src.get("kind", "fdt_source")
+    if kind == "raw_load":
+        c = ["python3", "vessel/publishers/raw_load.py", "--dtp", dtp, "--vessel", str(h),
+             "--host", "127.0.0.1", "--port", "1883", "--scale", repr(float(src.get("scale", 1.0))),
+             "--size", str(src.get("size", "random")), "--min-frac", repr(float(src.get("min_frac", 0.5))),
+             "--seed", str(seed), "--duration", "%.1f" % dur]
+    elif kind == "fdt_source":
+        c = ["python3", "vessel/publishers/fdt_source.py", "--dtp", dtp, "--vessel", str(h),
+             "--host", "127.0.0.1", "--port", "1883", "--t0", "%.6f" % t0, "--seed", str(seed),
+             "--duration", "%.1f" % dur, "--log", RUN + "/src.jsonl"]
+        trace = src.get("trace", None if src.get("median") else PAPER_TRACE)
+        if trace:
+            c += ["--size-trace", trace]
+        if src.get("median"):
+            c += ["--median", repr(float(src["median"])), "--sigma", repr(float(src.get("sigma", 0.5)))]
+        if float(src.get("scale", 1.0)) != 1.0:
+            c += ["--load", repr(float(src["scale"])), "--load-mode", str(src.get("load_mode", "size"))]
+        for k, opt in (("jitter_ms", "--jitter-ms"), ("phase", "--phase"), ("stream_size", "--stream-size")):
+            if src.get(k) is not None:
+                c += [opt, str(src[k])]
+    else:
+        raise SystemExit("source kind: fdt_source or raw_load")
     if src.get("topics"):
         c += ["--topics", ",".join(src["topics"])]
     return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in c)
@@ -644,7 +794,9 @@ def run_fleet_paper(R, spec, a):
     check_paper_spec(spec, M)
     dtp = spec["dtp"]
     mon = paper_monitor(spec)
-    paper_plugin_mode(spec)
+    method, mcfg = paper_method(spec)
+    jit = paper_jitter_ms(spec)
+    paper_source_cmd(spec, 1, 0.0, 1.0)   # rejects an unknown source kind before the run starts
     rev = paper_revision(R.ROOT)
     pin = spec.get("stack_commit")
     if pin and (not rev.get("commit") or not rev["commit"].startswith(pin) or rev.get("dirty_stack")):
@@ -659,10 +811,18 @@ def run_fleet_paper(R, spec, a):
         json.dump(spec, f, indent=1)
     with open(os.path.join(rd, "dtp.json"), "w") as f:
         json.dump(dtp, f, indent=1)
+    vdtp = {}
+    for h in range(1, M + 1):
+        vd = paper_vessel_dtp(dtp, h)
+        with open(os.path.join(rd, "dtp_b%d.json" % h), "w") as f:
+            json.dump(vd, f, indent=1)
+        vdtp[str(h)] = hashlib.sha256(json.dumps(vd, sort_keys=True).encode()).hexdigest()
     scen = os.path.join(rd, "scenario.json")
     with open(scen, "w") as f:
         json.dump(spec["scenario"], f, indent=1)
-    res = {"name": name, "stack": "paper", "slot": R.SLOT, "M": M, "method": spec.get("method", "fleetdt"),
+    bridges, n_bridges = paper_bridges(spec, M)
+    res = {"name": name, "stack": "paper", "slot": R.SLOT, "M": M, "method": method, "method_config": mcfg,
+           "bridges": {"kind": bridges, "n": n_bridges}, "jitter_ms": jit, "dtp_vessels_sha256": vdtp,
            "seed": spec.get("seed"), "t_start": time.time(), "status": "started", "revision": rev,
            "dtp_sha256": hashlib.sha256(json.dumps(dtp, sort_keys=True).encode()).hexdigest(),
            "monitor": mon, "clocks": st.get("clocks"), "clock_seed": st.get("clock_seed"),
@@ -732,14 +892,19 @@ def run_fleet_paper(R, spec, a):
         for h in range(1, M + 1):
             bg(R, h, "/opt/mosquitto-2.1/sbin/mosquitto -c %s/m.conf" % RUN, "mosq", rt=50)
         bg(R, 0, "/opt/mosquitto-2.1/sbin/mosquitto -c %s/m.conf" % RUN, "mosq", rt=50)
-        r = R.ssh(0, "cd ~/fleet-dt && python3 emu/tools/wait_bridges.py --n %d --timeout 30" % (2 * M), timeout=40)
-        res["bridges"] = r.stdout.strip()[-500:]
+        r = R.ssh(0, "cd ~/fleet-dt && python3 emu/tools/wait_bridges.py --n %d --timeout 30" % n_bridges, timeout=40)
+        res["bridges"]["wait"] = r.stdout.strip()[-500:]
         if r.returncode != 0:
             raise RuntimeError("bridges not connected: %s" % r.stdout)
-        # GS: VE (writes the DTA), JMCS stub, AS; vessels: DTI program and sources
+        # GS: VE (writes the DTA), JMCS stub, fleet feedback (B3, B8, B9), AS (methods with tables);
+        # vessels: DTI program and sources
         bg(R, 0, paper_ve_cmd(spec), "ve")
         bg(R, 0, paper_jmcs_cmd(spec, S0), "jmcs")
-        bg(R, 0, paper_as_cmd(spec), "as", rt=40)
+        if paper_feedback_cmd(spec):
+            bg(R, 0, paper_feedback_cmd(spec), "fb", rt=40)
+        watch = "as" if paper_as_cmd(spec) else "ve"
+        if paper_as_cmd(spec):
+            bg(R, 0, paper_as_cmd(spec), "as", rt=40)
         if (spec.get("dti") or {}).get("enabled", True):
             for h in range(1, M + 1):
                 bg(R, h, paper_dti_cmd(spec, h), "dti", rt=45)
@@ -747,7 +912,7 @@ def run_fleet_paper(R, spec, a):
         for h in range(1, M + 1):
             bg(R, h, paper_source_cmd(spec, h, t0, dur), "src")
         res["commands"] = {"gs": {"as": paper_as_cmd(spec), "ve": paper_ve_cmd(spec),
-                                  "jmcs": paper_jmcs_cmd(spec, S0)},
+                                  "jmcs": paper_jmcs_cmd(spec, S0), "feedback": paper_feedback_cmd(spec)},
                            "vessel_1": {"dti": paper_dti_cmd(spec, 1), "src": paper_source_cmd(spec, 1, t0, dur)},
                            "adapter": paper_adapter_cmd(R, rd, mon, chmon),
                            "emulator_extra": paper_emu_args(R, spec, mon)}
@@ -758,9 +923,9 @@ def run_fleet_paper(R, spec, a):
             raise RuntimeError("start too late: %.2f s before start(S0)" % (t0 - time.time()))
         while time.time() < t_end:
             time.sleep(min(5.0, max(0.0, t_end - time.time())))
-            r = R.ssh(0, "kill -0 $(cat %s/as.pid) 2>/dev/null && echo alive || echo dead" % RUN, timeout=20)
+            r = R.ssh(0, "kill -0 $(cat %s/%s.pid) 2>/dev/null && echo alive || echo dead" % (RUN, watch), timeout=20)
             if "dead" in r.stdout and time.time() < t_end - 2.0:
-                raise RuntimeError("the AS stopped before the end of the run")
+                raise RuntimeError("the %s stopped before the end of the run" % ("AS" if watch == "as" else "VE"))
         res["status"] = "ok"
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
         res["status"] = "failed"
@@ -770,8 +935,8 @@ def run_fleet_paper(R, spec, a):
         res["t_end"] = time.time()
         if started and cpu0 is not None:
             res["cpu_cores"] = R.cpu_report(cpu0, R.cpu_snapshot(st))
-        # sources, DTI, stub, AS, VE; then the brokers (the plugin writes its log and statistics on exit)
-        for proc in ("src", "dti", "jmcs", "as", "ve"):
+        # sources, DTI, stub, feedback, AS, VE; then the brokers (the plugin writes its log and statistics on exit)
+        for proc in ("src", "dti", "jmcs", "fb", "as", "ve"):
             R.parallel(lambda h: R.ssh(h, "[ -f {r}/{n}.pid ] && kill -TERM -- -$(cat {r}/{n}.pid) 2>/dev/null; true".format(
                 r=RUN, n=proc), timeout=20), hosts)
         time.sleep(0.5)

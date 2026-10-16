@@ -208,13 +208,10 @@ def test_service_over_mqtt(tmp_path):
         _wait(sub_ack, "SUBACK of the subscriber")
         _wait(pub_conn, "CONNACK of the publisher")
 
-        # the AS: Service.connect() returns on CONNACK; its SUBACK (demand, throughput, order) arrives
-        # through on_subscribe, which Service does not use
+        # the AS: Service.connect() returns after the SUBACK of its subscriptions (demand, throughput, order)
         svc = Service(dtp, "127.0.0.1", port, epoch=0.0, log_path=str(tmp_path / "dec.jsonl"))
-        svc_ack = threading.Event()
-        svc.client.on_subscribe = lambda c, u, mid, rcs, props=None: svc_ack.set()
         svc.connect()
-        _wait(svc_ack, "SUBACK of the AS")
+        assert svc.subscribed.is_set()
         epoch = time.time() + 0.3            # every subscription is active: step 0 starts 0.3 s from now
         svc.core.epoch = epoch               # read by run() and the deadlines; no step is open yet
         steps = 20

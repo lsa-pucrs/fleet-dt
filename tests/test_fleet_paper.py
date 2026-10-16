@@ -152,8 +152,11 @@ def test_paper_run_orchestration(tmp_path):
     started = [c[2] for c in ssh if "setsid nohup" in c[2]]
     joined = "\n".join(started)
     for needle in ("fleetdt.as_service", "--outer-dta /tmp/fdt-run/dta.jsonl", "--outer-every 480",
-                   "fleetdt.ve live", "emu/jmcs_stub.py", "--s0 %d" % res["S0"], "build/fdt_dti", "raw_load.py"):
+                   "fleetdt.ve live", "emu/jmcs_stub.py", "--s0 %d" % res["S0"], "build/fdt_dti",
+                   "vessel/publishers/fdt_source.py", "--size-trace " + fleet.PAPER_TRACE):
         assert needle in joined, needle
+    # the layered video publisher is the default source; the vessels read their own DTP
+    assert "raw_load.py" not in joined and "--dtp /tmp/fdt-run/dtp_vessel.json" in joined
     assert "fleetdt.as2" not in joined
     # the AS starts after the VE and the JMCS stub; DTI and sources on both vessels
     order = [n for c in started for n in ("ve.log", "jmcs.log", "as.log") if "/%s " % n in c]
@@ -227,7 +230,8 @@ def _build_dti(tmp):
     out = os.path.join(tmp, "fdt_dti")
     r = subprocess.run(["cc", "-O2", "-std=gnu11", "-pthread", "-I" + os.path.join(ROOT, "common"),
                         "-I" + os.path.join(mq, "include"), "-o", out, os.path.join(ROOT, "vessel", "dti", "fdt_dti.c"),
-                        os.path.join(ROOT, "common", "fdt_common.c"), "-L" + os.path.join(mq, "lib"),
+                        os.path.join(ROOT, "common", "fdt_paper.c"), os.path.join(ROOT, "common", "fdt_common.c"),
+                        "-L" + os.path.join(mq, "lib"),
                         "-Wl,-rpath," + os.path.join(mq, "lib"), "-lmosquitto", "-lcjson", "-lm"],
                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     return out if r.returncode == 0 else None

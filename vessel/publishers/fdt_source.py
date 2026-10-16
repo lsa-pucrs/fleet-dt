@@ -29,14 +29,19 @@ vessel broker:
   (one position per frame of the group, a seeded offset per group) or from the lognormal model seeded by
   (seed, vessel, group, k), times --video-scale; "out" is the frame index k. The defaults of
   --video-scale and --fps-scale come from "video_layers"."vessels".<vessel> of the DTP (size_scale and
-  fps_scale), so the vessels offer different video loads.
+  fps_scale), so the vessels offer different video loads;
+* the DTP of the paper stack (dtp.json, SPEC.md format: "rate" in messages per second and "bound")
+  works as well: its layer topics become the output topics of the layers (frame rate fps / layers,
+  n = ceil(rate Ts) messages of at most "bound" bytes per frame) and the other topics streams of one
+  message of "bound" bytes; J_l is the "jitter" of the topic, else --jitter-ms (default 0). The
+  per-vessel DTP of `video_layers.py resolve` gives the bounds of the vessel.
 
 Python >= 3.7, paho-mqtt 1.x or 2.x.
 
   fdt_source.py --dtp dtp_v2.json --vessel 1 [--host 127.0.0.1 --port 1883] [--topics state,video]
                 [--stream-size max|uniform] [--median 11000 --sigma 0.5 | --size-trace sizes.txt]
                 [--load 1.0 --load-mode size|rate] [--phase random|zero] [--duration S] [--seed 1]
-                [--video-scale S --fps-scale F] [--log out.jsonl]
+                [--video-scale S --fps-scale F] [--jitter-ms J] [--log out.jsonl]
 """
 import argparse
 import heapq
@@ -97,13 +102,44 @@ def bitrev(k, bits):
     return r
 
 
-def load_dtp(path):
+LAYER_DEFAULTS = {"base": "video", "layers": 16, "fps": 15.0}
+
+
+def v1_topic(t, d, jitter_s):
+    """Topic of a DTP in the format of SPEC.md (dtp.json of the paper stack: "name", "rate" in messages per
+    second, "bound" in bytes, optional "jitter") in the terms of this source.
+
+    A layer topic <base>_<j> of "video_layers" (video_layers.py) becomes the output topic of layer j:
+    one frame every layers / fps seconds, split into at most n = ceil(rate Ts) messages of at most
+    "bound" bytes (the msgs_per_frame of the DTP). Every other topic is a stream of one message of
+    "bound" bytes per output at "rate". J_l is the "jitter" of the topic, else jitter_s."""
+    J = float(t["jitter"]) if t.get("jitter") is not None else float(jitter_s)
+    vl = dict(LAYER_DEFAULTS)
+    vl.update({k: v for k, v in (d.get("video_layers") or {}).items() if k in LAYER_DEFAULTS})
+    L = int(vl["layers"])
+    base = str(vl["base"])
+    name = str(t["name"])
+    j = None
+    if d.get("video_layers") is not None or name.startswith(base + "_"):
+        suffix = name[len(base) + 1:] if name.startswith(base + "_") else ""
+        if suffix.isdigit() and 1 <= int(suffix) <= L:
+            j = int(suffix)
+    if j is not None:
+        n = max(1, int(math.ceil(float(t["rate"]) * float(d["Ts"]) - 1e-9)))
+        return Topic({"name": name, "rate": float(vl["fps"]) / L, "jitter": J, "n": n, "s": int(t["bound"]),
+                      "kind": "output", "group": base, "layer": j, "layers": L})
+    return Topic({"name": name, "rate": float(t["rate"]), "jitter": J, "n": 1, "s": int(t["bound"]), "kind": "stream"})
+
+
+def load_dtp(path, jitter_s=0.0):
+    """DTP v2 (SPEC_v2.md) or the DTP of the paper stack (SPEC.md format, see v1_topic)."""
     with open(path) as f:
         d = json.load(f)
     epoch = d.get("epoch")
+    topics = [Topic(t) if "s" in t else v1_topic(t, d, jitter_s) for t in d["topics"]]
     return {"epoch": DEFAULT_EPOCH if epoch is None else float(epoch), "Ts": float(d["Ts"]),
             "T1": float(d.get("T1", 0.0)), "T2": float(d.get("T2", 0.0)),
-            "required": set(d.get("required", [])), "topics": [Topic(t) for t in d["topics"]],
+            "required": set(d.get("required", [])), "topics": topics,
             "video_layers": d.get("video_layers") or {}}
 
 
@@ -358,9 +394,13 @@ def main(argv=None):
                     help="size scale of the frames of the layer topics (default: size_scale of the vessel in the DTP)")
     ap.add_argument("--fps-scale", type=float, default=None,
                     help="frame-rate scale of the layer topics (default: fps_scale of the vessel in the DTP)")
+    ap.add_argument("--jitter-ms", type=float, default=0.0,
+                    help="release jitter J of the topics without \"jitter\" in a DTP of the SPEC.md format")
     a = ap.parse_args(argv)
     a.topics = set(n for n in a.topics.split(",") if n) if a.topics else None
-    dtp = load_dtp(a.dtp)
+    if a.jitter_ms < 0:
+        ap.error("--jitter-ms must be >= 0")
+    dtp = load_dtp(a.dtp, a.jitter_ms * 1e-3)
     vs, vf = vessel_video(dtp, a.vessel)
     a.video_scale = vs if a.video_scale is None else a.video_scale
     a.fps_scale = vf if a.fps_scale is None else a.fps_scale

@@ -1,0 +1,57 @@
+{
+ "name": "P-S1-m2-s1",
+ "M": 2,
+ "seed": 1,
+ "run": 1,
+ "rate": {
+  "manager": "constant",
+  "data": "ErpOfdmRate24Mbps",
+  "control": "ErpOfdmRate24Mbps",
+  "non_unicast": "ErpOfdmRate6Mbps"
+ },
+ "edca": {
+  "aifsn_ap": 1,
+  "cwmin_ap": 7,
+  "cwmax_ap": 1023,
+  "aifsn_sta": 3,
+  "cwmin_sta": 15,
+  "cwmax_sta": 1023
+ },
+ "tx_power_dbm": 20.0,
+ "mac_queue": {
+  "packets": 100,
+  "max_delay_ms": 500
+ },
+ "monitor_period_ms": 5,
+ "beacon_tu": 100,
+ "prio": {
+  "dscp": {
+   "46": 6,
+   "34": 5
+  },
+  "tcp_ports": {
+   "1883": 6
+  }
+ },
+ "channel": {
+  "model": "matrix",
+  "default_loss_db": 70.0,
+  "loss": []
+ },
+ "scenario_id": "S1",
+ "scenario_set": "paper-v2",
+ "queue_variant": "q100",
+ "phy": "yans",
+ "cca_ed_dbm": -62.0,
+ "basic_modes": [
+  "ErpOfdmRate6Mbps",
+  "ErpOfdmRate12Mbps",
+  "ErpOfdmRate24Mbps"
+ ],
+ "params": {
+  "R_PHY_mbps": 24,
+  "rts": "off",
+  "aggregation": "off",
+  "tx_dbm": 20.0
+ }
+}

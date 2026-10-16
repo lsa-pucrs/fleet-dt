@@ -53,6 +53,17 @@
  *   plugin_opt_idle 8                           steps without raw messages after which d_l = 0 (0: never)
  *   plugin_opt_p1_offset_us 0                   demand at start(t) + offset (default 0: no offset)
  *   plugin_opt_max_msgs 4096                    messages per topic and step
+ *
+ * Baselines of the paper stack in the same core (fdt_reg_paper.h): paper_b1 (B1, B10), paper_b2 (B2),
+ * paper_b3 (B3), b8 (B8; alias paper_b8) and paper_tdma (B9). The names b1, b2, b3 and tdma stay with the
+ * older core above (as2 stack).
+ *   plugin_opt_feedback_topic fleet/feedback    fleet feedback of the GS (paper_b3, b8, paper_tdma)
+ *   plugin_opt_U 0.8                            b8: U before the first feedback that carries one
+ *                                               (default: "U" of the DTP)
+ *   plugin_opt_lw_bytes 16384                   paper_tdma: unsent bytes of the data bridge plus bytes
+ *                                               released in one tick
+ *   plugin_opt_tick_us 1000                     paper_tdma: release period inside the slot
+ *   plugin_opt_data_ports                       paper_b2 default 1884,1885,1886
  */
 #define _GNU_SOURCE
 #include <stdbool.h>
@@ -87,7 +98,7 @@ static struct {
 	struct fdt_pdtp pdtp;
 	struct fdt_preg preg;
 	FILE *plog;
-	char demand_topic[96];
+	char demand_topic[96], feedback_topic[96];
 	int warned_foreign;
 	int vessel, mode, n_ports;
 	struct dsock ds[FDT_DATA_MAX];
@@ -157,6 +168,9 @@ static int on_message_in(int event, void *event_data, void *userdata)
 		} else if (!strcmp(m->topic, g.levels_topic)) {
 			if (fdt_preg_on_levels(&g.preg, m->payload, m->payloadlen, now) < 0)
 				mosquitto_log_printf(MOSQ_LOG_WARNING, "fdt_regulator: malformed priority table on %s", g.levels_topic);
+		} else if (!strcmp(m->topic, g.feedback_topic)) {
+			if (fdt_preg_on_feedback(&g.preg, m->payload, m->payloadlen, now) < 0)
+				mosquitto_log_printf(MOSQ_LOG_WARNING, "fdt_regulator: malformed feedback on %s", g.feedback_topic);
 		} else if (!strcmp(m->topic, g.demand_topic)) {
 			int rc = fdt_preg_on_demand(&g.preg, m->payload, m->payloadlen, now);
 			if (rc == 2 && !g.warned_foreign) {
@@ -215,7 +229,7 @@ static void log_stats_paper(void)
 		"fdt_regulator (%s): steps=%llu raw=%llu fwd=%llu late_fwd=%llu logged=%llu (no_table=%llu no_demand=%llu "
 		"level0=%llu police=%llu overflow=%llu) tab_ok=%llu tab_none=%llu tab_late=%llu tab_bad=%llu dem_pub=%llu "
 		"dem_ext=%llu dem_late=%llu dem_bad=%llu dem_foreign=%llu resync=%llu pub_err=%llu log_err=%llu "
-		"sock_err=%llu late_max=%lldus",
+		"sock_err=%llu late_max=%lldus fb_ok=%llu fb_old=%llu fb_bad=%llu budget=%llu slot=%llu",
 		fdt_pmode_name(g.preg.mode), (unsigned long long)s->steps, (unsigned long long)s->raw,
 		(unsigned long long)s->fwd, (unsigned long long)s->late_fwd, (unsigned long long)s->logged,
 		(unsigned long long)s->reason[FDT_PR_NO_TABLE], (unsigned long long)s->reason[FDT_PR_NO_DEMAND],
@@ -224,7 +238,9 @@ static void log_stats_paper(void)
 		(unsigned long long)s->tab_late, (unsigned long long)s->tab_bad, (unsigned long long)s->dem_pub,
 		(unsigned long long)s->dem_ext, (unsigned long long)s->dem_late, (unsigned long long)s->dem_bad,
 		(unsigned long long)s->dem_foreign, (unsigned long long)s->resync, (unsigned long long)s->pub_err,
-		(unsigned long long)s->log_err, (unsigned long long)g.sock_err, (long long)s->late_max_us);
+		(unsigned long long)s->log_err, (unsigned long long)g.sock_err, (long long)s->late_max_us,
+		(unsigned long long)s->fb_ok, (unsigned long long)s->fb_old, (unsigned long long)s->fb_bad,
+		(unsigned long long)s->reason[FDT_PR_BUDGET], (unsigned long long)s->reason[FDT_PR_SLOT]);
 }
 
 static void log_stats(void)
@@ -335,7 +351,7 @@ static int register_callbacks(mosquitto_plugin_id_t *identifier)
 }
 
 static int init_paper(mosquitto_plugin_id_t *identifier, const char *dtp_path, const char *ports,
-                      const char *log_path, int max_msgs, struct fdt_preg_opts *po)
+                      const char *log_path, int max_msgs, struct fdt_preg_opts *po, const char *fb_topic)
 {
 	char err[256];
 	if (fdt_pdtp_load(dtp_path, &g.pdtp, err, sizeof err)) {
@@ -354,6 +370,7 @@ static int init_paper(mosquitto_plugin_id_t *identifier, const char *dtp_path, c
 	snprintf(g.raw_prefix, sizeof g.raw_prefix, "boat/b%d/raw/", g.vessel);
 	snprintf(g.levels_topic, sizeof g.levels_topic, "boat/b%d/levels", g.vessel);
 	snprintf(g.demand_topic, sizeof g.demand_topic, "boat/b%d/demand", g.vessel);
+	snprintf(g.feedback_topic, sizeof g.feedback_topic, "%s", fb_topic ? fb_topic : "fleet/feedback");
 	g.raw_prefix_len = strlen(g.raw_prefix);
 	struct fdt_io io = {NULL, io_publish, io_sock};
 	if (fdt_preg_init(&g.preg, &g.pdtp, g.vessel, po, fdt_now_us(), &io)) {
@@ -365,9 +382,10 @@ static int init_paper(mosquitto_plugin_id_t *identifier, const char *dtp_path, c
 		return MOSQ_ERR_UNKNOWN;
 	mosquitto_log_printf(MOSQ_LOG_NOTICE,
 		"fdt_regulator: vessel %d, mode %s, demand %s, L=%d, epoch=%.3f Ts=%.3f T1=%.3f T2=%.3f, c_b=%.4f, "
-		"data_ports=%s, phase 1 offset %lld us, vessel log %s", g.vessel, fdt_pmode_name(po->mode),
+		"data_ports=%s, phase 1 offset %lld us, vessel log %s, jitter %.3f ms%s%s", g.vessel, fdt_pmode_name(po->mode),
 		po->demand_ext ? "external" : "internal", g.pdtp.L, g.pdtp.epoch, g.pdtp.Ts, g.pdtp.T1, g.pdtp.T2,
-		g.pdtp.c_b, ports, (long long)g.preg.p1_off_us, log_path ? log_path : "off");
+		g.pdtp.c_b, ports, (long long)g.preg.p1_off_us, log_path ? log_path : "off", po->jitter_s * 1e3,
+		fdt_pmode_table(po->mode) ? "" : ", feedback on ", fdt_pmode_table(po->mode) ? "" : g.feedback_topic);
 	return MOSQ_ERR_SUCCESS;
 }
 
@@ -381,7 +399,7 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 	g.mode = FDT_MODE_FLEETDT;
 	for (int k = 0; k < FDT_DATA_MAX; k++)
 		g.ds[k].fd = -1;
-	const char *dtp_path = NULL, *ports = NULL, *log_path = NULL;
+	const char *dtp_path = NULL, *ports = NULL, *log_path = NULL, *fb_topic = NULL;
 	int max_msgs = 4096;
 	long long p1_spacing = -1, p1_guard = -1;
 	struct fdt_preg_opts po;
@@ -430,11 +448,19 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 			po.idle = atoi(v);
 		else if (!strcmp(k, "p1_offset_us"))
 			po.p1_off_us = atoll(v);
+		else if (!strcmp(k, "feedback_topic"))
+			fb_topic = v;
+		else if (!strcmp(k, "U"))
+			po.U = atof(v);
+		else if (!strcmp(k, "lw_bytes"))
+			po.lw_bytes = atoll(v);
+		else if (!strcmp(k, "tick_us"))
+			po.tick_us = atoll(v);
 		else
 			mosquitto_log_printf(MOSQ_LOG_WARNING, "fdt_regulator: unknown option %s", k);
 	}
 	if (!ports)
-		ports = g.mode == FDT_MODE_B2 ? "1884,1885,1886" : "1884";
+		ports = (!g.paper && g.mode == FDT_MODE_B2) || (g.paper && po.mode == FDT_PMODE_B2) ? "1884,1885,1886" : "1884";
 	if (!dtp_path || g.vessel < 1 || parse_ports(ports)) {
 		mosquitto_log_printf(MOSQ_LOG_ERR,
 			"fdt_regulator: plugin_opt_dtp and plugin_opt_vessel are required, data_ports a list of up to %d ports",
@@ -442,7 +468,7 @@ int mosquitto_plugin_init(mosquitto_plugin_id_t *identifier, void **userdata,
 		return MOSQ_ERR_INVAL;
 	}
 	if (g.paper)
-		return init_paper(identifier, dtp_path, ports, log_path, max_msgs, &po);
+		return init_paper(identifier, dtp_path, ports, log_path, max_msgs, &po, fb_topic);
 	if (fdt2_dtp_load(dtp_path, &g.dtp, err, sizeof err)) {
 		mosquitto_log_printf(MOSQ_LOG_ERR, "fdt_regulator: %s", err);
 		return MOSQ_ERR_INVAL;

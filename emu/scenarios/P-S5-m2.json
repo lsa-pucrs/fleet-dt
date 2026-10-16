@@ -1,0 +1,109 @@
+{
+ "name": "P-S5-m2-s1",
+ "M": 2,
+ "seed": 1,
+ "run": 1,
+ "rate": {
+  "manager": "constant",
+  "data": "ErpOfdmRate24Mbps",
+  "control": "ErpOfdmRate24Mbps",
+  "non_unicast": "ErpOfdmRate6Mbps"
+ },
+ "edca": {
+  "aifsn_ap": 1,
+  "cwmin_ap": 7,
+  "cwmax_ap": 1023,
+  "aifsn_sta": 3,
+  "cwmin_sta": 15,
+  "cwmax_sta": 1023
+ },
+ "tx_power_dbm": 20.0,
+ "mac_queue": {
+  "packets": 100,
+  "max_delay_ms": 500
+ },
+ "monitor_period_ms": 5,
+ "beacon_tu": 100,
+ "prio": {
+  "dscp": {
+   "46": 6,
+   "34": 5
+  },
+  "tcp_ports": {
+   "1883": 6
+  }
+ },
+ "channel": {
+  "model": "tworay",
+  "frequency_hz": 2412000000.0,
+  "nakagami": {
+   "m0": 5.0,
+   "m1": 5.0,
+   "m2": 5.0,
+   "d1": 80,
+   "d2": 200
+  },
+  "positions": {
+   "gs": [
+    0,
+    0,
+    6
+   ],
+   "v1": [
+    [
+     0.0,
+     585.91,
+     -235.0,
+     1.5
+    ],
+    [
+     165.916,
+     800.0,
+     -235.0,
+     1.5
+    ],
+    [
+     189.165,
+     800.0,
+     -265.0,
+     1.5
+    ]
+   ],
+   "v2": [
+    [
+     0.0,
+     786.05,
+     135.0,
+     1.5
+    ],
+    [
+     454.68,
+     100.0,
+     135.0,
+     1.5
+    ]
+   ]
+  }
+ },
+ "scenario_id": "S5",
+ "scenario_set": "paper-v2",
+ "queue_variant": "q100",
+ "phy": "yans",
+ "cca_ed_dbm": -62.0,
+ "basic_modes": [
+  "ErpOfdmRate6Mbps",
+  "ErpOfdmRate12Mbps",
+  "ErpOfdmRate24Mbps"
+ ],
+ "speeds_mps": {
+  "v1": 1.29,
+  "v2": 1.509
+ },
+ "params": {
+  "R_PHY_mbps": 24,
+  "rts": "off",
+  "aggregation": "off",
+  "tx_dbm": 20.0,
+  "fading_m": 5.0
+ }
+}

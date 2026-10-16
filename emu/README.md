@@ -66,20 +66,42 @@ Offline (no VMs, not in real time), e.g. for validation:
 
 `emu/run.py run EXP.json [--stack paper|as2]` runs a fleet experiment on the stack of `--stack`, else on
 the `"stack"` of the experiment, else on the paper stack. The experiments of `experiments/matrix.py`
-(older model) carry no `"stack"`: run them with `--stack as2` (the paper stack refuses their DTP v2).
+(older model) carry `"stack": "as2"`, and `experiments/runner.py` runs a spec without `"stack"` (the
+frozen campaign) on the as2 stack; the paper stack refuses their DTP v2. Both campaigns use the video in
+16 layer topics (`experiments/dtp_base.json` holds the content of `dtp_v2.json`).
 The paper stack runs the model of the paper (Sections III to V):
 
 | Host | Programs (per run) |
 |---|---|
-| GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel), the AS `fleetdt.as_service` (Algorithm 1, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`) |
-| vessel VM i | Mosquitto with `fdt_regulator.so` in `plugin_opt_mode paper` (or `paper_nopolice`, `paper_noeos` by `"plugin_mode"`), `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_demand external`; the v1 DTI program `build/fdt_dti` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the sources (`vessel/publishers/raw_load.py`, or `"source": {"cmd": ...}`) |
+| GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel; B2 three data bridges, B10 one per topic), the AS `fleetdt.as_service` (methods with tables; Algorithm 1 or `--policy b7`, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA, in a child process), the fleet feedback `fleetdt.feedback` (B3, B8, B9; `feedback.jsonl`), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`) |
+| vessel VM i | `RUN/dtp_vessel.json` = `video_layers.py resolve` of the DTP for vessel i (layer bounds scaled by its `size_scale`); Mosquitto with `fdt_regulator.so` in the mode of the method, `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_demand external`, `plugin_opt_jitter_ms J`; the v1 DTI program `build/fdt_dti --jitter-ms J` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the layered video source `vessel/publishers/fdt_source.py` (frame sizes of a trace, `src.jsonl`), or `raw_load.py`, or `"source": {"cmd": ...}` |
 | host | emulator with the ground truth and the nl80211 counter export (`--cnt`, `--cntDst` = 127.0.0.1:9650+K), `fleetdt.monitor_adapter` (y(t) on `fleet/throughput` through 127.0.0.1:2883+K), monitor bridge and capture (ground truth), clock probe |
 
 Steps are 0-based on every program of this stack: start(t) = epoch + t Ts (the DTP epoch; null =
 2026-01-01T00:00:00Z). The run picks S0 at least `lead_s` ahead, passes `--runStartUs` = start(S0) to the
 emulator (the counter reads fall at start(t) + `monitor.offset_us` + U[0, `monitor.jitter_us`]) and stops
-after `steps` steps. The paper stack starts the adapter, the emulator, the brokers, waits for the 2M
-bridges, then the VE, the JMCS stub, the AS, the DTI programs and the sources.
+after `steps` steps. The paper stack starts the adapter, the emulator, the brokers, waits for the bridges
+(2M; B2 4M; B10 M (L + 1)), then the VE, the JMCS stub, the fleet feedback, the AS, the DTI programs and
+the sources.
+
+Methods (`"method"`, design Section 5; the regulator modes are those of `vessel/regulator/fdt_reg_paper.h`):
+
+| Method | AS | Regulator mode | Data bridges | Fleet feedback |
+|---|---|---|---|---|
+| `fleetdt` | Algorithm 1 | `paper` | one | no |
+| `B1` | none | `paper_b1` (forward on arrival, QoS 1) | one | no |
+| `B2` | none | `paper_b2` (as B1, one bridge per access category) | three (`--b2`) | no |
+| `B3` | none | `paper_b3` (strict priority in sigma_t at v(t), QoS 1) | one | sigma_t |
+| `B4` | Algorithm 1, `--alpha 0 --C0 as.C_ref`, no outer loop | `paper` | one | no |
+| `B5a`, `B5b` | Algorithm 1 | `paper_nopolice`, `paper_noeos` | one | no |
+| `B7` | `--policy b7` (per-vessel grants, redistribution of the unused grant) | `paper` | one | no |
+| `B8` | none | `b8` (budget U y(t-1) T3 / (Ts m) in sigma_t, QoS 1) | one | y, U, m, sigma_t |
+| `B9` | none | `paper_tdma` (equal slots of phase 3 in the order of `vessels`, QoS 1) | one | sigma_t |
+| `B10` | none | `paper_b1` | one per topic (`--per-topic`) | no |
+
+The older core keeps its modes `b1`, `b2`, `b3`, `tdma` for the as2 stack (1-based clock, JSON tables
+and logs, QoS of the DTP v2); the GS programs of the paper stack read the 0-based step header and the
+binary tables, so the paper stack runs the baselines in the core of mode paper.
 
 Experiment fields (example: `experiments/paper-smoke-m2.json`; `"dtp"` and `"scenario"` may be objects or
 repository paths, a DTP path gets `"vessels"` = 1..M):
@@ -87,19 +109,23 @@ repository paths, a DTP path gets `"vessels"` = 1..M):
 | Field | Meaning (default) |
 |---|---|
 | `dtp` | DTP of the paper (SPEC.md: topics with `rate` and `bound`); a DTP v2 is refused (use `--stack as2`) |
-| `plugin_mode`, `plugin_opts` | `paper`; extra `plugin_opt_<k> <v>` lines of the vessel brokers |
-| `as` | `U`, `alpha` (override the DTP), `extra` (arguments of `fleetdt.as_service`) |
+| `method` | `fleetdt`; one of the methods above (case-insensitive) |
+| `plugin_mode`, `plugin_opts` | the mode of the method (a different mode is refused); extra `plugin_opt_<k> <v>` lines of the vessel brokers; `plugin_opts.jitter_ms` (2) is J of the regulator and of `fdt_dti` |
+| `as` | `U`, `alpha`, `C0` (override the DTP), `C_ref` (B4), `extra` (arguments of `fleetdt.as_service`) |
+| `feedback` | `U` (B8; default `as.U`, else the DTP), `m` (default the vessels of the DTP) |
 | `outer` | `every`, `window`, `target` (0.99); `dta_file`: a DTA of earlier runs (host path) instead of the DTA of the run |
-| `dti` | `enabled` (true; false: the plugin publishes D_i(t), `plugin_opt_demand internal`), `offset_ms` (1), `stagger_ms` (0, added per vessel index), `idle` (8) |
+| `dti` | `enabled` (true; false: the plugin publishes D_i(t), `plugin_opt_demand internal`), `offset_ms` (1), `stagger_ms` (0, added per vessel index), `idle` (8), `jitter_ms` (the J of `plugin_opts`; both must agree) |
 | `jmcs` | `period_s` (10), `first` (survey), `offset_ms` (2), `video_prefix` (video), `modes` (explicit orders) |
 | `monitor` | `offset_us` (500), `jitter_us` (0), `quant` (harvest or cumulative), `harvest_ms` (0), `sigma` (0; 0.02, 0.05), `noise_seed` (seed), `backend` (auto, c, py) |
-| `source` | `scale`, `size`, `min_frac`, `topics` of `raw_load.py`, or `cmd` (template with `{dtp}`, `{vessel}`, `{seed}`, `{t0}`, `{duration}`, `{run}`) |
+| `source` | `kind` `fdt_source` (default: `trace` (`emu/traces/water-sbs-q50-s0p5.txt`; null with `median`, `sigma`: lognormal), `scale` (rho of the frame sizes, `load_mode`), `jitter_ms`, `phase`, `stream_size`, `topics`) or `raw_load` (`scale`, `size`, `min_frac`, `topics`), or `cmd` (template with `{dtp}`, `{dtp_vessel}`, `{vessel}`, `{seed}`, `{t0}`, `{duration}`, `{run}`) |
 | `stack_commit` | refuse the run unless the checkout is this commit and the files of the stack are unchanged |
 
 RUN/result.json records `stack`, `revision` (git `commit`, `branch`, `describe`, `dirty`, `dirty_stack`:
 the files of the stack that differ from the commit, the tree digest, and `stack_files`: sha256 of every
-file of the stack), `dtp_sha256`, `monitor` (with `backend_used`), `chmon_host_sha256`, `plugin_mode`,
-`demand`, `commands` (the command lines of the run), S0, t0 and the emulator summary (with `nl80211`).
+file of the stack), `dtp_sha256`, `dtp_vessels_sha256`, `method`, `method_config`, `bridges`, `jitter_ms`,
+`monitor` (with `backend_used`), `chmon_host_sha256`, `plugin_mode`, `demand`, `commands` (the command
+lines of the run), S0, t0 and the emulator summary (with `nl80211`). RUN/dtp_b<i>.json holds the DTP of
+vessel i.
 RUN/ also holds `throughput.jsonl` (each published y(t) with its publication time), `counters_rx.jsonl`
 (the counter reads that reached the adapter), `monitor_adapter.log`, `emu/counters.jsonl` (every read of
 the emulator) and `vms/<host>/` (`as.jsonl`, `dta.jsonl`, `order.jsonl`, `regulator.jsonl`, broker logs).
@@ -458,3 +484,128 @@ comparison is between distributions. `matrix.py eval --yans E4` writes the cells
 | Monitor batches | besides the batches every 5 ms, one batch 2.5 ms after the end of Q(t) and of W(t) (`--flush`); without it the AS computed b(t) from up to 5 ms old records and missed the exchanges that cross the end of Q(t) (b too high by up to 0.03 in a saturated channel) | records join the batch of the end of their exchange |
 | Clock synchronization | NTP (UDP 123) is marked like the control bridges (UP 6, AC_VO) | the AS takes every AC_BE data frame of a vessel for a data-bridge frame |
 | MQTT `lost` in `mqtt_load.py sub` | counts messages published before the subscriber connected when the experiment starts the publisher first | — |
+
+## Paper scenarios S1 to S9 and queue variants (design v2, item I8)
+
+`python3 emu/scenarios/gen.py --paper --out emu/scenarios [--M 2 4] [--seed 1] [--duration 180]` writes
+`P-S<k>-m<M>.json` and the queue variants `P-S1-{q100,q1000,codel}-m<M>.json`, `P-S3-…`; the files of the
+earlier campaign (`S<k>-m<M>.json`, `base-*`, `interf-*`, …) are unchanged (`gen.py` without `--paper`
+writes them bit for bit). `gen.make_paper(sid, M, seed, duration, queue)` gives the scenario of a run.
+Common to all: ConstantRate ERP-OFDM 24 Mb/s for data and ACKs, beacons and management at 6 Mb/s,
+20 dBm, RTS/CTS off and A-MSDU/A-MPDU off (set explicitly on every MAC), MAC queue 100 packets / 500 ms,
+`phy` yans except S3 and S8 (spectrum, for the injector). Parameters in `gen.PAPER_PARAMS` and in the
+`params` field of each file.
+
+| ID | As implemented |
+|---|---|
+| S1 | matrix 70 dB between any two nodes (-50 dBm) |
+| S2 | S1 + ap2/sta2 at 70 dB: UDP 1400 B sta2 -> ap2 with CSMA, on U[1, 6] s at U[2, 8] Mb/s, off U[2, 8] s; ap2 beacons every 100 TU at DSSS 1 Mb/s (basic rate set of its BSS starts with DsssRate1Mbps; needs yans) |
+| S3 | S1 + WaveformGenerator 20 dBm at 70 dB from every node (-50 dBm, above the ED threshold -62 dBm), on U[1, 6] s with period U[0.5, 5] ms and duty U[0.05, 0.3], off U[2, 8] s |
+| S4 | S1 with v1-v2 and v3-v4 at 200 dB (M = 2: v1-v2) |
+| S5 | lawnmower survey, AP at 6 m, vessels at 1.5 m, lanes 100-800 m, U[1, 2] m/s; TwoRayGround + Nakagami m = 5; fixed 24 Mb/s ERP (no Minstrel, no 11a) |
+| S6 | S1 with the AP-vessel loss on a seeded walk in [95, 106] dB (+-1 dB per second, reflected, linear between seconds; `channel.walk`); `preamble_min_rssi_dbm` -90 |
+| S7 | trajectories of S5 (same seed) over the sea (`channel.model` `sea`): direct and reflected ray with their phase difference, Fresnel coefficient of sea water (eps_r 70, sigma 5 S/m, vertical polarization), Miller-Brown roughness (sigma_h = 0.3 / sqrt 2 m), heave 0.3 m with period U[2, 8] s per vessel, roll 10 deg with the same period (own seeded phase), half-wave dipole field patterns at both ends |
+| S8 | S3 schedule of the same seed with the injector at -72 dBm (92 dB to every node) and the AP-vessel loss 84 dB (-64 dBm) |
+| S9 | S2 schedule of the same seed with ap2/sta2 at 102 dB from the fleet nodes (mean -82 dBm) and Nakagami m = 5 power fading per frame on these links (`channel.fading`) |
+| q1000 | MAC queue 1000 packets with MaxDelay 60 s on the AP and the vessels (`fleet_queue`) |
+| codel | mq root with one CoDel per AC (target 5 ms, interval 100 ms, limit 1000 packets) on the vessels (`aqm`), above a MAC queue of 4 packets (`station_queue`); q100 = the base file |
+
+Parameters of the drafted Section VI that ns-3 does not reproduce as intended, and the values used:
+
+| Item | Drafted | Problem in ns-3 | Implemented |
+|---|---|---|---|
+| S6 | walk in [95, 106] dB | with the default preamble detection (MinimumRssi -82 dBm, noise figure 7 dB) 24 Mb/s frames decode without error down to -82 dBm (101 dB: PER 0) and nothing is received below it (102 dB: every PPDU dropped, the vessel deassociates after 10 beacons): the walk only switches the link on and off | the same walk with the preamble detection down to -90 dBm (6 Mb/s range of a real receiver): PER of 1500-byte frames 0.002 / 0.04 / 0.48 / 0.99 / 1.0 at 103 / 104 / 105 / 106 / 107 dB, beacons at 6 Mb/s keep the association |
+| S8 | injector at -72 dBm, vessels at -50 dBm | SINR 22 dB at the AP: ns-3 decodes every 24 Mb/s frame (PER 0 measured), S8 equals S1 | vessels at -64 dBm at the AP (84 dB): SINR 8 dB during the bursts, 37 % of the frames lost at duty 0.3, no CCA busy from the injector; at -62 dBm (82 dB) the loss is 1.4 % |
+| S2, S9 beacons | 1 Mb/s | SpectrumWifiPhy cannot send DSSS in a 20 MHz channel | phy yans for S2 and S9 (the setup text names a spectrum channel model) |
+| S9 | second BSS "received at -82 dBm" | a fixed loss puts every frame exactly at MinimumRssi (detection decided by rounding) | mean -82 dBm with Nakagami m = 5 (the fading of S5) per frame and receiver, so the AP and each vessel detect a random part of the frames |
+| S7 roll | "reduces the antenna gain by the elevation pattern of a half-wave dipole" | physically small: 10 deg of roll costs at most about 0.2 dB for a horizontal ray | implemented as stated; the heave (two-ray phase) dominates: about 3 dB swings within 12 s on the AP links, two-ray minima (about 4 dB below free space with vertical polarization) 115-175 m from the AP |
+| S7 sources | "yamamoto2019rssi" | not verified | the code cites Wang et al. IEEE Access 2018, Yang et al. VTC-Fall 2011 (2 GHz over sea), ITU-R P.527 (sea water), Miller-Brown-Vegh 1984 (roughness); heave 0.3 m, 2-8 s and roll 10 deg are the drafted values |
+
+Smoke test (offline, `--rt=none`, saturating UDP 12 Mb/s per vessel of 1500 B + 200 B downlink, 15 s,
+M = 4; IP throughput of phase 3 scaled by Ts/T3; ground truth):
+
+| Scenario | Mb/s mean (p5-p95) | AP RX errors | Observation |
+|---|---|---|---|
+| S1 (q100, q1000, codel) | 14.21 (13.39-15.03) | 0 | identical PHY with saturated UDP; codel drops 10.4k of 15.2k packets per vessel at the qdisc |
+| S2 | 12.61 (9.73-14.53) | 0 | 166 ap2 beacons at 1000 kb/s; the AP decodes 1736 external frames |
+| S3 | 13.15 (8.77-14.85) | 1647 | CCA busy share 0.150 |
+| S4 | 9.68 (8.58-10.74) | 4481 | hidden-node collisions |
+| S5 | 9.78 (8.21-11.49) | 5243 | fading, and hidden vessel pairs beyond about 530 m (TwoRayGround at 1.5 m) |
+| S6 | 13.00 (10.74-14.65) | 1812 | errors when the walk passes 103 dB |
+| S7 | 12.67 (10.85-14.15) | 2805 | hidden pairs (vessel-vessel two-ray loss up to 117 dB), heave fades |
+| S8 | 12.64 (6.68-15.03) | 1736 | CCA busy share 0.105 (S3: 0.150): the injector does not raise the busy time |
+| S9 | 13.84 (12.88-14.53) | 239 | 25 external frames decoded, 204 with errors, the rest dropped near the detection limit |
+
+Full-length (182 s, 2 Mb/s per vessel, M = 4): no deassociation in S5-S9.
+
+## Emulator options added (fdt-emu.cc)
+
+| Option or field | Meaning |
+|---|---|
+| `--shiftS=X` | scenario time 0 at simulator time X (offline replays; overrides `--runStartUs`) |
+| `--selftestSet=1,3` | self-test sources on these vessels only |
+| `--stepBytes=TS_US:P3OFF_US` | `stepbytes.csv`: per step k and vessel, unique IP packets (and bytes) received without error by the AP, in phase 3 and in the step (by the end of the reception, scenario time) |
+| `--phaseLag=TS_US:T1_US:T2_US` | `steplag.csv`: per step the largest lag of phases 1, 2 and 3 (samples every `--phaseLagEveryUs`, 250 us, at every PHY TX start and RX end, and at the phase boundaries), the lag at the start of phase 3 and at the end of the step, catch-up flag (`|lag_end - lag_p3| > --catchupUs`, 1 ms); `summary.json` `phase_lag` |
+| `--abortLagUs=1000` | stop the emulator (exit status 3, `ABORT lag` line, `phase_lag.aborted`) when the lag exceeds the value at scenario time >= 0; ns-3's HardLimit (`--hardLimitMs`, 50) stays as a backstop because it applies from the emulator start, when the VMs reconnect (lags of several ms) |
+| `--probeLoss=A-B,...:DT_MS` | `lossprobe.csv` of the received power of node pairs (diagnostics; draws from the fading streams) |
+| `channel.walk`, `channel.fading` | per-pair loss series and Nakagami-m fading of the matrix model (FdtMatrixLoss; without them the matrix model gives the same results as before: gt.bin of S1-S5 identical) |
+| `channel.model: sea` | SeaTwoRayLoss (see the table above; `motion.<node>`: heave_m, period_s, phase_rad, roll_deg, roll_phase_rad) |
+| `preamble_min_rssi_dbm`, `preamble_snr_db`, `rx_noise_figure_db` | ThresholdPreambleDetectionModel and noise figure of every PHY |
+| `external_bss.beacon_tu`, `external_bss.basic_modes` | beacon interval and basic rate set of the second BSS |
+| `fleet_queue`, `station_queue`, `aqm` | per-node MAC queues and the mq + CoDel queue disc (traffic-control layer on the node; the relay passes the UP in the DS field of the queue item, so the AC does not change) |
+| `summary.json` | `conf.<node>`: `basic0`, `rts_threshold`, `be_queue_p`, `be_queue_delay_ms`, `qdisc`; `qdisc.<node>`: sent, dropped |
+
+## C(t) by offline subset replays (`emu/replay_subsets.py`, H2 reference)
+
+`python3 emu/replay_subsets.py RUN [--jobs 4]` replays `RUN/scenario.json` offline for each nonempty set
+S of vessels (15 at M = 4) with saturating UDP (1500 B, 30 Mb/s per vessel of S), scenario time 0 at
+2 s, `--stepBytes`, and computes C_S(k) = sum_{i in S} (bytes3 + h_W frames3) Ts/T3 and
+C(k) = min_S C_S(k) (`RUN/csub/c_t.jsonl`: k, t = S0 + k, C, argmin, C_S of every set, saturated,
+sat_vessels; `replay.json`). The saturation decision comes from the vessel sampler logs
+`RUN/vms/v<i>/outq.jsonl` (`emu/tools/outq.py`: every vessel with forwarded bytes in phase 3 keeps unsent
+bytes in its data bridge at every 1-ms sample of phase 3, with samples covering at least 95 % of
+phase 3). Cost: a short run of 80 steps at M = 4 (S3, spectrum) took 4-5 s per set offline on this
+2-core machine (37 s for the 15 sets with 2 jobs); 1200 steps take about 70 s per set.
+
+## Vessel sampler of SIOCOUTQ (`emu/tools/outq_sampler.c`, `emu/tools/outq.py`)
+
+`fdt_outq --epoch E --ts-us 125000 --t1-us 20000 --t2-us 10000 --port 1884 --port 1883 --out
+/tmp/fdt-run/outq.jsonl [--start-step S0 --steps N] [--fifo 20]` samples every 1 ms of the step clock of
+the vessel the send queue of the bridge sockets (local ports 1884, 1883) through sock_diag
+(`idiag_wqueue` = write_seq - snd_una, the value of SIOCOUTQ, which another process cannot ioctl), plus
+notsent_bytes and bytes_acked of tcp_info, keeps the step in memory and writes one JSON line per step
+(n, nz, q0, nsd0, qmin, qmax, acked of phase 3, n12/nz12 of phases 1-2, steal_ms of the guest, late_us,
+miss). `outq.py sample` is the same sampler in Python; `outq.py saturation RUN` applies the rule.
+
+## Guest clock and CPU (item I9; image rebuild needed)
+
+| Part | Files |
+|---|---|
+| clock source | kernel command line `clocksource=tsc tsc=reliable` (provision-base.sh); `fdt-clocksource.service` checks it at boot, selects tsc if needed and writes `/run/fdt-clock/clocksource.json` |
+| oscillator error | `fdt_clock_schedule.py` (schedule: holds U[30, 120] s and ramps U[60, 300] s between ppm0 - 20 and ppm0 + 20 ppm, NTP loss episodes U[10, 60] s inside given windows or after the warm-up); `fdt-freqshim.so` (preloaded into chronyd by `chrony-freqshim.conf`) adds e(t) to every frequency that chronyd writes and hides it on reads; `fdt-clockerr.service` writes e(t) to the shared page and to the kernel, and drops UDP 123 (nftables table `inet fdt_ntploss`) during the loss episodes; log `/var/log/fdt-clockerr.jsonl`. With `"clock": {"schedule": PATH}` in emu-host.json, `fdt-clockinit` sets only the offset (ppm0 goes into the schedule) |
+| chrony | `emu/vm/chrony_conf.py render gs|vessel` (vessel: no makestep, offsets slewed; optional single initial step), `convergence` and `warmup` from the probe's clock.csv (the analysis warm-up of 240 steps = 30 s must cover the largest convergence) |
+| CPU | `emu/vm/cpu_profile.py`: cpu.max of the QEMU process of a vessel; assumed ratio 0.25 of an E-core (published single-thread results bracket 0.19-0.32) -> `cpu.max` "1000 4000" (cgroup v2 needs quota and period >= 1 ms; stalls up to 3 ms); `wrap` (systemd-run --user --scope with CPUQuota=25% and CPUQuotaPeriodSec=4ms), `apply` (root), `status` (nr_throttled, throttled_usec), `calibrate` and `check` with `emu/vm/cpu_bench.py` run on the Raspberry Pi 4 and in the VM |
+
+Tested here (no VM can boot in this environment): script syntax, schedule generation and evaluation,
+the injector against an in-memory kernel and a simulated chronyd, the shim against a fake libc adjtimex
+(the caller writes -2 ppm, the kernel gets +3 ppm with e = +5 ppm, the caller reads -2 ppm back), the
+chrony rendering and the convergence/warm-up check on a synthetic clock.csv, the profile arithmetic.
+
+## Platform qualification Q (`emu/experiments/qualify.py`)
+
+`qualify.py manifest --out DIR` writes 60 paper-stack runs (M {2, 4} x {S1, S2, S3, S6, S7} x K {1, 3} x 3;
+the same seed for K = 1 and K = 3 of a repetition; K = 1 runs last with `"max_K": 1`; every spec passes
+`--phaseLag` and `--abortLagUs=0` through `emu_args`). Run with
+`runner.py DIR --K 3 --retry 0 --lag-exempt S1 S2 S3 S6 S7` (so that the runner neither lowers K nor
+repeats lagging runs during the qualification). `qualify.py analyze RESULTS --manifest DIR/manifest.json
+[--json q.json]` applies the run rule (completed, not aborted, lag of every step <= 1 ms), the step rule
+(after the warm-up of 240 steps, lag in phases 2-3 < delta, default 1 ms, and no catch-up), reports the
+lag per phase (p50/p99/p99.9/max of the per-step maxima, share >= delta) per cell (M, profile, K) and per
+method, the invalid-run rates with Fisher exact tests (methods, K = 1 against K = 3), the steal time of
+the vessels, and the paired TOST of K = 3 against K = 1 per cell and pooled on gamma (margin 0.005), phi
+(0.005) and Pi (0.05), from `RUN/outcomes.json` or from `RUN/vms/gs/dta.jsonl` with
+`fleetdt.analysis.run_metrics` (after the warm-up). With 3 pairs per cell (t with 2 degrees of freedom)
+the per-cell TOST is equivalent only when the three differences agree within a small fraction of the
+margin; the pooled TOST has up to 30 pairs.
+
+Tests: `tests/test_emu_paper_v2.py` (24 tests; the emulator tests run with `FDT_EMU_BIN` or `FDT_NS3`).

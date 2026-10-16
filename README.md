@@ -43,7 +43,7 @@ AS tunes α and U from the DTA, and `fleetdt.analysis` computes the metrics of S
 
 ```bash
 mosquitto/build.sh <dir with mosquitto-2.1.2.tar.gz and cJSON-1.7.19.tar.gz>   # once per host, into /opt/mosquitto-2.1
-make                       # build/fdt_regulator.so, build/fdt_dti, build/fdt_chmon, build/test_reg
+make                       # build/fdt_regulator.so, build/fdt_dti, build/fdt_chmon, build/fdt_chmon_host, tests
 make test                  # C unit test, Python tests, end-to-end test (about 40 s)
 sudo make install          # /opt/fleet-dt/{lib,bin}
 pip install -r requirements.txt
@@ -68,7 +68,7 @@ python -m fleetdt.as_service --dtp dtp.json --broker 127.0.0.1:1883 --log as.jso
 python -m fleetdt.ve live --broker 127.0.0.1:1883 --dtp dtp.json --dta dta.jsonl   # http://localhost:8080
 python -m fleetdt.ve replay dta.jsonl
 python -m fleetdt.outer dta.jsonl --target 0.99 --window 4800 --every 4800
-python -m fleetdt.analysis run1.jsonl run2.jsonl --dtp dtp.json
+python -m fleetdt.analysis run1.jsonl run2.jsonl --dtp dtp.json --criterion count   # or bytes
 python -m fleetdt.gsconf gs --vessel 1=192.168.1.99 --vessel 2=192.168.1.98 > gs.conf
 fdt_chmon --dtp dtp.json --iface wlan0 --broker 192.168.1.10:1883      # on the GS radio
 ```

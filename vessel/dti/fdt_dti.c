@@ -4,15 +4,18 @@
  * boat/b<i>/demand (QoS 1) of the vessel broker; the control bridge carries it to
  * the GS before the end of phase 1.
  *
- * d_{i,l}(t) = ceil(c_b (x_l + 6 n_l) + c_m n_l), n_l = ceil(r_l Ts), x_l = n_l s_l
+ * d_{i,l}(t) = ceil(c_b (x_l + 6 n_l) + c_m,l n_l), n_l = ceil(r_l (Ts + J_l)), x_l = n_l s_l
  * (SPEC.md Section 5) for each topic l that published a raw message in the last
  * --idle steps, and 0 for the others (a topic whose publisher is down claims no
  * part of the channel). With --idle 0 every topic claims its demand.
  *
- * --jitter-ms J (default 0) adds the jitter allowance of the sources to the bound:
- * n_l = ceil(r_l (Ts + J)). The vessel regulator in mode paper with plugin_opt_demand
- * external polices each topic to the d_{i,l}(t) published here, so the allowance has to be
- * inside this value.
+ * The DTP reader, the cost bound and d_{i,l} are those of the vessel regulator in mode paper
+ * (common/fdt_paper.c: fdt_pdtp_load, fdt_p_demand), so both programs compute the same table from
+ * the same file: J_l is the "jitter" of topic l in the DTP, else --jitter-ms J (default 0); c_b and
+ * c_m come from the file, else from the cost bound of the paper. The vessel regulator with
+ * plugin_opt_demand external polices each topic to the d_{i,l}(t) published here, so the jitter
+ * allowance has to be inside this value: pass the plugin_opt_jitter_ms of the regulator (default 2)
+ * as --jitter-ms (emu/fleet.py and fleetdt/gsconf.py do).
  *
  * The publication instant follows clock_nanosleep(CLOCK_REALTIME, TIMER_ABSTIME)
  * under SCHED_FIFO (when the process holds CAP_SYS_NICE), so it does not drift.
@@ -37,8 +40,9 @@
 #include <mosquitto.h>
 
 #include "fdt_common.h"
+#include "fdt_paper.h"
 
-static struct fdt_dtp dtp;
+static struct fdt_pdtp dtp;
 static int vessel = 0;
 static char raw_prefix[96];
 static size_t raw_prefix_len;
@@ -71,9 +75,9 @@ static void on_message(struct mosquitto *m, void *u, const struct mosquitto_mess
 	if (strncmp(msg->topic, raw_prefix, raw_prefix_len))
 		return;
 	const char *name = msg->topic + raw_prefix_len;
-	int l = fdt_dtp_index(&dtp, name, strlen(name));
+	int l = fdt_pdtp_index(&dtp, name, strlen(name));
 	if (l >= 0) {
-		int64_t t = fdt_raw_step(&dtp, fdt_now_us());
+		int64_t t = fdt_p_collect_step(&dtp, fdt_now_us());
 		pthread_mutex_lock(&raw_lock);
 		last_raw[l] = t;
 		pthread_mutex_unlock(&raw_lock);
@@ -126,7 +130,7 @@ int main(int argc, char **argv)
 	if (!dtp_path || vessel < 1)
 		usage();
 	char err[256];
-	if (fdt_dtp_load(dtp_path, &dtp, err, sizeof err)) {
+	if (fdt_pdtp_load(dtp_path, &dtp, err, sizeof err)) {
 		fprintf(stderr, "fdt_dti: %s\n", err);
 		return 1;
 	}
@@ -145,13 +149,9 @@ int main(int argc, char **argv)
 		return 2;
 	}
 	for (int l = 0; l < dtp.L; l++) {
-		if (jitter_ms > 0) {   /* n_l = ceil(r_l (Ts + J)), the rest as fdt_demand() */
-			double n = ceil(dtp.topic[l].rate * (dtp.Ts + jitter_ms * 1e-3) - 1e-9);
-			double v = ceil(dtp.c_b * (n * (double)dtp.topic[l].bound + FDT_STEP_HEADER * n) + dtp.c_m * n - 1e-9);
-			dmax[l] = v > 4294967295.0 ? 4294967295u : (uint32_t)v;
-		} else {
-			dmax[l] = fdt_demand(&dtp, l);
-		}
+		/* J_l: the jitter of the topic in the DTP, else --jitter-ms (the rule of fdt_preg_init) */
+		double J = dtp.topic[l].has_jitter ? dtp.topic[l].jitter : jitter_ms * 1e-3;
+		dmax[l] = fdt_p_demand(&dtp, l, J);
 		last_raw[l] = INT64_MIN / 2;
 	}
 
@@ -188,18 +188,18 @@ int main(int argc, char **argv)
 
 	fprintf(stderr, "fdt_dti: vessel %d, L=%d, epoch=%.3f, Ts=%.3f s, offset=%.3f ms, idle=%d steps, jitter=%.3f ms, "
 	        "broker %s:%d\n", vessel, dtp.L, dtp.epoch, dtp.Ts, offset_ms, idle, jitter_ms, host, port);
-	int64_t t = fdt_step_at(&dtp, fdt_now_us()) + 1;
+	int64_t t = fdt_p_step_at(&dtp, fdt_now_us()) + 1;
 	uint64_t published = 0, late = 0;
 	int64_t late_max = 0;
 	while (!stop && steps != 0) {
-		int64_t at = fdt_start_us(&dtp, t) + offset_us;
+		int64_t at = fdt_p_start_us(&dtp, t) + offset_us;
 		fdt_sleep_until(at);
 		if (stop)
 			break;
 		int64_t now = fdt_now_us();
-		if (now - fdt_start_us(&dtp, t) >= dtp.T1_us) {   /* missed phase 1 of step t */
+		if (now - fdt_p_start_us(&dtp, t) >= dtp.T1_us) {   /* missed phase 1 of step t */
 			late++;
-			t = fdt_step_at(&dtp, now) + 1;
+			t = fdt_p_step_at(&dtp, now) + 1;
 			continue;
 		}
 		if (now - at > late_max)
@@ -217,7 +217,7 @@ int main(int argc, char **argv)
 		if (rc == MOSQ_ERR_SUCCESS)
 			published++;
 		if (verbose) {
-			fprintf(stderr, "t=%" PRId64 " +%" PRId64 "us d=", t, now - fdt_start_us(&dtp, t));
+			fprintf(stderr, "t=%" PRId64 " +%" PRId64 "us d=", t, now - fdt_p_start_us(&dtp, t));
 			for (int l = 0; l < dtp.L; l++)
 				fprintf(stderr, "%s%u", l ? "," : "", d[l]);
 			fprintf(stderr, " rc=%d\n", rc);

@@ -13,7 +13,9 @@ Arrival curve of a layer topic at duration Ts (dtp.json, DTP format of SPEC.md):
 one frame every Lv / fps seconds (16 / 15 s for the ZED at 15 fps), which is longer than Ts, so a step
 holds at most one frame of each layer. A frame is at most `msgs_per_frame` messages of at most `bound`
 bytes, so the DTP declares rate = msgs_per_frame / Ts for each layer topic (ceil(rate Ts) =
-msgs_per_frame messages per step, the demand of the DTI program).
+msgs_per_frame messages per step, the demand of the DTI program) and "jitter": 0: the one-frame bound
+holds for any release jitter J < layers / fps - Ts, so the jitter allowance n = ceil(rate (Ts + J)) of
+the DTI program and of the vessel regulator (fdt_paper.c) must not add a message to a layer topic.
 
 Per-vessel settings (dtp.json, object "video_layers"):
 
@@ -121,7 +123,7 @@ def layer_topics(dtp):
 
 def topic_spec(bound, msgs_per_frame, Ts, name):
     """DTP entry (SPEC.md format) of one layer topic: at most one frame of msgs_per_frame messages per step."""
-    return {"name": name, "rate": msgs_per_frame / float(Ts), "bound": int(bound)}
+    return {"name": name, "rate": msgs_per_frame / float(Ts), "bound": int(bound), "jitter": 0}
 
 
 def make_layered(dtp, layers=16, fps=15.0, bound=1400, msgs_per_frame=8, base="video", vessels=None):
@@ -173,11 +175,13 @@ def frame_cap(dtp, name):
     return msgs_per_step(float(t["rate"]), float(dtp["Ts"])) * (int(t["bound"]) - CONTENT_HEADER)
 
 
-def channel_demand(dtp, name, vessel_bound=None):
+def channel_demand(dtp, name, vessel_bound=None, jitter_s=0.0):
     """Demand of one step of a topic as the DTI program computes it (SPEC.md Section 5):
-    ceil(c_b (x + 6 n) + c_m n), n = ceil(r Ts), x = n s."""
+    ceil(c_b (x + 6 n) + c_m n), n = ceil(r (Ts + J)), x = n s, with J the "jitter" of the topic, else
+    jitter_s (the --jitter-ms of fdt_dti; 0 gives n = ceil(r Ts))."""
     t = [x for x in dtp["topics"] if x["name"] == name][0]
-    n = msgs_per_step(float(t["rate"]), float(dtp["Ts"]))
+    J = float(t["jitter"]) if t.get("jitter") is not None else float(jitter_s)
+    n = msgs_per_step(float(t["rate"]), float(dtp["Ts"]) + J)
     s = int(vessel_bound if vessel_bound is not None else t["bound"])
     return int(math.ceil(float(dtp.get("c_b", 1.0)) * (n * s + 6 * n) + float(dtp.get("c_m", 0.0)) * n - 1e-9))
 

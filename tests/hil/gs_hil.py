@@ -121,7 +121,8 @@ def main() -> None:
         "as_pub_delay_ms": {"p50": 1e3 * pub[len(pub) // 2], "p99": 1e3 * pub[int(0.99 * (len(pub) - 1))],
                             "max": 1e3 * pub[-1]} if pub else None,
         "per_topic": per_topic,
-        "metrics": {k: (v.get("value") if isinstance(v, dict) else v) for k, v in analyze(rec, dtp, ci=False).items()
+        "metrics": {k: (v.get("value") if isinstance(v, dict) else v)
+                    for k, v in analyze(rec, dtp, criterion="count", ci=False).items()
                     if k in ("MAPE", "gamma", "delta", "phi", "eta", "mu", "nu", "J")} if rec else {},
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=1))

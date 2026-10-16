@@ -31,6 +31,7 @@ from fleetdt.ve.collector import Assembler, MqttCollector, StepClock  # noqa: E4
 MOSQ = Path(os.environ.get("MOSQ", "/opt/mosquitto-2.1"))
 BUILD = Path(os.environ.get("FDT_BUILD", ROOT / "build"))
 VESSELS = {1: ("b1", "10.0.0.99"), 2: ("b2", "10.0.0.98")}
+JITTER_MS = 2.0   # plugin_opt_jitter_ms of the regulators (mode paper) and --jitter-ms of fdt_dti
 
 
 def iface(ns: str) -> str:
@@ -72,7 +73,9 @@ def main() -> None:
         for i, (ns, addr) in VESSELS.items():
             conf = out / ("vessel%d.conf" % i)
             conf.write_text(vessel_conf(i, str(dtp_path), plugin=str(BUILD / "fdt_regulator.so"), stats_s=10,
-                                        log_dest="stdout") + "user root\n")   # the plugin lives in a home directory
+                                        log_dest="stdout", mode="paper", demand="external", jitter_ms=JITTER_MS,
+                                        reg_log=str(out / ("regulator-b%d.jsonl" % i)))
+                            + "user root\n")   # the plugin lives in a home directory
             spawn("broker-b%d" % i, [MOSQ / "sbin" / "mosquitto", "-c", conf], ns)
         time.sleep(1)
         gconf = out / "gs.conf"
@@ -90,7 +93,8 @@ def main() -> None:
         col.start()
         time.sleep(2)
         for i, (ns, addr) in VESSELS.items():
-            spawn("dti-b%d" % i, [BUILD / "fdt_dti", "--dtp", dtp_path, "--vessel", i, "--broker", "127.0.0.1:1883"], ns)
+            spawn("dti-b%d" % i, [BUILD / "fdt_dti", "--dtp", dtp_path, "--vessel", i, "--broker", "127.0.0.1:1883",
+                                  "--jitter-ms", JITTER_MS], ns)
             spawn("load-b%d" % i, [sys.executable, ROOT / "vessel" / "publishers" / "raw_load.py", "--dtp", dtp_path,
                                    "--vessel", i, "--port", 1883, "--seed", 7], ns)
         t_load = time.time()
@@ -124,7 +128,7 @@ def main() -> None:
         return "clean"
 
     steady = [g for g in graphs if g.t >= t0 + 24]
-    video = dtp.index("video")
+    layers = [dtp.index(n) for n in dtp.topics if n.startswith("video_")] or [dtp.index("video")]
     rows = {"clean": [], "burst": []}
     alg1 = policing = checked = 0
     for g in steady:
@@ -144,13 +148,17 @@ def main() -> None:
             "y_mean": sum(ys) / len(ys) if ys else None,
             "C_hat_mean": sum(g.C_hat for g in gs if g.C_hat) / max(1, len(gs)),
             "m_full": sum(1 for g in gs if len(g.vessels) == 2),
-            "video_admitted": sum(1 for g in gs if g.vessels and (g.edge(g.vessels[0], video).p or 0) > 0),
+            # steps with the first video layer admitted, and the mean number of admitted layers
+            "video_admitted": sum(1 for g in gs if g.vessels and (g.edge(g.vessels[0], layers[0]).p or 0) > 0),
+            "video_layers_mean": (sum(sum(1 for l in layers if (g.edge(g.vessels[0], l).p or 0) > 0)
+                                      for g in gs if g.vessels) / max(1, sum(1 for g in gs if g.vessels))),
             "metrics": {m: v.get("value") if isinstance(v, dict) else v
-                        for m, v in analyze(rec, dtp, ci=False).items()
+                        for m, v in analyze(rec, dtp, criterion="count", ci=False).items()
                         if m in ("MAPE", "gamma", "delta", "phi", "eta", "mu", "nu")} if rec else {},
         }
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
-    (out / "metrics.json").write_text(json.dumps(analyze([g.to_dict() for g in steady], dtp, B=500), indent=1))
+    (out / "metrics.json").write_text(json.dumps(analyze([g.to_dict() for g in steady], dtp, criterion="count", B=500),
+                                                 indent=1))
     print(json.dumps(summary, indent=1))
 
 

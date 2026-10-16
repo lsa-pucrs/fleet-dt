@@ -1,0 +1,13 @@
+[Unit]
+Description=Fleet-DT emulator: TSC clock source of the guest (before the clock setup)
+DefaultDependencies=no
+After=local-fs.target
+Before=fdt-clockinit.service chrony.service time-sync.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/lib/fdt/fdt-clocksource.py
+
+[Install]
+WantedBy=multi-user.target

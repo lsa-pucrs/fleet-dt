@@ -34,7 +34,10 @@ def test_rho_setting_scales_with_kappa():
     cal = {"sat": {"S1-m4": {"kappa": 0.8, "R_up": 24e6, "R_down": 24e6}}}
     r1 = MX.rho_setting(cal, "S1", 4, 0.125, 1.5)
     T_W = r1["T_W"]
-    assert math.isclose(4 * (r1["c_streams"] + r1["rate"] * 0.125 * r1["c_frame"]), 1.5 * 0.8 * T_W, rel_tol=1e-3)
+    # the base DTP holds the video layers with a size_scale per vessel: the frame cost of each vessel
+    assert len(r1["c_frame_vessels"]) == 4 and r1["c_frame_vessels"][0] == r1["c_frame"]
+    assert math.isclose(sum(r1["c_streams"] + r1["rate"] * 0.125 * cf for cf in r1["c_frame_vessels"]),
+                        1.5 * 0.8 * T_W, rel_tol=1e-3)
     cal["sat"]["S1-m4"]["kappa"] = 0.6
     assert MX.rho_setting(cal, "S1", 4, 0.125, 1.5)["rate"] < r1["rate"]
 

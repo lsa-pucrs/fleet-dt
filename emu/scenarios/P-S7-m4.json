@@ -1,0 +1,203 @@
+{
+ "name": "P-S7-m4-s1",
+ "M": 4,
+ "seed": 1,
+ "run": 1,
+ "rate": {
+  "manager": "constant",
+  "data": "ErpOfdmRate24Mbps",
+  "control": "ErpOfdmRate24Mbps",
+  "non_unicast": "ErpOfdmRate6Mbps"
+ },
+ "edca": {
+  "aifsn_ap": 1,
+  "cwmin_ap": 7,
+  "cwmax_ap": 1023,
+  "aifsn_sta": 3,
+  "cwmin_sta": 15,
+  "cwmax_sta": 1023
+ },
+ "tx_power_dbm": 20.0,
+ "mac_queue": {
+  "packets": 100,
+  "max_delay_ms": 500
+ },
+ "monitor_period_ms": 5,
+ "beacon_tu": 100,
+ "prio": {
+  "dscp": {
+   "46": 6,
+   "34": 5
+  },
+  "tcp_ports": {
+   "1883": 6
+  }
+ },
+ "channel": {
+  "model": "sea",
+  "frequency_hz": 2412000000.0,
+  "eps_r": 70.0,
+  "sigma_s_m": 5.0,
+  "polarization": "V",
+  "rough_sigma_m": 0.2121,
+  "antenna": "dipole",
+  "min_distance_m": 1,
+  "positions": {
+   "gs": [
+    0,
+    0,
+    6
+   ],
+   "v1": [
+    [
+     0.0,
+     517.56,
+     -385.0,
+     1.5
+    ],
+    [
+     179.41,
+     800.0,
+     -385.0,
+     1.5
+    ],
+    [
+     198.466,
+     800.0,
+     -355.0,
+     1.5
+    ]
+   ],
+   "v2": [
+    [
+     0.0,
+     706.06,
+     -35.0,
+     1.5
+    ],
+    [
+     50.05,
+     800.0,
+     -35.0,
+     1.5
+    ],
+    [
+     66.033,
+     800.0,
+     -65.0,
+     1.5
+    ],
+    [
+     438.975,
+     100.0,
+     -65.0,
+     1.5
+    ]
+   ],
+   "v3": [
+    [
+     0.0,
+     287.13,
+     75.0,
+     1.5
+    ],
+    [
+     145.0,
+     100.0,
+     75.0,
+     1.5
+    ],
+    [
+     168.246,
+     100.0,
+     45.0,
+     1.5
+    ],
+    [
+     710.661,
+     800.0,
+     45.0,
+     1.5
+    ]
+   ],
+   "v4": [
+    [
+     0.0,
+     208.57,
+     305.0,
+     1.5
+    ],
+    [
+     97.945,
+     100.0,
+     305.0,
+     1.5
+    ],
+    [
+     125.01,
+     100.0,
+     335.0,
+     1.5
+    ],
+    [
+     756.522,
+     800.0,
+     335.0,
+     1.5
+    ]
+   ]
+  },
+  "motion": {
+   "v1": {
+    "heave_m": 0.3,
+    "period_s": 3.678,
+    "phase_rad": 2.739,
+    "roll_deg": 10.0,
+    "roll_phase_rad": 5.7402
+   },
+   "v2": {
+    "heave_m": 0.3,
+    "period_s": 6.955,
+    "phase_rad": 2.028,
+    "roll_deg": 10.0,
+    "roll_phase_rad": 3.9016
+   },
+   "v3": {
+    "heave_m": 0.3,
+    "period_s": 3.116,
+    "phase_rad": 0.957,
+    "roll_deg": 10.0,
+    "roll_phase_rad": 5.6916
+   },
+   "v4": {
+    "heave_m": 0.3,
+    "period_s": 6.004,
+    "phase_rad": 2.8223,
+    "roll_deg": 10.0,
+    "roll_phase_rad": 2.8545
+   }
+  }
+ },
+ "scenario_id": "S7",
+ "scenario_set": "paper-v2",
+ "queue_variant": "q100",
+ "phy": "yans",
+ "cca_ed_dbm": -62.0,
+ "basic_modes": [
+  "ErpOfdmRate6Mbps",
+  "ErpOfdmRate12Mbps",
+  "ErpOfdmRate24Mbps"
+ ],
+ "speeds_mps": {
+  "v1": 1.574,
+  "v2": 1.877,
+  "v3": 1.291,
+  "v4": 1.108
+ },
+ "params": {
+  "R_PHY_mbps": 24,
+  "rts": "off",
+  "aggregation": "off",
+  "tx_dbm": 20.0
+ }
+}

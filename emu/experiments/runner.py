@@ -20,6 +20,9 @@ resumes after an interruption (runs left "running" start again). A file DIR/STOP
 their current runs. A run with "max_K": m (cells that meet the lag rule only with at most m sessions)
 runs on the slots 0 .. m-1 and only while at most m sessions run, itself included. Resources: each session uses M+1 VMs of 768 MB; a slot starts only while the host
 keeps at least 20 GB of available memory after it.
+
+Stack: a spec without "stack" runs on the as2 stack (the specs of matrix.py and of the frozen campaign);
+a spec with "stack": "paper" runs on the paper stack.
 """
 import argparse
 import json
@@ -101,6 +104,21 @@ class Manifest:
         with LOCK:
             r.update(kw)
             self.save()
+
+
+def run_spec(spec, rd, man_dir):
+    """The spec of a manifest run as emu/run.py receives it: run directory, no repository sync, the as2
+    stack unless the spec names one (the specs of matrix.py, and those of the frozen campaign, which
+    predate the "stack" field; emu/run.py would otherwise default to the paper stack), and the initial
+    scores file relative to the manifest directory."""
+    spec = dict(spec)
+    spec["run_dir"] = rd
+    spec["sync"] = False
+    spec.setdefault("stack", "as2")
+    ref = (spec.get("as") or {}).get("init_scores_file")
+    if ref and not os.path.isabs(ref):
+        spec["as"] = dict(spec["as"], init_scores_file=os.path.join(man_dir, ref))
+    return spec
 
 
 def run_py(slot, *args, log_path=None, timeout=None):
@@ -196,12 +214,7 @@ class Runner:
                     M_up = r["M"]
                 rd = os.path.join(self.results, r["id"])
                 with open(os.path.join(self.a.dir, r["spec"])) as f:
-                    spec = json.load(f)
-                spec["run_dir"] = rd
-                spec["sync"] = False
-                ref = (spec.get("as") or {}).get("init_scores_file")
-                if ref and not os.path.isabs(ref):
-                    spec["as"]["init_scores_file"] = os.path.join(self.a.dir, ref)
+                    spec = run_spec(json.load(f), rd, self.a.dir)
                 sp = os.path.join(self.results, ".spec-slot%d.json" % k)
                 with open(sp, "w") as f:
                     json.dump(spec, f)

@@ -3,10 +3,21 @@
 At start(t) + T1 the AS closes M(t), computes C_hat(t) (eq. 2), K_hat(t) and b(t) (eq. 3), runs
 Algorithm 1 over sigma_t and N(t), publishes (t, p(t)) on boat/b<i>/levels (QoS 1) for every i in M(t)
 and the JSON summary on fleet/as. The optional outer loop (fleetdt.outer, contribution (iv)) updates
-U and alpha from the DTA every `outer_every` steps.
+U and alpha from the DTA every `outer_every` steps; it runs in a child process (fleetdt.outer.run_job,
+SCHED_OTHER and nice 10), so its Python loops do not hold the GIL of the process that publishes p(t)
+and the real-time priority of the AS preempts it. Service.connect() returns after the SUBACK of the
+subscriptions, so step 0 never runs with a subscription that the broker has not yet acknowledged.
+
+Policies (--policy):
+  alg1  Algorithm 1, one table for the fleet (the paper; default)
+  b7    baseline B7: per-vessel grants with redistribution of the unused grant (IPACT limited service
+        with excess distribution, as_model.admission_b7); each vessel of M(t) gets its own table on
+        boat/b<i>/levels, and fleet/as carries "p": null, "p_by" and "grants"
+Baseline B4 is this service with --alpha 0 --C0 C_ref (constant prediction) and no outer loop.
 
   python -m fleetdt.as_service --dtp dtp.json --broker host:port [--epoch T0] [--log decisions.jsonl]
-                               [--U u] [--alpha a] [--outer-dta file.jsonl --outer-every steps]
+                               [--U u] [--alpha a] [--C0 c] [--policy alg1|b7]
+                               [--outer-dta file.jsonl --outer-every steps]
                                [--outer-window W] [--outer-target 0.99]
 """
 from __future__ import annotations
@@ -17,19 +28,24 @@ import logging
 import math
 import os
 import re
+import signal
 import struct
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .as_model import DTP, admission, grant_limit, smooth
+from .as_model import DTP, admission, admission_b7, grant_limit, smooth
 from .model import decode_demand, encode_levels, tcp_nodelay
 
 log = logging.getLogger("fleetdt.as")
 
 DEMAND_RE = re.compile(r"^boat/b(\d+)/demand$")
+POLICIES = ("alg1", "b7")
+SUBSCRIPTIONS = [("boat/+/demand", 1), ("fleet/throughput", 0), ("fleet/order", 1)]
 
 
 class AS:
@@ -38,7 +54,10 @@ class AS:
     timing thread calls close_phase1."""
 
     def __init__(self, dtp: DTP, epoch: float, U: Optional[float] = None, alpha: Optional[float] = None,
-                 C0: Optional[float] = None, now: Callable[[], float] = time.time):
+                 C0: Optional[float] = None, now: Callable[[], float] = time.time, policy: str = "alg1"):
+        if policy not in POLICIES:
+            raise ValueError("policy must be one of %s" % ", ".join(POLICIES))
+        self.policy = policy
         self.dtp = dtp
         self.epoch = float(epoch)
         self.U = dtp.U if U is None else float(U)
@@ -155,6 +174,11 @@ class AS:
                 return None
             b = grant_limit(C, self.U, self.dtp.T3, self.dtp.Ts, m)   # eq. (3)
             dec["b"] = b
+            if self.policy == "b7":                                   # baseline B7
+                p_by, g = admission_b7(D, self.sigma, self.N, b)
+                dec["p_by"] = {i: p_by[i] for i in M}
+                dec["grants"] = {i: g[i] for i in M}
+                return dec
             dec["p"] = admission(D, self.sigma, self.N, b)            # Algorithm 1
             return dec
 
@@ -183,12 +207,13 @@ class Service:
     def __init__(self, dtp: DTP, host: str = "localhost", port: int = 1883, epoch: Optional[float] = None,
                  U: Optional[float] = None, alpha: Optional[float] = None, log_path: Optional[str] = None,
                  outer_dta: Optional[str] = None, outer_every: int = 0, outer_window: Optional[int] = None,
-                 outer_target: float = 0.99, client_id: Optional[str] = None, spin: float = 0.001):
+                 outer_target: float = 0.99, client_id: Optional[str] = None, spin: float = 0.001,
+                 C0: Optional[float] = None, policy: str = "alg1"):
         import paho.mqtt.client as mqtt
         self.mono0, self.wall0 = time.monotonic(), time.time()
         epoch = dtp.t0 if epoch is None else epoch
         self.dtp = dtp
-        self.core = AS(dtp, epoch, U=U, alpha=alpha, now=self.now)
+        self.core = AS(dtp, epoch, U=U, alpha=alpha, C0=C0, now=self.now, policy=policy)
         self.host, self.port = host, port
         self.spin = spin
         self.log_file = open(log_path, "a", encoding="utf-8") if log_path else None
@@ -196,16 +221,21 @@ class Service:
         self.outer_window, self.outer_target = outer_window, outer_target
         self._outer_busy = False
         self._outer_result: Optional[Dict] = None
+        self._outer_pid: Optional[int] = None
+        self._outer_out: Optional[str] = None
         self.delays: List[float] = []
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._connected = threading.Event()
+        self.subscribed = threading.Event()   # SUBACK of SUBSCRIPTIONS on the current connection
+        self._sub_mid: Optional[int] = None
         cid = client_id or "fleetdt-as-%d-%s" % (os.getpid(), uuid.uuid4().hex[:8])
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cid, clean_session=True)
         tcp_nodelay(self.client)
         self.client.max_inflight_messages_set(1000)
         self.client.on_connect = self._on_connect
-        self.client.on_disconnect = lambda c, u, f, rc, props=None: self._connected.clear()
+        self.client.on_disconnect = self._on_disconnect
+        self.client.on_subscribe = self._on_subscribe
         self.client.on_message = self._on_message
 
     # ------------------------------------------------------------------ clock
@@ -225,8 +255,22 @@ class Service:
 
     # ------------------------------------------------------------------ MQTT
     def _on_connect(self, client, userdata, flags, rc, props=None) -> None:
-        client.subscribe([("boat/+/demand", 1), ("fleet/throughput", 0), ("fleet/order", 1)])
+        self.subscribed.clear()
+        # the SUBACK is handled by the network thread after this callback returns, so the mid is set first
+        _, self._sub_mid = client.subscribe(SUBSCRIPTIONS)
         self._connected.set()
+
+    def _on_disconnect(self, client, userdata, flags, rc, props=None) -> None:
+        self._connected.clear()
+        self.subscribed.clear()
+
+    def _on_subscribe(self, client, userdata, mid, reason_codes, props=None) -> None:
+        if mid != self._sub_mid:
+            return
+        bad = [str(rc) for rc in (reason_codes or []) if getattr(rc, "is_failure", False) or rc == 0x80]
+        if bad:
+            log.warning("the broker refused subscriptions: %s", bad)
+        self.subscribed.set()
 
     def _on_message(self, client, userdata, msg) -> None:
         try:
@@ -245,24 +289,83 @@ class Service:
             log.warning("malformed message on %s: %s", msg.topic, e)
 
     def connect(self, timeout: float = 5.0) -> None:
+        """Connects and returns after the CONNACK and the SUBACK of the subscriptions of the AS."""
+        end = time.monotonic() + timeout
         self.client.connect(self.host, self.port, keepalive=30)
         self.client.loop_start()
         if not self._connected.wait(timeout):
             raise TimeoutError("no CONNACK from %s:%d" % (self.host, self.port))
+        if not self.subscribed.wait(max(0.0, end - time.monotonic())):
+            raise TimeoutError("no SUBACK from %s:%d" % (self.host, self.port))
 
     # ------------------------------------------------------------------ outer loop
-    def _outer_job(self) -> None:
-        from . import outer
+    def _outer_start(self) -> None:
+        """Starts fleetdt.outer.run_job in a child process that writes its result to a temporary file.
+        posix_spawn sets SCHED_OTHER before the exec, so a child of an AS under SCHED_FIFO never runs at
+        the real-time priority; the child lowers itself to nice 10 before its imports."""
+        fd, out = tempfile.mkstemp(prefix="fleetdt-outer-", suffix=".json")
+        os.close(fd)
+        os.unlink(out)
+        pkg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = dict(os.environ)
+        env["PYTHONPATH"] = pkg + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        args = [sys.executable, "-c", "import os, sys; os.nice(10); from fleetdt.outer import run_job; "
+                "run_job(sys.argv[1], float(sys.argv[2]), int(sys.argv[3]) or None, sys.argv[4])",
+                str(self.outer_dta), repr(float(self.outer_target)), str(int(self.outer_window or 0)), out]
         try:
-            recs = outer.load_dta(self.outer_dta)
-            if recs:
-                self._outer_result = outer.outer_loop(recs, target=self.outer_target, window=self.outer_window)
-        except (OSError, ValueError) as e:
+            try:
+                pid = os.posix_spawn(sys.executable, args, env,
+                                     setscheduler=(os.SCHED_OTHER, os.sched_param(0)))
+            except (AttributeError, NotImplementedError, TypeError):
+                pid = subprocess.Popen(args, env=env, stdin=subprocess.DEVNULL).pid
+        except OSError as e:
             log.warning("outer loop failed: %s", e)
+            return
+        self._outer_pid, self._outer_out, self._outer_busy = pid, out, True
+
+    def _outer_poll(self) -> None:
+        """Takes the result of a finished child (non-blocking)."""
+        if not self._outer_busy or self._outer_pid is None:
+            return
+        try:
+            pid, status = os.waitpid(self._outer_pid, os.WNOHANG)
+        except ChildProcessError:
+            pid, status = self._outer_pid, -1
+        if pid == 0:
+            return
+        out, self._outer_pid, self._outer_busy = self._outer_out, None, False
+        try:
+            with open(out, encoding="utf-8") as f:
+                msg = json.load(f)
+        except (OSError, ValueError) as e:
+            msg = {"error": "no result (exit status %s): %s" % (status, e)}
         finally:
-            self._outer_busy = False
+            try:
+                os.unlink(out)
+            except OSError:
+                pass
+        if msg.get("error"):
+            log.warning("outer loop failed: %s", msg["error"])
+        elif msg.get("result") is not None:
+            self._outer_result = msg["result"]
+
+    def _outer_kill(self) -> None:
+        if self._outer_pid is None:
+            return
+        try:
+            os.kill(self._outer_pid, signal.SIGTERM)
+            os.waitpid(self._outer_pid, 0)
+        except (OSError, ChildProcessError):
+            pass
+        for p in (self._outer_out, (self._outer_out or "") + ".tmp"):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        self._outer_pid, self._outer_busy = None, False
 
     def _outer_tick(self, t: int) -> None:
+        self._outer_poll()
         res, self._outer_result = self._outer_result, None
         if res is not None:
             self.core.set_params(U=res.get("U_star"), alpha=res.get("alpha_star"))
@@ -270,8 +373,7 @@ class Service:
                          "U_star": res.get("U_star"), "mse": res.get("mse"), "n": res.get("n_y")})
             log.info("outer loop at step %d: alpha=%.4f U=%s", t, self.core.alpha, res.get("U_star"))
         if self.outer_dta and self.outer_every > 0 and t % self.outer_every == 0 and not self._outer_busy:
-            self._outer_busy = True
-            threading.Thread(target=self._outer_job, daemon=True).start()
+            self._outer_start()
 
     # ------------------------------------------------------------------ main loop
     def _write(self, rec: Dict) -> None:
@@ -280,12 +382,16 @@ class Service:
             self.log_file.flush()
 
     def _publish(self, dec: Dict) -> None:
-        payload = encode_levels(dec["t"], dec["p"])
-        for i in dec["M"]:
-            self.client.publish("boat/b%d/levels" % i, payload, qos=1)
-        self.client.publish("fleet/as", json.dumps(
-            {k: dec[k] for k in ("t", "C_hat", "K_hat", "b", "U", "alpha", "m", "p", "M", "order", "needed")},
-            separators=(",", ":")), qos=0)
+        if dec.get("p_by") is not None:      # B7: one table per vessel
+            for i in dec["M"]:
+                self.client.publish("boat/b%d/levels" % i, encode_levels(dec["t"], dec["p_by"][i]), qos=1)
+        else:
+            payload = encode_levels(dec["t"], dec["p"])
+            for i in dec["M"]:
+                self.client.publish("boat/b%d/levels" % i, payload, qos=1)
+        keys = ("t", "C_hat", "K_hat", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants")
+        self.client.publish("fleet/as", json.dumps({k: dec[k] for k in keys if k in dec}, separators=(",", ":")),
+                            qos=0)
 
     def run(self, steps: Optional[int] = None) -> None:
         """Runs phase 2 of each step until stop() (or for `steps` steps)."""
@@ -330,6 +436,7 @@ class Service:
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+        self._outer_kill()
         self.client.loop_stop()
         self.client.disconnect()
         if self.log_file:
@@ -360,6 +467,10 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--log", default=None, help="JSON-lines file of the decisions")
     ap.add_argument("--U", type=float, default=None, help="target utilization (overrides the DTP)")
     ap.add_argument("--alpha", type=float, default=None, help="gain of eq. (2) (overrides the DTP)")
+    ap.add_argument("--C0", type=float, default=None,
+                    help="initial prediction C_hat(0), bytes per step (overrides the DTP; B4: C_ref with --alpha 0)")
+    ap.add_argument("--policy", choices=POLICIES, default="alg1",
+                    help="alg1: Algorithm 1 (one table for the fleet); b7: per-vessel grants with redistribution")
     ap.add_argument("--outer-dta", default=None, help="DTA file written by the VE, input of the outer loop")
     ap.add_argument("--outer-every", type=int, default=0, help="steps between runs of the outer loop")
     ap.add_argument("--outer-window", type=int, default=None, help="last W steps of the DTA used by the outer loop")
@@ -374,7 +485,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     host, port = _broker(a.broker)
     svc = Service(dtp, host, port, epoch=epoch, U=a.U, alpha=a.alpha, log_path=a.log,
                   outer_dta=a.outer_dta, outer_every=a.outer_every, outer_window=a.outer_window,
-                  outer_target=a.outer_target)
+                  outer_target=a.outer_target, C0=a.C0, policy=a.policy)
     svc.connect()
     try:
         svc.run()

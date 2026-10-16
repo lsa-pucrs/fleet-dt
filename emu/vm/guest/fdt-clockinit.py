@@ -6,6 +6,11 @@ Before chronyd starts: sets CLOCK_REALTIME to the clock of the emulation host re
 "clock": {"offset_ms": x, "ppm": y}, and sets the frequency error y with clock_adjtime(2)
 ADJ_FREQUENCY. The vessels then follow the GS through chronyd over the emulated channel only, without
 makestep, so chronyd slews the offset and estimates the frequency.
+
+With "clock": {"schedule": PATH} (or "freq_mode": "schedule") the oscillator error comes from
+fdt-clockerr.py and fdt-freqshim.so (the schedule holds y as ppm0 and its ramps), so this program sets
+only the offset and leaves the kernel frequency at 0; a constant y set here would be taken by chronyd
+for its own setting (it reads the kernel frequency at its start).
 """
 import ctypes
 import ctypes.util
@@ -55,6 +60,8 @@ def main():
         clk = json.load(f).get("clock") or {}
     off_ns = int(round(float(clk.get("offset_ms", 0)) * 1e6))
     ppm = float(clk.get("ppm", 0))
+    if clk.get("schedule") or clk.get("freq_mode") == "schedule":
+        ppm = 0.0
     try:
         d = phc_offset_ns()
     except OSError as e:

@@ -33,14 +33,21 @@ A seed fixes the scenario (trajectories, fading and backoff draws of ns-3, inter
 release instants and sizes of the sources and the schedule of the operation control stub, so every method
 of a cell faces the same channel and the same data.
 
-Sources and rho (Section VI-C): the telemetry streams of the DTP and the video topic of the kind output
-with the frame sizes of emu/traces/water-sbs-q<Q>-s0p5.txt (scale 0.5: 672x188 side by side). For
-rho = 1, 1.5, 2 the quality is 50, 70, 90 and the video rate r solves
-  M (c_streams + r Ts c_frame(Q)) = rho kappa_sat T_W,
-with c_streams the cost (eq. cost) of the telemetry units of one vessel per step, c_frame(Q) the mean
-cost of one frame of the trace, both at the mean PHY rates of the saturation runs, and kappa_sat the mean
-kappa(t) of the saturation runs of the scenario and M (B1, video at quality 90 and scale 1 at 15 frames
-per second). The DTP of the run declares the video rate r and n = ceil(max frame / (s - 8)).
+Sources and rho (Section VI-C): the telemetry streams of the DTP and the video of the kind output with
+the frame sizes of emu/traces/water-sbs-q<Q>-s0p5.txt (scale 0.5: 672x188 side by side). The base DTP
+(dtp_base.json, the content of dtp_v2.json) splits the video into 16 temporal layer topics video_1 ..
+video_16 (vessel/publishers/video_layers.py); each layer topic carries 1 / 16 of the frame rate, and the
+source of vessel i scales its frame sizes by the size_scale of "video_layers"."vessels".<i>. For
+rho = 1, 1.5, 2 the quality is 50, 70, 90 and the frame rate r of the video solves
+  sum_i (c_streams + r Ts c_frame,i(Q)) = rho kappa_sat T_W,
+with c_streams the cost (eq. cost) of the telemetry units of one vessel per step, c_frame,i(Q) the mean
+cost of one frame of the trace scaled by the size_scale of vessel i, both at the mean PHY rates of the
+saturation runs, and kappa_sat the mean kappa(t) of the saturation runs of the scenario and M (B1, video
+at quality 90 and scale 1 at 15 frames per second). The DTP of the run declares the rate r / 16 of each
+layer topic and n = ceil(max frame / (s - 8)).
+
+Every experiment runs on the as2 stack ("stack": "as2"): emu/fleet.py and emu/run.py default to the
+paper stack, whose DTP format differs.
 """
 import argparse
 import copy
@@ -111,7 +118,8 @@ def make_dtp(M, Ts, video_rate, video_n, lam=None, gamma=None):
         if tp["name"] in d["required"]:
             tp["rate"] = round(1.0 / Ts, 6)        # one state per step (Ts = 1 / r_state)
         if tp["kind"] == "output":
-            tp["rate"] = round(float(video_rate), 4)
+            # a layer topic of the temporal video layers carries 1 / layers of the frame rate
+            tp["rate"] = round(float(video_rate) / int(tp.get("layers") or 1), 6)
             tp["n"] = int(video_n)
     if lam is not None:
         d["lambda"] = float(lam)
@@ -127,6 +135,13 @@ def key(sid, M, Ts=0.125):
 
 def video_n(sizes, s=1400):
     return int(math.ceil(max(sizes) / float(s - 8)))
+
+
+def size_scales(d, M):
+    """size_scale of the video frames of vessels 1..M ("video_layers"."vessels", 1.0 when absent), as
+    vessel/publishers/fdt_source.py applies them"""
+    vs = (d.get("video_layers") or {}).get("vessels") or {}
+    return [float((vs.get(str(i)) or {}).get("size_scale", 1.0)) for i in range(1, M + 1)]
 
 
 def costs(d, sizes, Ri, R0):
@@ -157,12 +172,16 @@ def rho_setting(cal, sid, M, Ts, rho):
     d = make_dtp(M, Ts, 1.0, n)
     T_W = d["Ts"] - d["T1"] - d["T2"] - 2 * d["eps"] - d["d_rx"]
     cs, cf = costs(d, sizes, sat["R_up"], sat["R_down"])
+    # frame cost of each vessel with its size_scale (the sources scale every frame, fdt_source.py)
+    cfs = [costs(d, [max(1, int(round(x * sc))) for x in sizes], sat["R_up"], sat["R_down"])[1] if sc != 1.0 else cf
+           for sc in size_scales(d, M)]
     target = rho * sat["kappa"] * T_W
-    r = (target / M - cs) / (Ts * cf)
+    r = (target - M * cs) / (Ts * sum(cfs))
     if r <= 0:
         raise SystemExit("rho %g in %s: the telemetry alone exceeds the target" % (rho, key(sid, M, Ts)))
     return {"quality": q, "trace": tp, "rate": round(r, 3), "n": n, "kappa_sat": sat["kappa"], "T_W": T_W,
-            "c_streams": cs, "c_frame": cf, "target": target, "R_up": sat["R_up"], "R_down": sat["R_down"]}
+            "c_streams": cs, "c_frame": cf, "c_frame_vessels": cfs, "target": target, "R_up": sat["R_up"],
+            "R_down": sat["R_down"]}
 
 
 def spec(exp, method, sid, M, Ts, rho, seed, steps, cal=None, predictor="eq", sat=False, phy=None):
@@ -200,7 +219,7 @@ def spec(exp, method, sid, M, Ts, rho, seed, steps, cal=None, predictor="eq", sa
         a["z0"] = (cal or {}).get("e0", {}).get("z_b4", {}).get(sid, 1.0)
     rid = "%s-%s%s-%s-m%d-r%g-ts%g-s%d" % (exp, method, "" if predictor == "eq" else "-" + predictor, sid, M, rho or 0,
                                            Ts * 1e3, seed)
-    return {"kind": "fleet", "name": rid, "exp": exp, "method": method, "predictor": predictor, "scenario_id": sid,
+    return {"kind": "fleet", "stack": "as2", "name": rid, "exp": exp, "method": method, "predictor": predictor, "scenario_id": sid,
             "M": M, "Ts": Ts, "rho": rho, "seed": seed, "steps": steps, "dtp": d, "scenario": sc, "source": src,
             "rho_setting": rs, "as": a, "opctl": {"period": int(round(10.0 / Ts))}, "lead_s": 15, "sync": False}
 

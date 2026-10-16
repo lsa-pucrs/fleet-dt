@@ -42,7 +42,7 @@ Each RP4 (vessel i):
 
 ```bash
 sudo apt install python3-opencv python3-numpy && pip3 install "paho-mqtt>=2" typing_extensions pymavlink
-python3 -m fleetdt.gsconf vessel --vessel 1 | sudo tee /etc/fleetdt/mosquitto.conf
+python3 -m fleetdt.gsconf vessel --vessel 1 --mode paper --demand external --jitter-ms 2 | sudo tee /etc/fleetdt/mosquitto.conf
 sudo install -m 0644 system/chrony/vessel.conf /etc/chrony/conf.d/fleetdt.conf && sudo systemctl restart chrony
 sudo install -m 0644 system/systemd/vessel/*.service /etc/systemd/system/
 sudo systemctl enable --now fleetdt-broker fleetdt-dti fleetdt-mav fleetdt-zed
@@ -76,7 +76,7 @@ Interference runs: on the injector,
 ## 4. After a run
 
 ```bash
-python3 -m fleetdt.analysis runs/*/dta.jsonl --dtp /etc/fleetdt/dtp.json --json > metrics.json
+python3 -m fleetdt.analysis runs/*/dta.jsonl --dtp /etc/fleetdt/dtp.json --criterion count --json > metrics.json
 python3 -m fleetdt.outer runs/c3/dta.jsonl --window 4800 --every 4800      # condition C3
 python3 -m fleetdt.ve replay runs/c1/dta.jsonl
 ```

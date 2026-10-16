@@ -624,6 +624,279 @@ static void test_limits(void)
 	free(lb);
 }
 
+
+/* ------------------------------------------------------------ baselines of the paper stack */
+
+static size_t feedback(uint8_t *b, uint32_t t, double y, float U, int m, const int *sigma1, int L)
+{
+	uint64_t yv;
+	uint32_t uv;
+	memcpy(&yv, &y, sizeof yv);
+	memcpy(&uv, &U, sizeof uv);
+	fdt_put_u32(b, t);
+	fdt_put_u32(b + 4, (uint32_t)(yv >> 32));
+	fdt_put_u32(b + 8, (uint32_t)yv);
+	fdt_put_u32(b + 12, uv);
+	b[16] = (uint8_t)m;
+	b[17] = (uint8_t)L;
+	for (int j = 0; j < L; j++)
+		b[FDT_FEEDBACK_MIN + j] = (uint8_t)sigma1[j];
+	return FDT_FEEDBACK_MIN + (size_t)L;
+}
+
+static cJSON *summary_of(int64_t t, int from)
+{
+	for (int i = from; i < nsent; i++)
+		if (!strcmp(sent[i].topic, "boat/b1/regulator")) {
+			cJSON *j = cJSON_ParseWithLength((const char *)sent[i].p, sent[i].len);
+			if (j && cJSON_GetObjectItem(j, "t")->valuedouble == (double)t)
+				return j;
+			cJSON_Delete(j);
+		}
+	return NULL;
+}
+
+static void test_dtp_baselines(void)
+{
+	char err[256];
+	struct fdt_pdtp d;
+	CHECK(fdt_pmode_parse("b8") == FDT_PMODE_B8 && fdt_pmode_parse("paper_b8") == FDT_PMODE_B8);
+	CHECK(fdt_pmode_parse("paper_b1") == FDT_PMODE_B1 && fdt_pmode_parse("paper_tdma") == FDT_PMODE_TDMA);
+	CHECK(fdt_pmode_parse("b1") < 0 && fdt_pmode_parse("tdma") < 0 && fdt_pmode_parse("b3") < 0);
+	CHECK(fdt_pmode_table(FDT_PMODE_NOEOS) && !fdt_pmode_table(FDT_PMODE_B8));
+	CHECK(fabs(D.U - 0.8) < 1e-12 && fabs(D.C0 - 300000) < 1e-9);
+	CHECK(D.order[0] == STATE && D.order[3] == VIDEO && D.n_required == 0);
+	/* classes of paper_b2: no "required": the first topic of the order is ef */
+	CHECK(fdt_pclass(&D, STATE) == 2 && fdt_pclass(&D, IMU) == 1 && fdt_pclass(&D, VIDEO) == 1);
+	const char *lay = "{\"Ts\":0.125,\"T1\":0.02,\"T2\":0.01,\"c_b\":1.06,\"c_m\":180,\"U\":0.7,\"vessels\":[3,1],"
+	                  "\"topics\":[{\"name\":\"state\",\"rate\":8,\"bound\":48},{\"name\":\"imu\",\"rate\":32,\"bound\":48},"
+	                  "{\"name\":\"video_1\",\"rate\":64,\"bound\":1400,\"jitter\":0},{\"name\":\"video_2\",\"rate\":64,"
+	                  "\"bound\":1400,\"jitter\":0},{\"name\":\"video_x\",\"rate\":1,\"bound\":10}],"
+	                  "\"order\":[\"imu\",\"video_1\"],\"required\":[\"state\"],"
+	                  "\"video_layers\":{\"base\":\"video\",\"layers\":2}}";
+	CHECK(fdt_pdtp_parse(lay, strlen(lay), &d, err, sizeof err) == 0);
+	CHECK(d.order[0] == 1 && d.order[1] == 2 && d.order[2] == 0 && d.order[3] == 3 && d.order[4] == 4);
+	CHECK(d.topic[2].video && d.topic[3].video && !d.topic[4].video && !d.topic[1].video);
+	CHECK(fdt_pclass(&d, 0) == 2 && fdt_pclass(&d, 1) == 1 && fdt_pclass(&d, 2) == 0 && fdt_pclass(&d, 4) == 1);
+	CHECK(fabs(d.U - 0.7) < 1e-12 && d.n_required == 1);
+	/* a layer topic with "jitter": 0 claims exactly one frame of 8 messages per step */
+	CHECK(fdt_p_msgs(&d, 2, d.topic[2].jitter) == 8 && fdt_p_msgs(&d, 2, 0.002) == 9);
+	const char *bad = "{\"Ts\":0.125,\"T1\":0.02,\"T2\":0.01,\"topics\":[{\"name\":\"a\",\"rate\":1,\"bound\":4}],"
+	                  "\"order\":[\"b\"]}";
+	CHECK(fdt_pdtp_parse(bad, strlen(bad), &d, err, sizeof err) < 0);
+}
+
+/* paper_b1 and paper_b2: forwarded on arrival with QoS 1, header t of the arrival instant, no table */
+static void test_b1_b2(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	fdt_preg_opts_default(&o);
+	o.mode = FDT_PMODE_B1;
+	o.demand_ext = 1;
+	start_at(&r, &o, 40);
+	fdt_preg_tick(&r, S(40));
+	int from = nsent;
+	raw(&r, IMU, 48, S(40) + 1000, 0x51);       /* phase 1 of step 40: leaves at once in step 40 */
+	raw(&r, VIDEO, 1000, S(40) + 2000, 0x52);
+	raw(&r, IMU, 48, V(40) + 1000, 0x53);
+	raw(&r, STATE, 48, S(41) + 10, 0x54);       /* step 41 */
+	CHECK(nsent - from == 4);
+	const char *top[4] = {"boat/b1/tx/imu", "boat/b1/tx/video", "boat/b1/tx/imu", "boat/b1/tx/state"};
+	const uint32_t ts[4] = {40, 40, 40, 41};
+	const int seq[4] = {0, 0, 1, 0};
+	for (int k = 0; k < 4 && from + k < nsent; k++) {
+		CHECK(!strcmp(sent[from + k].topic, top[k]) && sent[from + k].qos == 1);
+		CHECK(fdt_get_u32(sent[from + k].p) == ts[k] && fdt_get_u16(sent[from + k].p + 4) == seq[k]);
+		CHECK(sent[from + k].p[FDT_STEP_HEADER] == 0x51 + k);
+	}
+	from = nsent;
+	fdt_preg_tick(&r, S(41) + 20);
+	CHECK(count_topic("boat/b1/tx/", from) == 0);   /* nothing is queued for v(t) */
+	cJSON *j = summary_of(40, from);
+	CHECK(j != NULL);
+	if (j) {
+		CHECK(cJSON_GetArrayItem(cJSON_GetObjectItem(j, "fwd"), IMU)->valueint == 2);
+		CHECK(!strcmp(cJSON_GetObjectItem(j, "mode")->valuestring, "paper_b1"));
+		cJSON_Delete(j);
+	}
+	CHECK(r.s.logged == 0);
+	fdt_preg_free(&r);
+	/* paper_b2: the class in the topic */
+	o.mode = FDT_PMODE_B2;
+	start_at(&r, &o, 40);
+	from = nsent;
+	raw(&r, STATE, 48, S(40) + 1000, 1);
+	raw(&r, GPS, 80, S(40) + 2000, 2);
+	CHECK(find_topic("boat/b1/tx2/ef/state", from) && find_topic("boat/b1/tx2/af41/gps", from));
+	CHECK(count_topic("boat/b1/tx/", from) == 0);
+	fdt_preg_free(&r);
+}
+
+/* paper_b3: every message of step t at v(t), topic by topic in sigma_t, QoS 1, without a table */
+static void test_b3(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	fdt_preg_opts_default(&o);
+	o.mode = FDT_PMODE_B3;
+	o.demand_ext = 1;
+	start_at(&r, &o, 50);
+	fdt_preg_tick(&r, S(50));
+	int64_t a = V(49);
+	raw(&r, VIDEO, 1000, a + 1000, 0x61);
+	raw(&r, IMU, 48, a + 2000, 0x62);
+	raw(&r, STATE, 48, a + 3000, 0x63);
+	raw(&r, IMU, 48, a + 4000, 0x64);
+	int from = nsent;
+	fdt_preg_tick(&r, V(50));
+	/* sigma of the DTP: state, imu, gps, video */
+	const uint8_t tag[4] = {0x63, 0x62, 0x64, 0x61};
+	CHECK(nsent - from == 4);
+	for (int k = 0; k < 4 && from + k < nsent; k++)
+		CHECK(sent[from + k].p[FDT_STEP_HEADER] == tag[k] && sent[from + k].qos == 1 &&
+		      fdt_get_u32(sent[from + k].p) == 50);
+	/* feedback with sigma = video, gps, imu, state; then the messages of step 51 follow it */
+	uint8_t fb[64];
+	const int sig[4] = {4, 3, 2, 1};
+	CHECK(fdt_preg_on_feedback(&r, fb, feedback(fb, 50, NAN, 0, 0, sig, 4), V(50) + 10000) == 0);
+	CHECK(fdt_preg_on_feedback(&r, fb, feedback(fb, 49, NAN, 0, 0, sig, 4), V(50) + 10000) == 1);
+	const int dup[4] = {4, 4, 2, 1};
+	CHECK(fdt_preg_on_feedback(&r, fb, feedback(fb, 51, NAN, 0, 0, dup, 4), V(50) + 10000) == -1);
+	CHECK(fdt_preg_on_feedback(&r, fb, 17, V(50) + 10000) == -1);
+	raw(&r, STATE, 48, V(50) + 1000, 0x71);
+	raw(&r, VIDEO, 1000, V(50) + 2000, 0x72);
+	fdt_preg_tick(&r, S(51));   /* end of step 50 (its summary) */
+	from = nsent;
+	fdt_preg_tick(&r, V(51));
+	CHECK(nsent - from == 2 && sent[from].p[FDT_STEP_HEADER] == 0x72 && sent[from + 1].p[FDT_STEP_HEADER] == 0x71);
+	from = nsent;
+	fdt_preg_tick(&r, S(52));
+	cJSON *j = summary_of(51, from);
+	CHECK(j && cJSON_GetObjectItem(j, "fb_t")->valuedouble == 50 &&
+	      cJSON_GetArrayItem(cJSON_GetObjectItem(j, "sigma"), 0)->valueint == 4);
+	cJSON_Delete(j);
+	fdt_preg_free(&r);
+}
+
+/* b8: the budget B(t) = U y T3 / (Ts m) in sigma_t; the first message that does not fit stops the rest */
+static void test_b8(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	char *lb = NULL;
+	size_t ll = 0;
+	fdt_preg_opts_default(&o);
+	o.mode = FDT_PMODE_B8;
+	o.demand_ext = 1;
+	o.log = memlog(&lb, &ll);
+	start_at(&r, &o, 60);
+	fdt_preg_tick(&r, S(60));
+	/* before any feedback: y = C0 = 300000, U = 0.8 of the DTP, m = 2: B = 0.8 * 300000 * 0.76 / 2 = 91200 */
+	int64_t a = V(59);
+	for (int k = 0; k < 8; k++)
+		raw(&r, VIDEO, 14000, a + 1000 + 100 * k, (uint8_t)k);
+	raw(&r, STATE, 48, a + 5000, 0x80);
+	int from = nsent;
+	fdt_preg_tick(&r, V(60));
+	double cv = fdt_p_cost(&D, VIDEO, 14000), cs = fdt_p_cost(&D, STATE, 48);
+	int nv = (int)floor((91200 - cs) / cv);
+	CHECK(count_topic("boat/b1/tx/state", from) == 1 && count_topic("boat/b1/tx/video", from) == nv);
+	CHECK(sent[from].p[FDT_STEP_HEADER] == 0x80);   /* state first in sigma */
+	from = nsent;
+	fdt_preg_tick(&r, S(61));
+	fflush(o.log);
+	CHECK(log_count(lb, 60, "video", "budget") == 8 - nv);
+	cJSON *j = summary_of(60, from);
+	CHECK(j && fabs(cJSON_GetObjectItem(j, "budget")->valuedouble - 91200) < 1);
+	cJSON_Delete(j);
+	/* feedback: y = 100000, U = 0.5, m = 4, sigma = video first: B = 9500; state does not pass a held
+	 * video message (strict priority) */
+	uint8_t fb[64];
+	const int sig[4] = {4, 1, 2, 3};
+	CHECK(fdt_preg_on_feedback(&r, fb, feedback(fb, 60, 100000.0, 0.5f, 4, sig, 4), S(61) + 2000) == 0);
+	a = V(60);
+	raw(&r, VIDEO, 14000, a + 30000, 0x90);   /* cost about 15000 > B */
+	raw(&r, STATE, 48, a + 31000, 0x91);
+	from = nsent;
+	fdt_preg_tick(&r, V(61));
+	CHECK(count_topic("boat/b1/tx/", from) == 0);
+	from = nsent;
+	fdt_preg_tick(&r, S(62));
+	fflush(o.log);
+	CHECK(log_count(lb, 61, "video", "budget") == 1 && log_count(lb, 61, "state", "budget") == 1);
+	j = summary_of(61, from);
+	CHECK(j && fabs(cJSON_GetObjectItem(j, "budget")->valuedouble - 9500) < 1 &&
+	      fabs(cJSON_GetObjectItem(j, "y")->valuedouble - 100000) < 1);
+	cJSON_Delete(j);
+	/* a feedback without a measurement (NaN) keeps y; a small video fits */
+	CHECK(fdt_preg_on_feedback(&r, fb, feedback(fb, 61, NAN, 0.5f, 4, sig, 4), S(62) + 2000) == 0);
+	raw(&r, VIDEO, 1000, V(61) + 30000, 0x92);
+	raw(&r, STATE, 48, V(61) + 31000, 0x93);
+	fdt_preg_tick(&r, S(62) + 3000);
+	from = nsent;
+	fdt_preg_tick(&r, V(62));
+	CHECK(count_topic("boat/b1/tx/", from) == 2 && sent[from].p[FDT_STEP_HEADER] == 0x92);
+	fdt_preg_free(&r);
+	fclose(o.log);
+	free(lb);
+}
+
+/* paper_tdma: vessel 2 of vessels [1, 2] sends in the second half of phase 3, paced by lw_bytes */
+static void test_tdma(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	char *lb = NULL;
+	size_t ll = 0;
+	fdt_preg_opts_default(&o);
+	o.mode = FDT_PMODE_TDMA;
+	o.demand_ext = 1;
+	o.lw_bytes = 5000;
+	o.log = memlog(&lb, &ll);
+	nsent = 0;
+	memset(&fake, 0, sizeof fake);
+	CHECK(fdt_preg_init(&r, &D, 2, &o, S(69) + 10000, &IO) == 0);
+	fdt_preg_tick(&r, S(70));
+	int64_t a = V(69);
+	for (int k = 0; k < 6; k++)
+		raw(&r, VIDEO, 2000, a + 1000 + 100 * k, (uint8_t)(0xA0 + k));
+	raw(&r, STATE, 48, a + 2000, 0xB0);
+	int64_t T3 = D.Ts_us - D.T1_us - D.T2_us, g0 = V(70) + T3 / 2, g1 = V(70) + T3;
+	int from = nsent;
+	CHECK(fdt_preg_tick(&r, V(70)) == g0);   /* the slot opens at v(70) + T3 / 2 */
+	CHECK(count_topic("boat/b2/tx/", from) == 0);
+	/* in the slot: one tick releases while the released bytes stay below lw_bytes (state, then 3 videos) */
+	fake.n = 1;
+	fake.s[0].nsd = 0;
+	int64_t nx = fdt_preg_tick(&r, g0);
+	CHECK(nx == g0 + 1000);
+	CHECK(count_topic("boat/b2/tx/", from) == 4 && sent[from].p[FDT_STEP_HEADER] == 0xB0 && sent[from].qos == 1);
+	/* the data bridge still holds unsent bytes: nothing more */
+	fake.s[0].nsd = 6000;
+	fdt_preg_tick(&r, g0 + 1000);
+	CHECK(count_topic("boat/b2/tx/", from) == 4);
+	fake.s[0].nsd = 0;
+	fdt_preg_tick(&r, g0 + 2000);
+	CHECK(count_topic("boat/b2/tx/", from) == 7);
+	/* the rest of a slot stays: two more videos released after the slot are logged as slot */
+	raw(&r, VIDEO, 2000, V(70) + 1000, 0xC0);   /* step 71 */
+	fdt_preg_tick(&r, V(71));
+	fake.s[0].nsd = 9000;
+	int64_t g71 = V(71) + T3 / 2;
+	fdt_preg_tick(&r, g71);
+	from = nsent;
+	fdt_preg_tick(&r, g71 + T3 / 2);
+	CHECK(count_topic("boat/b2/tx/", from) == 0);
+	CHECK(fdt_preg_tick(&r, S(72)) > S(72));
+	fflush(o.log);
+	CHECK(log_count(lb, 71, "video", "slot") == 1);
+	(void)g1;
+	fdt_preg_free(&r);
+	fclose(o.log);
+	free(lb);
+}
+
 int main(void)
 {
 	test_dtp();
@@ -635,6 +908,11 @@ int main(void)
 	test_ablations();
 	test_no_pacing();
 	test_limits();
+	test_dtp_baselines();
+	test_b1_b2();
+	test_b3();
+	test_b8();
+	test_tdma();
 	if (failures) {
 		fprintf(stderr, "test_reg_paper: %d of %d checks failed\n", failures, checks);
 		return 1;

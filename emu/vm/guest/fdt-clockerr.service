@@ -1,0 +1,13 @@
+[Unit]
+Description=Fleet-DT emulator: oscillator frequency error and NTP loss episodes of a vessel (schedule)
+After=fdt-clockinit.service
+Before=chrony.service
+ConditionPathExists=/etc/fleetdt/emu-host.json
+
+[Service]
+ExecStart=/usr/local/lib/fdt/fdt-clockerr.py
+Restart=always
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

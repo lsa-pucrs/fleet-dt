@@ -8,6 +8,12 @@ Topics (prefixes configurable):
   fleet/order           JSON {"t": t, "order": [...], "needed": [...]} with topic names or 1-based indices
   fleet/as (optional)   JSON {"t": t, "C_hat":..., "K_hat":..., "b":..., "U":..., "alpha":...}
   boat/b<i>/regulator   JSON step log of the vessel regulator (forwarded and withheld messages per topic)
+
+r_il(t) charges each received message the channel bytes that the demand d_il(t) and the policing of the
+vessel regulator charge: c_b (x + 6) + c_m,l for x content bytes (DTP.message_bytes), so a topic whose
+declared messages all arrive gives r_il = d_il when the messages have the size of the bound.
+The priority table of boat/b<i>/levels sets the levels of the edges of vessel i (baseline B7 sends one
+table per vessel); the first table of a step also stands for the vessels without a table of their own.
 """
 from __future__ import annotations
 
@@ -107,9 +113,12 @@ class Assembler:
                     if len(p) != self.dtp.L:
                         return
                     g = self._graph(t)
-                    for e in g.edges:
-                        e.p = p[e.l - 1]
-                    g._levels = p  # applied again to edges created later
+                    if not hasattr(g, "_levels"):
+                        g._levels = p      # the table of the vessels without a table of their own
+                        g._levels_by = {}
+                    g._levels_by[i] = p
+                    for e in g.edges:      # applied again at the end of the step to the edges created later
+                        e.p = g._levels_by.get(e.i, g._levels)[e.l - 1]
                 elif kind == "regulator":
                     o = json.loads(payload)
                     t = int(o["t"])
@@ -137,7 +146,7 @@ class Assembler:
                     self.seen[t].add(key)
                     e.n += 1
                     e.x += len(payload) - 6
-                    e.r = int(round(self.dtp.channel_bytes(e.x, e.n)))
+                    e.r = int(round(self.dtp.message_bytes(l, e.x, e.n)))
                 return
             if topic == "fleet/throughput":
                 t, y = _decode_throughput(payload)
@@ -170,9 +179,10 @@ class Assembler:
         self.seen.pop(t, None)
         p = getattr(g, "_levels", None)
         if p is not None:
+            by = g._levels_by
             for e in g.edges:
-                e.p = p[e.l - 1]
-            del g._levels
+                e.p = by.get(e.i, p)[e.l - 1]
+            del g._levels, g._levels_by
         g.edges.sort(key=lambda e: (e.i, e.l))
         g.y = self.y.pop(t, None)
         a = self.as_values.pop(t, None)

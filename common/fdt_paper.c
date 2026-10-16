@@ -76,7 +76,8 @@ int fdt_pdtp_parse(const char *text, size_t len, struct fdt_pdtp *d, char *err, 
 	double c_m, h_W, mss, h_T, h_A;
 	const cJSON *tcp = cJSON_GetObjectItemCaseSensitive(o, "tcp");
 	const cJSON *mqtt = cJSON_GetObjectItemCaseSensitive(o, "mqtt");
-	if (num(o, "epoch", FDT_DEFAULT_EPOCH, 0, &d->epoch, NULL, err, errlen) ||
+	if (num(o, "U", 0.8, 0, &d->U, NULL, err, errlen) || num(o, "C0", 300000.0, 0, &d->C0, NULL, err, errlen) ||
+	    num(o, "epoch", FDT_DEFAULT_EPOCH, 0, &d->epoch, NULL, err, errlen) ||
 	    num(o, "Ts", 0, 1, &d->Ts, NULL, err, errlen) || num(o, "T1", 0, 1, &d->T1, NULL, err, errlen) ||
 	    num(o, "T2", 0, 1, &d->T2, NULL, err, errlen) || num(o, "c_b", 1.0, 0, &d->c_b, &has_cb, err, errlen) ||
 	    num(o, "c_m", 0.0, 0, &c_m, &has_cm, err, errlen) || num(o, "h_W", 0.0, 0, &h_W, NULL, err, errlen) ||
@@ -106,6 +107,17 @@ int fdt_pdtp_parse(const char *text, size_t len, struct fdt_pdtp *d, char *err, 
 			V = d->vessels[k];
 	if (!has_cb)
 		d->c_b = 1.0 + 2.0 * (h_T + h_W) / mss;
+	/* video layer topics: <base>_<j>, 1 <= j <= layers, of "video_layers" (base "video", 16 layers) */
+	char vbase[FDT_NAME_MAX] = "video";
+	double vlayers = 16;
+	const cJSON *vl = cJSON_GetObjectItemCaseSensitive(o, "video_layers");
+	if (cJSON_IsObject(vl)) {
+		const cJSON *vb = cJSON_GetObjectItemCaseSensitive(vl, "base");
+		if (cJSON_IsString(vb) && strlen(vb->valuestring) < sizeof vbase)
+			snprintf(vbase, sizeof vbase, "%s", vb->valuestring);
+		if (num(vl, "layers", 16, 0, &vlayers, NULL, err, errlen))
+			goto out;
+	}
 	const cJSON *topics = cJSON_GetObjectItemCaseSensitive(o, "topics");
 	if (!cJSON_IsArray(topics) || cJSON_GetArraySize(topics) < 1 || cJSON_GetArraySize(topics) > FDT_L_MAX) {
 		fail(err, errlen, "DTP: topics must be an array of 1 to %d topics", FDT_L_MAX);
@@ -144,10 +156,47 @@ int fdt_pdtp_parse(const char *text, size_t len, struct fdt_pdtp *d, char *err, 
 		tp->s = (long)b;
 		if (!has_bound)   /* v2: rate counts outputs of n messages */
 			tp->rate *= n;
+		const cJSON *kind = cJSON_GetObjectItemCaseSensitive(e, "kind");
+		size_t bl = strlen(vbase);
+		if (cJSON_IsString(kind) && !strcmp(kind->valuestring, "output")) {
+			tp->video = 1;
+		} else if (!strncmp(tp->name, vbase, bl) && tp->name[bl] == '_' && tp->name[bl + 1]) {
+			char *endp = NULL;
+			long j = strtol(tp->name + bl + 1, &endp, 10);
+			tp->video = endp && !*endp && j >= 1 && j <= (long)vlayers;
+		}
 		tp->c_m = has_cm ? c_m
 		                 : d->c_b * publish_header(V, tp->name, tp->s) + 2.0 * (h_T + h_W) + 3.0 * (h_A + 2.0 * h_W);
 		d->L++;
 	}
+	/* order (sigma of the DTP) and required: names of topics; unknown or repeated names are errors */
+	int seen[FDT_L_MAX] = {0}, n_ord = 0;
+	const cJSON *ord = cJSON_GetObjectItemCaseSensitive(o, "order");
+	if (cJSON_IsArray(ord))
+		cJSON_ArrayForEach(e, ord) {
+			int l = cJSON_IsString(e) ? fdt_pdtp_index(d, e->valuestring, strlen(e->valuestring)) : -1;
+			if (l < 0 || seen[l]) {
+				fail(err, errlen, "DTP: order is not a list of distinct topics");
+				goto out;
+			}
+			seen[l] = 1;
+			d->order[n_ord++] = l;
+		}
+	for (int l = 0; l < d->L; l++)
+		if (!seen[l])
+			d->order[n_ord++] = l;
+	const cJSON *req = cJSON_GetObjectItemCaseSensitive(o, "required");
+	if (cJSON_IsArray(req))
+		cJSON_ArrayForEach(e, req) {
+			int l = cJSON_IsString(e) ? fdt_pdtp_index(d, e->valuestring, strlen(e->valuestring)) : -1;
+			if (l < 0) {
+				fail(err, errlen, "DTP: required lists an unknown topic");
+				goto out;
+			}
+			if (!d->topic[l].required)
+				d->n_required++;
+			d->topic[l].required = 1;
+		}
 	d->epoch_us = llround(d->epoch * 1e6);
 	d->Ts_us = llround(d->Ts * 1e6);
 	d->T1_us = llround(d->T1 * 1e6);

@@ -18,6 +18,10 @@
 //                station bytes, packets, tx_failed) read at the step boundaries, one JSON line per read
 //                in the sample format of fdt_chmon --record; also sent as UDP datagrams to --cntDst
 //                (fleetdt/monitor_adapter.py computes y(t) from them)
+//   steplag.csv  with --phaseLag: per step, the largest lag of each phase, the lag at the start of
+//                phase 3 and at the end of the step, and the catch-up flag (emu/README.md)
+//   stepbytes.csv with --stepBytes: per step and vessel, the unique IP packets (and their bytes) that the
+//                AP receives without error, in phase 3 and in the whole step (offline subset replays)
 //
 // Usage (from the ns-3 tree):  ./ns3 run "fdt-emu --scenario=S.json --outdir=D --basePort=41000"
 
@@ -32,6 +36,7 @@
 #include "ns3/network-module.h"
 #include "ns3/propagation-module.h"
 #include "ns3/spectrum-module.h"
+#include "ns3/traffic-control-module.h"
 #include "ns3/waveform-generator-helper.h"
 #include "ns3/waveform-generator.h"
 #include "ns3/wifi-module.h"
@@ -42,6 +47,8 @@
 #include <arpa/inet.h>
 #include <atomic>
 #include <cerrno>
+#include <cmath>
+#include <complex>
 #include <csignal>
 #include <cstdio>
 #include <cstring>
@@ -79,6 +86,7 @@ WallNs()
 }
 
 int64_t g_originNs = 0; // host CLOCK_REALTIME at simulator time 0
+int64_t g_shiftNs = 0;  // simulator time of the scenario time 0 (start of the first step of a run)
 // actions that need the shift of the scenario time (run start - origin), run just before Simulator::Run
 std::vector<std::function<void(double)>> g_deferred;
 
@@ -1060,6 +1068,218 @@ class MonListener : public WifiPhyListener
 };
 
 // ---------------------------------------------------------------------------------------------
+// lag of each phase of each step (--phaseLag; paper Section VI, validity of the runs)
+//
+// The lag of the real-time scheduler, wall clock - (origin + simulator time), is sampled every
+// --phaseLagEveryUs of simulator time, at every PHY TX start and RX end of every node (where the
+// lag builds up), and at the exact simulator times of the step start, of the start of phase 3 and of
+// the end of the step (scenario time k TS, k TS + T1 + T2, (k + 1) TS). Per step k >= 0 it keeps the
+// largest lag of phase 1, 2 and 3, the lag at the start of phase 3 and at the end of the step; the
+// wall-clock duration of the simulated phase 3 is T3 + (lag_end - lag_p3), so a step whose
+// |lag_end - lag_p3| exceeds --catchupUs (default 1 ms) is flagged as catch-up. With --abortLagUs > 0,
+// a lag above it at scenario time >= 0 stops the emulator (exit status 3, "ABORT" line and
+// summary.json "phase_lag.aborted"); ns-3's own HardLimit (--hardLimitMs) stays as a backstop, because
+// it applies from the start of the emulator, when the reconnection of the VMs gives lags of several ms.
+
+struct StepLag
+{
+    int64_t k = -1;
+    float max[3] = {0, 0, 0};
+    float p3 = -1, end = -1;
+    uint32_t n = 0;
+};
+
+struct PhaseLag
+{
+    bool on = false;
+    int64_t ts = 125000000, t1 = 20000000, t2 = 10000000, everyNs = 250000;
+    int64_t abortNs = 0, catchupNs = 1000000;
+    StepLag cur;
+    std::vector<StepLag> done;
+    bool aborted = false;
+    int64_t abortStep = -1;
+    float abortLagUs = 0;
+    float runMax = 0;
+
+    void Close()
+    {
+        if (cur.k >= 0)
+        {
+            done.push_back(cur);
+        }
+        cur = StepLag();
+    }
+
+    // one lag sample at the current simulator time; boundary 1: start of phase 3, 2: end of step k - 1
+    void Sample(int boundary = 0)
+    {
+        int64_t s = NowNs() - g_shiftNs;
+        if (!on || s < 0)
+        {
+            return;
+        }
+        float lag = float((WallNs() - (g_originNs + NowNs())) / 1000.0);
+        int64_t k = s / ts;
+        int64_t off = s - k * ts;
+        if (boundary == 2 && cur.k == k - 1)
+        {
+            cur.end = lag;
+            cur.max[2] = std::max(cur.max[2], lag);
+        }
+        if (k != cur.k)
+        {
+            Close();
+            cur.k = k;
+        }
+        int ph = off < t1 ? 0 : (off < t1 + t2 ? 1 : 2);
+        cur.max[ph] = std::max(cur.max[ph], lag);
+        cur.n++;
+        if (boundary == 1)
+        {
+            cur.p3 = lag;
+        }
+        runMax = std::max(runMax, lag);
+        if (abortNs > 0 && lag * 1000.0 > abortNs && !aborted)
+        {
+            aborted = true;
+            abortStep = k;
+            abortLagUs = lag;
+            std::cout << "ABORT lag " << lag << " us > " << abortNs / 1000 << " us at step " << k
+                      << " phase " << ph + 1 << std::endl;
+            Simulator::Stop();
+        }
+    }
+
+    void Periodic()
+    {
+        Sample(0);
+        Simulator::Schedule(NanoSeconds(everyNs), &PhaseLag::Periodic, this);
+    }
+
+    // boundary events of step k (scenario time k TS): end of step k - 1 / start of k, start of phase 3
+    void Boundary(int64_t k)
+    {
+        Sample(2);
+        Simulator::Schedule(NanoSeconds(t1 + t2), &PhaseLag::Phase3, this);
+        Simulator::Schedule(NanoSeconds(ts), &PhaseLag::Boundary, this, k + 1);
+    }
+
+    void Phase3()
+    {
+        Sample(1);
+    }
+
+    void Start()
+    {
+        int64_t now = NowNs();
+        int64_t k = now <= g_shiftNs ? 0 : (now - g_shiftNs) / ts + 1;
+        Simulator::Schedule(NanoSeconds(g_shiftNs + k * ts - now), &PhaseLag::Boundary, this, k);
+        Simulator::Schedule(NanoSeconds(everyNs), &PhaseLag::Periodic, this);
+    }
+
+    void Write(const std::string& path)
+    {
+        Close();
+        FILE* f = fopen(path.c_str(), "w");
+        if (!f)
+        {
+            return;
+        }
+        fprintf(f, "k,max1_us,max2_us,max3_us,lag_p3_us,lag_end_us,catchup,n\n");
+        for (auto& r : done)
+        {
+            bool cu = r.p3 >= 0 && r.end >= 0 && std::fabs(r.end - r.p3) * 1000.0 > catchupNs;
+            fprintf(f,
+                    "%lld,%.1f,%.1f,%.1f,%.1f,%.1f,%d,%u\n",
+                    (long long)r.k,
+                    r.max[0],
+                    r.max[1],
+                    r.max[2],
+                    r.p3,
+                    r.end,
+                    cu ? 1 : 0,
+                    r.n);
+        }
+        fclose(f);
+    }
+};
+
+PhaseLag g_plag;
+
+// ---------------------------------------------------------------------------------------------
+// bytes per step and vessel at the AP (--stepBytes; offline subset replays of emu/replay_subsets.py)
+//
+// Every IPv4 data frame from vessel i to the AP that the AP receives without error counts once (the
+// first reception of its MSDU; a retransmission after a lost ACK carries the same packet UID) in the
+// step k = floor((t_end - shift) / TS) of the end t_end of its reception, in "phase 3" when
+// t_end - shift - k TS >= P3OFF (= T1 + T2).
+
+struct StepBytes
+{
+    bool on = false;
+    int64_t ts = 125000000, p3off = 30000000;
+    // (k, vessel) -> frames3, bytes3, frames, bytes
+    std::map<std::pair<int64_t, int>, std::array<uint64_t, 4>> acc;
+    std::vector<std::deque<uint32_t>> lastUids; // per vessel: UIDs of the latest receptions
+
+    void Rx(const FrameInfo& fi, int64_t endNs)
+    {
+        if (!on || fi.kind != 0 || fi.ipLen == 0 || fi.src < 1 || fi.src > int(g_M) || fi.dst != 0)
+        {
+            return;
+        }
+        auto& q = lastUids[fi.src];
+        if (std::find(q.begin(), q.end(), fi.uid) != q.end())
+        {
+            return;
+        }
+        q.push_back(fi.uid);
+        if (q.size() > 64)
+        {
+            q.pop_front();
+        }
+        int64_t s = endNs - g_shiftNs;
+        if (s < 0)
+        {
+            return;
+        }
+        int64_t k = s / ts;
+        auto& a = acc[{k, fi.src}];
+        if (s - k * ts >= p3off)
+        {
+            a[0]++;
+            a[1] += fi.ipLen;
+        }
+        a[2]++;
+        a[3] += fi.ipLen;
+    }
+
+    void Write(const std::string& path)
+    {
+        FILE* f = fopen(path.c_str(), "w");
+        if (!f)
+        {
+            return;
+        }
+        fprintf(f, "k,i,frames3,bytes3,frames,bytes\n");
+        for (auto& kv : acc)
+        {
+            fprintf(f,
+                    "%lld,%d,%llu,%llu,%llu,%llu\n",
+                    (long long)kv.first.first,
+                    kv.first.second,
+                    (unsigned long long)kv.second[0],
+                    (unsigned long long)kv.second[1],
+                    (unsigned long long)kv.second[2],
+                    (unsigned long long)kv.second[3]);
+        }
+        fclose(f);
+    }
+};
+
+StepBytes g_sb;
+
+// ---------------------------------------------------------------------------------------------
 // PHY traces of every Wi-Fi node (ground truth) and of the AP (monitor)
 
 struct RxCtx
@@ -1086,6 +1306,10 @@ OnTxPsdu(int node, WifiConstPsduMap psdus, WifiTxVector txv, double txPowerW)
     r.reason = uint8_t(std::clamp(int(std::lround(10 * std::log10(txPowerW * 1000.0))) + 128, 0, 255));
     GtWrite(r);
     g_txCount[node]++;
+    if (g_plag.on)
+    {
+        g_plag.Sample();
+    }
     if (node == 0 && g_cnt)
     {
         g_cnt->ApTx(fi);
@@ -1127,9 +1351,17 @@ OnRxEnd(int node, bool ok, Ptr<const Packet> pdu)
     g_rx[node].valid = false;
     GtWrite(GtFrom(ok ? 1 : 2, node, now - dur, dur, fi, rate));
     (ok ? g_rxOk : g_rxErr)[node]++;
+    if (g_plag.on)
+    {
+        g_plag.Sample();
+    }
     if (node == 0 && ok && g_cnt)
     {
         g_cnt->ApRx(fi);
+    }
+    if (node == 0 && ok && g_sb.on)
+    {
+        g_sb.Rx(fi, now);
     }
     if (node == 0 && g_mon)
     {
@@ -1243,6 +1475,56 @@ struct Host
     uint64_t fromVm = 0, toVm = 0, dropFromVm = 0, dropToVm = 0;
 };
 
+// Queue disc in front of the MAC queue of a Wi-Fi node (scenario "aqm"): the relay hands its packets to
+// the traffic-control layer of the node, as the Linux stack hands them to the qdisc of the radio. The
+// item carries the UP of the relay in the DS field that the select-queue callback of the Wi-Fi device
+// reads (WifiHelper::SelectQueueByDSField: UP = DS field >> 5), so the AC of a packet does not change.
+class RelayQueueItem : public QueueDiscItem
+{
+  public:
+    RelayQueueItem(Ptr<Packet> p, const Address& addr, uint16_t protocol, uint8_t up)
+        : QueueDiscItem(p, addr, protocol),
+          m_up(up)
+    {
+    }
+
+    void AddHeader() override
+    {
+    }
+
+    bool Mark() override
+    {
+        return false;
+    }
+
+    bool GetUint8Value(Uint8Values field, uint8_t& value) const override
+    {
+        if (field == IP_DSFIELD)
+        {
+            value = uint8_t(m_up << 5);
+            return true;
+        }
+        return false;
+    }
+
+  private:
+    uint8_t m_up;
+};
+
+std::vector<Ptr<TrafficControlLayer>> g_tc; // node index -> traffic-control layer (null: no queue disc)
+
+// send an IPv4 packet of the relay (or of a self-test source) on the Wi-Fi device of node h
+bool
+RelaySend(int h, Ptr<Packet> pkt, Mac48Address dst, uint8_t up)
+{
+    if (h < int(g_tc.size()) && g_tc[h])
+    {
+        g_tc[h]->Send(g_wifiDev[h], Create<RelayQueueItem>(pkt, dst, 0x0800, up));
+        return true;
+    }
+    return g_wifiDev[h]->Send(pkt, dst, 0x0800);
+}
+
 std::vector<Host> g_hosts;                 // 0 = GS, i = vessel i
 std::map<Mac48Address, int> g_vmMacToHost; // VM MAC -> host index
 std::map<int, int> g_dscpUp;                // DSCP -> UP
@@ -1325,7 +1607,7 @@ FromVm(int h,
     tag.SetPriority(uint8_t(up));
     pkt->ReplacePacketTag(tag);
     Mac48Address wdst = (h != 0 && d == 0) ? g_wifiMac[0] : g_wifiMac[d];
-    if (g_wifiDev[h]->Send(pkt, wdst, 0x0800))
+    if (RelaySend(h, pkt, wdst, uint8_t(up)))
     {
         H.fromVm++;
     }
@@ -1387,7 +1669,7 @@ SelfTestSend(int h, double interval, uint32_t size)
     ip[23] = 0x41;
     Ptr<Packet> full = Create<Packet>(ip, 28);
     full->AddAtEnd(Create<Packet>(size - 28));
-    g_wifiDev[h]->Send(full, g_wifiMac[0], 0x0800);
+    RelaySend(h, full, g_wifiMac[0], 0);
     Simulator::Schedule(Seconds(interval), &SelfTestSend, h, interval, size);
 }
 
@@ -1410,7 +1692,7 @@ SelfTestSendDown(int h, double interval, uint32_t size)
     ip[23] = 0x43;
     Ptr<Packet> full = Create<Packet>(ip, 28);
     full->AddAtEnd(Create<Packet>(size - 28));
-    g_wifiDev[0]->Send(full, g_wifiMac[h], 0x0800);
+    RelaySend(0, full, g_wifiMac[h], 0);
     Simulator::Schedule(Seconds(interval), &SelfTestSendDown, h, interval, size);
 }
 
@@ -1548,7 +1830,13 @@ ReportPhy(std::ostream& os)
            << ",\"sifs_us\":" << g_phy[n]->GetSifs().GetMicroSeconds()
            << ",\"be_aifsn\":" << int(be->Txop::GetAifsn()) << ",\"be_cwmin\":" << be->Txop::GetMinCw()
            << ",\"be_cwmax\":" << be->Txop::GetMaxCw() << ",\"vo_aifsn\":" << int(vo->Txop::GetAifsn())
-           << ",\"vo_cwmin\":" << vo->Txop::GetMinCw() << ",\"vo_cwmax\":" << vo->Txop::GetMaxCw() << "}";
+           << ",\"vo_cwmin\":" << vo->Txop::GetMinCw() << ",\"vo_cwmax\":" << vo->Txop::GetMaxCw();
+        auto rsm = g_wifiDev[n]->GetRemoteStationManager();
+        os << ",\"basic0\":\"" << (rsm->GetNBasicModes() ? rsm->GetBasicMode(0).GetUniqueName() : std::string("none"))
+           << "\",\"rts_threshold\":" << WIFI_MAX_RTS_THRESHOLD
+           << ",\"be_queue_p\":" << be->GetWifiMacQueue()->GetMaxSize().GetValue()
+           << ",\"be_queue_delay_ms\":" << be->GetWifiMacQueue()->GetMaxDelay().GetMilliSeconds()
+           << ",\"qdisc\":" << (n < g_tc.size() && g_tc[n] ? "\"mq+codel\"" : "null") << "}";
     }
 }
 
@@ -1601,6 +1889,288 @@ OnJamTxStart(int node, double periodUs, Ptr<WaveformGenerator> wg, Ptr<const Pac
     GtWrite(r);
 }
 
+// ---------------------------------------------------------------------------------------------
+// channel models of the paper scenarios
+
+double
+ScenarioNowS()
+{
+    return double(NowNs() - g_shiftNs) / 1e9;
+}
+
+using MobKey = std::pair<const MobilityModel*, const MobilityModel*>;
+
+// Matrix loss with three per-pair extensions (channel.model "matrix"):
+//   loss    [[a, b, dB], ...]                      constant loss of the pair (symmetric)
+//   walk    {"dt_s": D, "pairs": [[a, b, [dB...]]]} loss of the pair at scenario time t: linear
+//           interpolation of the series at t / D (S6; the first value before 0, the last after the end)
+//   fading  [[a, b, m], ...]                       Nakagami-m power fading per frame and receiver on top
+//           of the loss of the pair (unit mean power gain Gamma(m, 1/m); S9, links at the detection limit)
+class FdtMatrixLoss : public PropagationLossModel
+{
+  public:
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::FdtMatrixLoss")
+                                .SetParent<PropagationLossModel>()
+                                .SetGroupName("Propagation")
+                                .AddConstructor<FdtMatrixLoss>();
+        return tid;
+    }
+
+    // the generator exists only with fading pairs, so that the other scenarios keep their random streams
+    void EnableFading(int64_t stream)
+    {
+        m_gamma = CreateObject<GammaRandomVariable>();
+        m_gamma->SetStream(stream);
+    }
+
+    double m_default = 70;
+    std::map<MobKey, double> m_loss;
+    double m_walkDt = 1.0;
+    std::map<MobKey, std::vector<double>> m_walk;
+    std::map<MobKey, double> m_fadeM;
+
+    double LossOf(const MobilityModel* a, const MobilityModel* b) const
+    {
+        auto w = m_walk.find({a, b});
+        if (w != m_walk.end() && !w->second.empty())
+        {
+            const auto& v = w->second;
+            double x = ScenarioNowS() / m_walkDt;
+            if (x <= 0)
+            {
+                return v.front();
+            }
+            size_t i = size_t(x);
+            if (i + 1 >= v.size())
+            {
+                return v.back();
+            }
+            double f = x - double(i);
+            return v[i] + f * (v[i + 1] - v[i]);
+        }
+        auto it = m_loss.find({a, b});
+        return it == m_loss.end() ? m_default : it->second;
+    }
+
+  private:
+    double DoCalcRxPower(double txPowerDbm, Ptr<MobilityModel> a, Ptr<MobilityModel> b) const override
+    {
+        double rx = txPowerDbm - LossOf(PeekPointer(a), PeekPointer(b));
+        auto f = m_fadeM.find({PeekPointer(a), PeekPointer(b)});
+        if (m_gamma && f != m_fadeM.end())
+        {
+            double m = f->second;
+            double g = m_gamma->GetValue(m, 1.0 / m);
+            rx += 10.0 * std::log10(std::max(g, 1e-30));
+        }
+        return rx;
+    }
+
+    int64_t DoAssignStreams(int64_t stream) override
+    {
+        if (!m_gamma)
+        {
+            return 0;
+        }
+        m_gamma->SetStream(stream);
+        return 1;
+    }
+
+    Ptr<GammaRandomVariable> m_gamma;
+};
+
+// Two-ray model over the sea surface with moving antennas (channel.model "sea"; scenario S7).
+//
+// Geometry (flat surface at z = 0, heights above the mean sea level): direct ray of length
+// r1 = sqrt(d^2 + (ha - hb)^2), ray reflected at the specular point of length r2 = sqrt(d^2 + (ha + hb)^2),
+// grazing angle psi = atan((ha + hb) / d). Received power
+//   Pr = Pt (lambda / 4 pi)^2 | Fa1 Fb1 e^{-j k r1} / r1 + Gamma(psi) rho(psi) Fa2 Fb2 e^{-j k r2} / r2 |^2
+// with the Fresnel reflection coefficient Gamma of sea water (complex permittivity
+// eps_r - j 60 lambda sigma; vertical or horizontal polarization), the roughness factor of Miller, Brown
+// and Vegh, rho = exp(-2 g^2) I0(2 g^2), g = 2 pi sigma_h sin(psi) / lambda, and the field patterns F of a
+// half-wave dipole, F(theta) = cos(pi/2 cos theta) / sin theta (theta: angle between the ray and the
+// dipole axis; F = 1 broadside, so the link budget of a horizontal ray is that of the 0 dBi antennas
+// of the other scenarios). Motion of node n (channel.motion.<name>): antenna height
+// z + A sin(2 pi t / T + phi) (heave), roll angle R sin(2 pi t / T + phi_r) about the heading of the node
+// (the direction of its velocity; the last heading when it stops), which tilts the vertical dipole in
+// the athwartship plane. t = scenario time. The AP (no motion entry) has a fixed vertical dipole.
+// Sources of the model and of its parameters: W. Wang et al., "Wireless channel models for maritime
+// communications", IEEE Access 6 (2018) (two-ray over the sea); K. Yang et al., "Long-distance
+// propagation measurements of mobile radio channel over sea at 2 GHz", IEEE VTC-Fall 2011 (two-ray
+// interference pattern measured over sea); ITU-R P.527 (permittivity and conductivity of sea water);
+// D. E. Miller, G. S. Brown, L. Vegh, Radio Science 19(3) (1984) (roughness factor).
+class SeaTwoRayLoss : public PropagationLossModel
+{
+  public:
+    static TypeId GetTypeId()
+    {
+        static TypeId tid = TypeId("ns3::FdtSeaTwoRayLoss")
+                                .SetParent<PropagationLossModel>()
+                                .SetGroupName("Propagation")
+                                .AddConstructor<SeaTwoRayLoss>();
+        return tid;
+    }
+
+    struct Motion
+    {
+        double heave = 0, period = 1, phase = 0, roll = 0, rollPhase = 0; // m, s, rad, rad, rad
+    };
+
+    double m_lambda = 299792458.0 / 2.412e9;
+    std::complex<double> m_eps{70.0, 0.0};
+    bool m_vertical = true;
+    double m_roughSigma = 0.0;
+    double m_minDistance = 1.0;
+    bool m_dipole = true;
+    std::map<const MobilityModel*, Motion> m_motion;
+    mutable std::map<const MobilityModel*, double> m_heading;
+
+    void SetMaterial(double freqHz, double epsR, double sigma)
+    {
+        m_lambda = 299792458.0 / freqHz;
+        m_eps = std::complex<double>(epsR, -60.0 * m_lambda * sigma);
+    }
+
+    double Height(const MobilityModel* m, double z, double t) const
+    {
+        auto it = m_motion.find(m);
+        if (it == m_motion.end())
+        {
+            return z;
+        }
+        const Motion& mo = it->second;
+        return z + mo.heave * std::sin(2 * M_PI * t / mo.period + mo.phase);
+    }
+
+    double Roll(const MobilityModel* m, double t) const
+    {
+        auto it = m_motion.find(m);
+        if (it == m_motion.end())
+        {
+            return 0.0;
+        }
+        const Motion& mo = it->second;
+        return mo.roll * std::sin(2 * M_PI * t / mo.period + mo.rollPhase);
+    }
+
+    double Heading(Ptr<MobilityModel> m) const
+    {
+        Vector v = m->GetVelocity();
+        if (v.x * v.x + v.y * v.y > 1e-4)
+        {
+            double h = std::atan2(v.y, v.x);
+            m_heading[PeekPointer(m)] = h;
+            return h;
+        }
+        auto it = m_heading.find(PeekPointer(m));
+        return it == m_heading.end() ? 0.0 : it->second;
+    }
+
+    // field pattern of the dipole of node m for a ray of elevation e and world azimuth az
+    double Pattern(Ptr<MobilityModel> m, double e, double az, double t) const
+    {
+        if (!m_dipole)
+        {
+            return 1.0;
+        }
+        double r = Roll(PeekPointer(m), t);
+        double rel = az - Heading(m);
+        // dipole axis after a roll r about the heading: (0, -sin r, cos r) in the frame (forward, port, up)
+        double c = -std::cos(e) * std::sin(rel) * std::sin(r) + std::sin(e) * std::cos(r);
+        c = std::clamp(c, -1.0, 1.0);
+        double s = std::sqrt(1.0 - c * c);
+        if (s < 1e-9)
+        {
+            return 0.0;
+        }
+        return std::fabs(std::cos(M_PI / 2 * c)) / s;
+    }
+
+    std::complex<double> Reflection(double psi) const
+    {
+        double sp = std::sin(psi), cp = std::cos(psi);
+        std::complex<double> root = std::sqrt(m_eps - cp * cp);
+        if (m_vertical)
+        {
+            return (m_eps * sp - root) / (m_eps * sp + root);
+        }
+        return (sp - root) / (sp + root);
+    }
+
+    double Roughness(double psi) const
+    {
+        if (m_roughSigma <= 0)
+        {
+            return 1.0;
+        }
+        double g = 2 * M_PI * m_roughSigma * std::sin(psi) / m_lambda;
+        double x = 2 * g * g;
+        return std::exp(-x) * std::cyl_bessel_i(0.0, x);
+    }
+
+    // power gain of the link (linear), for the tests of the model
+    double Gain(Ptr<MobilityModel> a, Ptr<MobilityModel> b) const
+    {
+        double t = ScenarioNowS();
+        Vector pa = a->GetPosition(), pb = b->GetPosition();
+        double ha = std::max(0.05, Height(PeekPointer(a), pa.z, t));
+        double hb = std::max(0.05, Height(PeekPointer(b), pb.z, t));
+        double dx = pb.x - pa.x, dy = pb.y - pa.y;
+        double d = std::max(m_minDistance, std::sqrt(dx * dx + dy * dy));
+        double azAB = std::atan2(dy, dx), azBA = std::atan2(-dy, -dx);
+        double r1 = std::sqrt(d * d + (ha - hb) * (ha - hb));
+        double r2 = std::sqrt(d * d + (ha + hb) * (ha + hb));
+        double psi = std::atan2(ha + hb, d);
+        double eAB = std::atan2(hb - ha, d);
+        double k = 2 * M_PI / m_lambda;
+        double fa1 = Pattern(a, eAB, azAB, t), fb1 = Pattern(b, -eAB, azBA, t);
+        double fa2 = Pattern(a, -psi, azAB, t), fb2 = Pattern(b, -psi, azBA, t);
+        std::complex<double> e1 = std::polar(fa1 * fb1 / r1, -k * r1);
+        std::complex<double> e2 = Reflection(psi) * Roughness(psi) * std::polar(fa2 * fb2 / r2, -k * r2);
+        double amp = std::abs(e1 + e2) * m_lambda / (4 * M_PI);
+        return amp * amp;
+    }
+
+  private:
+    double DoCalcRxPower(double txPowerDbm, Ptr<MobilityModel> a, Ptr<MobilityModel> b) const override
+    {
+        double g = Gain(a, b);
+        return g > 0 ? txPowerDbm + 10.0 * std::log10(g) : -1000.0;
+    }
+
+    int64_t DoAssignStreams(int64_t) override
+    {
+        return 0;
+    }
+};
+
+struct LossProbe
+{
+    Ptr<PropagationLossModel> model;
+    double txDbm = 20;
+    int64_t dtNs = 100000000;
+    std::vector<std::pair<int, int>> pairs;
+    std::vector<Ptr<MobilityModel>> mob;
+    FILE* f = nullptr;
+
+    void Tick()
+    {
+        double t = ScenarioNowS();
+        for (auto& p : pairs)
+        {
+            fprintf(f,
+                    "%.4f,%s,%s,%.3f\n",
+                    t,
+                    g_names[p.first].c_str(),
+                    g_names[p.second].c_str(),
+                    model->CalcRxPower(txDbm, mob[p.first], mob[p.second]));
+        }
+        Simulator::Schedule(NanoSeconds(dtNs), &LossProbe::Tick, this);
+    }
+};
+
 } // namespace
 
 int
@@ -1619,6 +2189,12 @@ main(int argc, char* argv[])
     double cntHarvestMs = 0;
     bool cntFile = true;
     int64_t cntSeed = -1;
+    double shiftS = -1;           // offline: scenario time 0 at this simulator time (s), instead of runStartUs
+    std::string selftestSet;      // vessels with a self-test source (default: all)
+    std::string stepBytesSpec;    // "TS_US:P3OFF_US": stepbytes.csv
+    std::string phaseLagSpec;     // "TS_US:T1_US:T2_US": steplag.csv
+    double phaseLagEveryUs = 250, abortLagUs = 0, catchupUs = 1000;
+    std::string probeLoss;        // "A-B[,C-D...]:DT_MS": lossprobe.csv (diagnostics only)
 
     CommandLine cmd(__FILE__);
     cmd.AddValue("scenario", "scenario JSON (emu/scenarios)", scenarioPath);
@@ -1653,6 +2229,29 @@ main(int argc, char* argv[])
                  cntQuant);
     cmd.AddValue("cntHarvestMs", "extra survey harvests every MS (ath9k ANI poll; 0: only at the reads)", cntHarvestMs);
     cmd.AddValue("cntSeed", "seed of the read jitter (default: the scenario seed)", cntSeed);
+    cmd.AddValue("shiftS",
+                 "simulator time (s) of the scenario time 0 (offline replays; overrides runStartUs; < 0: off)",
+                 shiftS);
+    cmd.AddValue("selftestSet", "comma-separated vessel indices with a self-test source (default: every vessel)",
+                 selftestSet);
+    cmd.AddValue("stepBytes",
+                 "TS_US:P3OFF_US: write OUTDIR/stepbytes.csv (per step and vessel, unique IP packets received "
+                 "by the AP, in phase 3 = [k TS + P3OFF, (k + 1) TS) of scenario time and in the step)",
+                 stepBytesSpec);
+    cmd.AddValue("phaseLag",
+                 "TS_US:T1_US:T2_US: write OUTDIR/steplag.csv (largest lag of each phase of each step, real time only)",
+                 phaseLagSpec);
+    cmd.AddValue("phaseLagEveryUs", "period of the extra lag samples of --phaseLag (us of simulator time)",
+                 phaseLagEveryUs);
+    cmd.AddValue("abortLagUs",
+                 "stop the emulator (exit status 3) when the lag exceeds this value at scenario time >= 0 "
+                 "(needs --phaseLag; 0: record only)",
+                 abortLagUs);
+    cmd.AddValue("catchupUs", "catch-up flag of steplag.csv: |lag_end - lag_p3| above this value (us)", catchupUs);
+    cmd.AddValue("probeLoss",
+                 "A-B[,C-D...]:DT_MS: write OUTDIR/lossprobe.csv, the received power of each pair every DT_MS "
+                 "(diagnostics: with fading models the probe draws from the fading streams and changes the run)",
+                 probeLoss);
     cmd.Parse(argc, argv);
 
     mj::Value sc = mj::ParseFile(scenarioPath);
@@ -1776,20 +2375,87 @@ main(int argc, char* argv[])
             all.Get(n)->AggregateObject(m);
         }
     }
+    auto mobOf = [&](const std::string& name) {
+        return PeekPointer(all.Get(idx(name))->GetObject<MobilityModel>());
+    };
     if (model == "matrix")
     {
-        Ptr<MatrixPropagationLossModel> loss = CreateObject<MatrixPropagationLossModel>();
-        loss->SetDefaultLoss(ch["default_loss_db"].Num(70));
+        Ptr<FdtMatrixLoss> loss = CreateObject<FdtMatrixLoss>();
+        loss->m_default = ch["default_loss_db"].Num(70);
         const mj::Value& L = ch["loss"];
         for (size_t k = 0; k < L.size(); k++)
         {
-            int a = idx(L[k][0].Str()), b = idx(L[k][1].Str());
-            loss->SetLoss(all.Get(a)->GetObject<MobilityModel>(),
-                          all.Get(b)->GetObject<MobilityModel>(),
-                          L[k][2].Num(),
-                          true);
+            auto a = mobOf(L[k][0].Str()), b = mobOf(L[k][1].Str());
+            loss->m_loss[{a, b}] = loss->m_loss[{b, a}] = L[k][2].Num();
+        }
+        const mj::Value& W = ch["walk"];
+        if (W.type == mj::Value::OBJ)
+        {
+            loss->m_walkDt = W["dt_s"].Num(1.0);
+            NS_ABORT_MSG_IF(loss->m_walkDt <= 0, "channel.walk.dt_s must be > 0");
+            const mj::Value& P = W["pairs"];
+            for (size_t k = 0; k < P.size(); k++)
+            {
+                std::vector<double> v;
+                for (size_t j = 0; j < P[k][2].size(); j++)
+                {
+                    v.push_back(P[k][2][j].Num());
+                }
+                auto a = mobOf(P[k][0].Str()), b = mobOf(P[k][1].Str());
+                loss->m_walk[{a, b}] = loss->m_walk[{b, a}] = v;
+            }
+        }
+        const mj::Value& F = ch["fading"];
+        for (size_t k = 0; k < F.size(); k++)
+        {
+            auto a = mobOf(F[k][0].Str()), b = mobOf(F[k][1].Str());
+            NS_ABORT_MSG_IF(F[k][2].Num() <= 0, "channel.fading: m must be > 0");
+            loss->m_fadeM[{a, b}] = loss->m_fadeM[{b, a}] = F[k][2].Num();
+        }
+        if (!loss->m_fadeM.empty())
+        {
+            loss->EnableFading(int64_t(sc["seed"].Num(1)) * 100 + 7);
         }
         lossModel = loss;
+    }
+    else if (model == "sea")
+    {
+        Ptr<SeaTwoRayLoss> sea = CreateObject<SeaTwoRayLoss>();
+        sea->SetMaterial(ch["frequency_hz"].Num(2.412e9), ch["eps_r"].Num(70), ch["sigma_s_m"].Num(5));
+        std::string pol = ch["polarization"].Str("V");
+        NS_ABORT_MSG_IF(pol != "V" && pol != "H", "channel.polarization must be V or H");
+        sea->m_vertical = pol == "V";
+        sea->m_roughSigma = ch["rough_sigma_m"].Num(0);
+        sea->m_minDistance = ch["min_distance_m"].Num(1);
+        sea->m_dipole = ch["antenna"].Str("dipole") == "dipole";
+        const mj::Value& mo = ch["motion"];
+        if (mo.type == mj::Value::OBJ)
+        {
+            for (auto& kv : mo.o)
+            {
+                SeaTwoRayLoss::Motion m;
+                m.heave = kv.second["heave_m"].Num(0);
+                m.period = kv.second["period_s"].Num(1);
+                m.phase = kv.second["phase_rad"].Num(0);
+                m.roll = kv.second["roll_deg"].Num(0) * M_PI / 180.0;
+                m.rollPhase = kv.second["roll_phase_rad"].Num(0);
+                NS_ABORT_MSG_IF(m.period <= 0, "channel.motion." << kv.first << ".period_s must be > 0");
+                sea->m_motion[mobOf(kv.first)] = m;
+            }
+        }
+        lossModel = sea;
+        const mj::Value& nk = ch["nakagami"];
+        if (nk.type == mj::Value::OBJ)
+        {
+            Ptr<NakagamiPropagationLossModel> nak = CreateObject<NakagamiPropagationLossModel>();
+            nak->SetAttribute("m0", DoubleValue(nk["m0"].Num(5)));
+            nak->SetAttribute("m1", DoubleValue(nk["m1"].Num(5)));
+            nak->SetAttribute("m2", DoubleValue(nk["m2"].Num(5)));
+            nak->SetAttribute("Distance1", DoubleValue(nk["d1"].Num(80)));
+            nak->SetAttribute("Distance2", DoubleValue(nk["d2"].Num(200)));
+            nak->AssignStreams(int64_t(sc["seed"].Num(1)) * 100);
+            sea->SetNext(nak);
+        }
     }
     else if (model == "tworay")
     {
@@ -1814,7 +2480,7 @@ main(int argc, char* argv[])
     }
     else
     {
-        NS_FATAL_ERROR("channel.model must be matrix or tworay");
+        NS_FATAL_ERROR("channel.model must be matrix, tworay or sea");
     }
 
     // ---- Wi-Fi
@@ -1870,6 +2536,19 @@ main(int argc, char* argv[])
     {
         phy.Set("CcaEdThreshold", DoubleValue(sc["cca_ed_dbm"].Num()));
     }
+    if (sc.Has("rx_noise_figure_db"))
+    {
+        phy.Set("RxNoiseFigure", DoubleValue(sc["rx_noise_figure_db"].Num()));
+    }
+    // preamble detection (ns-3 ThresholdPreambleDetectionModel: RSSI >= MinimumRssi and SNR >= Threshold)
+    if (sc.Has("preamble_min_rssi_dbm") || sc.Has("preamble_snr_db"))
+    {
+        phy.SetPreambleDetectionModel("ns3::ThresholdPreambleDetectionModel",
+                                      "MinimumRssi",
+                                      DoubleValue(sc["preamble_min_rssi_dbm"].Num(-82)),
+                                      "Threshold",
+                                      DoubleValue(sc["preamble_snr_db"].Num(4)));
+    }
     const mj::Value& e = sc["edca"];
     auto ival = [&](const char* k, int def) { return int(e[k].Num(def)); };
     WifiMacHelper mac;
@@ -1914,7 +2593,13 @@ main(int argc, char* argv[])
                                    StringValue(mp + "24Mbps"),
                                    "NonUnicastMode",
                                    StringValue(mp + "6Mbps"));
-        mac.SetType("ns3::ApWifiMac", "Ssid", SsidValue(ssid2), "QosSupported", BooleanValue(true));
+        mac.SetType("ns3::ApWifiMac",
+                    "Ssid",
+                    SsidValue(ssid2),
+                    "QosSupported",
+                    BooleanValue(true),
+                    "BeaconInterval",
+                    TimeValue(MicroSeconds(1024 * int(ext["beacon_tu"].Num(100)))));
         extDevs.Add(w2.Install(phy, mac, all.Get(g_nAp2)));
         mac.SetType("ns3::StaWifiMac", "Ssid", SsidValue(ssid2), "QosSupported", BooleanValue(true));
         extDevs.Add(w2.Install(phy, mac, all.Get(g_nSta2)));
@@ -1940,12 +2625,31 @@ main(int argc, char* argv[])
         {
             basic = {mp + "6Mbps", mp + "12Mbps", mp + "24Mbps"};
         }
-        NetDeviceContainer allDevs(apDevs, staDevs);
-        allDevs.Add(extDevs);
-        for (uint32_t k = 0; k < allDevs.GetN(); k++)
+        // the external BSS has its own basic rate set ("external_bss.basic_modes", default that of the
+        // fleet BSS): ["DsssRate1Mbps"] makes its beacons 1 Mb/s DSSS frames (S2, S9; needs phy yans,
+        // because SpectrumWifiPhy cannot send DSSS in a 20 MHz channel)
+        std::vector<std::string> basicExt = basic;
+        const mj::Value& be = ext["basic_modes"];
+        if (be.type == mj::Value::ARR)
         {
-            auto rsm = DynamicCast<WifiNetDevice>(allDevs.Get(k))->GetRemoteStationManager();
-            for (auto& m : basic)
+            basicExt.clear();
+            for (size_t k = 0; k < be.size(); k++)
+            {
+                basicExt.push_back(be[k].Str());
+            }
+        }
+        for (auto& m : basicExt)
+        {
+            NS_ABORT_MSG_IF(hasExt && phyModel == "spectrum" && m.rfind("Dsss", 0) == 0,
+                            "external_bss.basic_modes " << m << " (DSSS) needs phy = yans");
+        }
+        NetDeviceContainer fleetDevs(apDevs, staDevs);
+        for (uint32_t k = 0; k < fleetDevs.GetN() + extDevs.GetN(); k++)
+        {
+            bool isExt = k >= fleetDevs.GetN();
+            Ptr<NetDevice> d = isExt ? extDevs.Get(k - fleetDevs.GetN()) : fleetDevs.Get(k);
+            auto rsm = DynamicCast<WifiNetDevice>(d)->GetRemoteStationManager();
+            for (auto& m : (isExt ? basicExt : basic))
             {
                 rsm->AddBasicMode(WifiMode(m));
             }
@@ -1977,6 +2681,86 @@ main(int argc, char* argv[])
     {
         reg(g_nAp2, extDevs.Get(0));
         reg(g_nSta2, extDevs.Get(1));
+    }
+
+    // R7 guards: RTS/CTS off (threshold above any PSDU) and no A-MSDU / A-MPDU on every MAC (non-HT
+    // 802.11g aggregates nothing; the attributes make it explicit)
+    for (size_t n = 0; n < nWifi; n++)
+    {
+        g_wifiDev[n]->GetRemoteStationManager()->SetAttribute("RtsCtsThreshold",
+                                                              UintegerValue(WIFI_MAX_RTS_THRESHOLD));
+        Ptr<WifiMac> m = g_wifiDev[n]->GetMac();
+        for (const char* ac : {"BE", "BK", "VI", "VO"})
+        {
+            m->SetAttribute(std::string(ac) + "_MaxAmsduSize", UintegerValue(0));
+            m->SetAttribute(std::string(ac) + "_MaxAmpduSize", UintegerValue(0));
+        }
+    }
+
+    // MAC queues per node: "mac_queue" is the default of every node; "fleet_queue" overrides it for the
+    // AP and the vessels, "station_queue" for the vessels (e.g. the shallow device queue under CoDel)
+    auto setQueue = [&](size_t n, const mj::Value& qv) {
+        Ptr<WifiMac> m = g_wifiDev[n]->GetMac();
+        for (AcIndex ac : {AC_BE, AC_BK, AC_VI, AC_VO})
+        {
+            Ptr<WifiMacQueue> wq = m->GetQosTxop(ac)->GetWifiMacQueue();
+            if (qv.Has("packets"))
+            {
+                wq->SetMaxSize(QueueSize(std::to_string(int(qv["packets"].Num())) + "p"));
+            }
+            if (qv.Has("max_delay_ms"))
+            {
+                wq->SetAttribute("MaxDelay", TimeValue(MilliSeconds(qv["max_delay_ms"].Num())));
+            }
+        }
+    };
+    if (sc["fleet_queue"].type == mj::Value::OBJ)
+    {
+        for (size_t n = 0; n <= g_M; n++)
+        {
+            setQueue(n, sc["fleet_queue"]);
+        }
+    }
+    if (sc["station_queue"].type == mj::Value::OBJ)
+    {
+        for (size_t n = 1; n <= g_M; n++)
+        {
+            setQueue(n, sc["station_queue"]);
+        }
+    }
+    // queue disc above the MAC queues ("aqm"): mq root with one CoDel per access category (the layout of
+    // a Linux qdisc on a 4-queue Wi-Fi device), on the vessels ("nodes": "stations") or on the AP too
+    // ("fleet"); the relay hands the packets of these nodes to their traffic-control layer
+    g_tc.assign(nWifi, nullptr);
+    std::vector<Ptr<QueueDisc>> qdRoot(nWifi);
+    const mj::Value& aqm = sc["aqm"];
+    std::string aqmType = aqm["type"].Str("none");
+    NS_ABORT_MSG_IF(aqmType != "none" && aqmType != "codel", "aqm.type must be none or codel");
+    if (aqmType == "codel")
+    {
+        std::string where = aqm["nodes"].Str("stations");
+        NS_ABORT_MSG_IF(where != "stations" && where != "fleet", "aqm.nodes must be stations or fleet");
+        for (size_t n = (where == "fleet" ? 0 : 1); n <= g_M; n++)
+        {
+            Ptr<Node> node = g_wifiDev[n]->GetNode();
+            Ptr<TrafficControlLayer> tc = CreateObject<TrafficControlLayer>();
+            node->AggregateObject(tc);
+            TrafficControlHelper tch;
+            uint16_t handle = tch.SetRootQueueDisc("ns3::MqQueueDisc");
+            TrafficControlHelper::ClassIdList cls = tch.AddQueueDiscClasses(handle, 4, "ns3::QueueDiscClass");
+            tch.AddChildQueueDiscs(handle,
+                                   cls,
+                                   "ns3::CoDelQueueDisc",
+                                   "MaxSize",
+                                   QueueSizeValue(QueueSize(std::to_string(int(aqm["limit_packets"].Num(1000))) + "p")),
+                                   "Target",
+                                   TimeValue(MicroSeconds(int64_t(aqm["target_ms"].Num(5) * 1000))),
+                                   "Interval",
+                                   TimeValue(MicroSeconds(int64_t(aqm["interval_ms"].Num(100) * 1000))));
+            QueueDiscContainer qdc = tch.Install(g_wifiDev[n]);
+            g_tc[n] = tc;
+            qdRoot[n] = qdc.Get(0);
+        }
     }
 
     // ---- outputs
@@ -2201,6 +2985,23 @@ main(int argc, char* argv[])
     }
 
     // ---- self test sources
+    std::vector<bool> stOn(g_M + 1, selftestSet.empty());
+    if (!selftestSet.empty())
+    {
+        size_t p0 = 0;
+        while (p0 < selftestSet.size())
+        {
+            size_t p1 = selftestSet.find(',', p0);
+            if (p1 == std::string::npos)
+            {
+                p1 = selftestSet.size();
+            }
+            int i = std::stoi(selftestSet.substr(p0, p1 - p0));
+            NS_ABORT_MSG_IF(i < 1 || i > int(g_M), "--selftestSet: vessel index " << i << " outside 1.." << g_M);
+            stOn[i] = true;
+            p0 = p1 + 1;
+        }
+    }
     if (!selftest.empty())
     {
         auto comma = selftest.find(',');
@@ -2208,7 +3009,10 @@ main(int argc, char* argv[])
         uint32_t size = uint32_t(std::stoul(selftest.substr(comma + 1)));
         for (uint32_t i = 1; i <= g_M; i++)
         {
-            Simulator::Schedule(Seconds(1.0 + 0.001 * i), &SelfTestSend, int(i), size * 8.0 / rbps, size);
+            if (stOn[i])
+            {
+                Simulator::Schedule(Seconds(1.0 + 0.001 * i), &SelfTestSend, int(i), size * 8.0 / rbps, size);
+            }
         }
     }
     if (!selftestDown.empty())
@@ -2237,6 +3041,84 @@ main(int argc, char* argv[])
               << " basePort=" << basePort << " outdir=" << outdir << std::endl;
     g_originNs = WallNs();
     double shift = runStartUs.empty() ? 0.0 : (std::stod(runStartUs) * 1e3 - double(g_originNs)) / 1e9;
+    if (shiftS >= 0)
+    {
+        shift = shiftS;
+    }
+    g_shiftNs = int64_t(std::llround(shift * 1e9));
+    auto parseUs = [](const std::string& spec, const char* opt, size_t nmin, size_t nmax) {
+        std::vector<int64_t> v;
+        size_t p0 = 0;
+        while (p0 <= spec.size())
+        {
+            size_t p1 = spec.find(':', p0);
+            if (p1 == std::string::npos)
+            {
+                p1 = spec.size();
+            }
+            v.push_back(int64_t(std::llround(std::stod(spec.substr(p0, p1 - p0)) * 1e3)));
+            p0 = p1 + 1;
+        }
+        NS_ABORT_MSG_IF(v.size() < nmin || v.size() > nmax, "bad value of --" << opt << ": " << spec);
+        return v;
+    };
+    if (!stepBytesSpec.empty())
+    {
+        auto v = parseUs(stepBytesSpec, "stepBytes", 2, 2);
+        NS_ABORT_MSG_IF(v[0] <= 0 || v[1] < 0 || v[1] >= v[0], "--stepBytes=TS_US:P3OFF_US with 0 <= P3OFF < TS");
+        g_sb.on = true;
+        g_sb.ts = v[0];
+        g_sb.p3off = v[1];
+        g_sb.lastUids.assign(g_M + 1, {});
+    }
+    if (!phaseLagSpec.empty() && g_realtime)
+    {
+        auto v = parseUs(phaseLagSpec, "phaseLag", 3, 3);
+        NS_ABORT_MSG_IF(v[0] <= 0 || v[1] < 0 || v[2] < 0 || v[1] + v[2] >= v[0],
+                        "--phaseLag=TS_US:T1_US:T2_US with T1 + T2 < TS");
+        g_plag.on = true;
+        g_plag.ts = v[0];
+        g_plag.t1 = v[1];
+        g_plag.t2 = v[2];
+        g_plag.everyNs = std::max<int64_t>(10000, int64_t(phaseLagEveryUs * 1e3));
+        g_plag.abortNs = int64_t(abortLagUs * 1e3);
+        g_plag.catchupNs = int64_t(catchupUs * 1e3);
+        g_plag.Start();
+    }
+    NS_ABORT_MSG_IF(abortLagUs > 0 && !g_plag.on, "--abortLagUs needs --phaseLag and real time");
+    LossProbe probe;
+    if (!probeLoss.empty())
+    {
+        auto colon = probeLoss.rfind(':');
+        NS_ABORT_MSG_IF(colon == std::string::npos, "--probeLoss=A-B[,C-D...]:DT_MS");
+        probe.model = lossModel;
+        probe.txDbm = txp;
+        probe.dtNs = int64_t(std::stod(probeLoss.substr(colon + 1)) * 1e6);
+        NS_ABORT_MSG_IF(probe.dtNs <= 0, "--probeLoss: DT_MS > 0");
+        for (size_t n = 0; n < g_names.size(); n++)
+        {
+            probe.mob.push_back(all.Get(n)->GetObject<MobilityModel>());
+        }
+        std::string list = probeLoss.substr(0, colon);
+        size_t p0 = 0;
+        while (p0 < list.size())
+        {
+            size_t p1 = list.find(',', p0);
+            if (p1 == std::string::npos)
+            {
+                p1 = list.size();
+            }
+            std::string pr = list.substr(p0, p1 - p0);
+            auto dash = pr.find('-');
+            NS_ABORT_MSG_IF(dash == std::string::npos, "--probeLoss: pair A-B");
+            probe.pairs.emplace_back(idx(pr.substr(0, dash)), idx(pr.substr(dash + 1)));
+            p0 = p1 + 1;
+        }
+        probe.f = fopen((outdir + "/lossprobe.csv").c_str(), "w");
+        NS_ABORT_MSG_IF(!probe.f, "cannot write lossprobe.csv");
+        fprintf(probe.f, "t_s,a,b,rx_dbm\n");
+        Simulator::Schedule(NanoSeconds(std::max<int64_t>(0, g_shiftNs)), &LossProbe::Tick, &probe);
+    }
     for (auto& f : g_deferred)
     {
         f(shift);
@@ -2295,6 +3177,19 @@ main(int argc, char* argv[])
 
     // ---- summary
     GtClose();
+    if (g_plag.on)
+    {
+        g_plag.Write(outdir + "/steplag.csv");
+    }
+    if (g_sb.on)
+    {
+        g_sb.Write(outdir + "/stepbytes.csv");
+    }
+    if (probe.f)
+    {
+        fclose(probe.f);
+        probe.f = nullptr;
+    }
     if (cnt.m_file)
     {
         fclose(cnt.m_file);
@@ -2325,7 +3220,31 @@ main(int argc, char* argv[])
        << g_gtCount << ",\"monitor\":{\"batches\":" << mon.m_batches << ",\"records\":" << mon.m_records
        << ",\"send_errors\":" << mon.m_sendErr << "},\"nl80211\":{\"reads\":" << cnt.m_reads
        << ",\"send_errors\":" << cnt.m_sendErr << ",\"quant\":\"" << (cntSpec.empty() ? "off" : cntQuant)
-       << "\"},\"non_ip_from_vm\":" << g_nonIp << ",\"hosts\":[";
+       << "\"},\"phase_lag\":{\"on\":" << (g_plag.on ? "true" : "false") << ",\"steps\":" << g_plag.done.size()
+       << ",\"max_us\":" << g_plag.runMax << ",\"abort_us\":" << g_plag.abortNs / 1000
+       << ",\"aborted\":" << (g_plag.aborted ? "true" : "false") << ",\"abort_step\":" << g_plag.abortStep
+       << ",\"abort_lag_us\":" << g_plag.abortLagUs << "},\"step_bytes\":" << (g_sb.on ? "true" : "false")
+       << ",\"qdisc\":{";
+    {
+        bool first = true;
+        for (size_t n = 0; n < qdRoot.size(); n++)
+        {
+            if (!qdRoot[n])
+            {
+                continue;
+            }
+            uint64_t drop = 0, sent = 0;
+            for (size_t c = 0; c < qdRoot[n]->GetNQueueDiscClasses(); c++)
+            {
+                const QueueDisc::Stats& st = qdRoot[n]->GetQueueDiscClass(c)->GetQueueDisc()->GetStats();
+                drop += st.nTotalDroppedPackets;
+                sent += st.nTotalSentPackets;
+            }
+            sm << (first ? "" : ",") << "\"" << g_names[n] << "\":{\"sent\":" << sent << ",\"dropped\":" << drop << "}";
+            first = false;
+        }
+    }
+    sm << "},\"non_ip_from_vm\":" << g_nonIp << ",\"hosts\":[";
     for (size_t h = 0; h < g_hosts.size(); h++)
     {
         auto& H = g_hosts[h];
@@ -2346,5 +3265,5 @@ main(int argc, char* argv[])
               << " p999=" << ls.p999 << " max=" << ls.max << " | whole run p99=" << lsAll.p99
               << " max=" << lsAll.max << " gt=" << g_gtCount << std::endl;
     Simulator::Destroy();
-    return 0;
+    return g_plag.aborted ? 3 : 0;
 }

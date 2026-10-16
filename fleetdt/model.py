@@ -73,8 +73,9 @@ class Edge:
     r: int = 0             # received bytes within step t, in channel bytes c(x, n)
     x: int = 0             # received content bytes
     n: int = 0             # received distinct messages
-    dup: int = 0           # repeated messages (discarded by the GS)
-    late: int = 0          # messages of step t that arrived after step t (discarded)
+    dup: int = 0           # repeated messages (recorded in the log of the operation and excluded from the step)
+    late: int = 0          # messages of step t that arrived after step t (recorded in the log of the operation
+                           # and excluded from the step)
     fwd: Optional[int] = None   # messages that the vessel regulator forwarded (boat/b<i>/regulator)
     held: Optional[int] = None  # messages that the vessel regulator withheld
 
