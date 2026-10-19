@@ -1,5 +1,5 @@
 #!/bin/bash
-# Native build of cJSON 1.7.19 and Mosquitto 2.1.2 (+ patches 0001, 0002) into PREFIX.
+# Native build of cJSON 1.7.19 and Mosquitto 2.1.2 (+ every patch of patches/, 0001 to 0004) into PREFIX.
 # Runs on the RP4 (Raspbian 10: gcc 8.3, glibc 2.28, CMake 3.16 < 3.18, so the plain
 # Makefiles) and on the GS (RHEL 10). Usage:
 #   build.sh <dir with mosquitto-2.1.2.tar.gz and cJSON-1.7.19.tar.gz> [PREFIX]

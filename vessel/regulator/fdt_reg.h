@@ -66,6 +66,8 @@ struct fdt_sock {
 		int64_t outq;            /* SIOCOUTQ: bytes not yet acknowledged */
 		uint64_t acked;          /* tcpi_bytes_acked */
 		int has_acked;
+		int64_t bq;              /* mode paper: bytes the broker still holds for the data-bridge client and has
+		                            not written to the socket (patch 0004); -1 unknown */
 	} s[FDT_DATA_MAX];
 };
 

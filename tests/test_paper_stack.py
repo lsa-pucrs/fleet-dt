@@ -46,6 +46,8 @@ def _mosq():
 MOSQ = _mosq()
 BUILD = Path(os.environ.get("FDT_BUILD", ROOT / "build"))
 BROKER = MOSQ / "sbin" / "mosquitto"
+# patch 0004 exports mosquitto_client_out_queued_bytes (the broker queue in o_i of the backlog)
+PATCH_0004 = BROKER.exists() and b"mosquitto_client_out_queued_bytes" in BROKER.read_bytes()
 PLUGIN = BUILD / "fdt_regulator.so"
 DTI = BUILD / "fdt_dti"
 RUN_S = float(os.environ.get("FDT_PAPER_SECONDS", "4"))
@@ -317,6 +319,9 @@ def test_paper_stack_end_to_end(stack):
         if reg is not None and reg.get("Q") is not None:
             assert reg["Q"] == gs.backlog[t], (t, reg, gs.backlog[t])
             assert reg["o"] >= 0 and reg["n"] >= 0 and (reg["o"] > 0 or reg["n"] == 0)   # n_i = 0 when o_i = 0
+            # o_i includes the output queue of the broker when the broker carries patch 0004 (else bq = -1)
+            assert reg["bq"] >= 0 if PATCH_0004 else reg["bq"] == -1, reg
+            assert reg["o"] >= max(0, reg["bq"])
 
     tx = defaultdict(list)
     for at, name, qos, t, s, n in gs.tx:

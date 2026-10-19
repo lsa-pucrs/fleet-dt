@@ -94,7 +94,7 @@ static void step_reset(struct fdt_pstep *s, int64_t t)
 	s->t = t;
 	s->late_p1 = s->late_v = -1;
 	s->outq = s->nsd = -1;
-	s->bo = s->bn = -1;
+	s->bo = s->bn = s->bq = -1;
 	s->budget = -1;
 	s->fb_t = -1;
 	s->gate_s = s->gate_e = -1;
@@ -458,7 +458,7 @@ int64_t fdt_preg_ring_count(const struct fdt_preg *r, int k, int64_t o)
 
 uint32_t fdt_preg_backlog(struct fdt_preg *r, int64_t t, int64_t now_us)
 {
-	int64_t o = -1, n = -1;
+	int64_t o = -1, n = -1, bq = -1;
 	if (r->io.sock) {
 		struct fdt_sock sk;
 		memset(&sk, 0, sizeof sk);
@@ -466,7 +466,12 @@ uint32_t fdt_preg_backlog(struct fdt_preg *r, int64_t t, int64_t now_us)
 		if (sk.n > 0) {
 			o = n = 0;
 			for (int j = 0; j < sk.n && j < FDT_DATA_MAX; j++) {
-				int64_t oj = sk.s[j].outq > 0 ? sk.s[j].outq : 0;
+				/* o_i: the bytes of the connection that the channel has not carried yet, those in the socket
+				 * (SIOCOUTQ: unsent or unacknowledged) and those that the broker still holds in its output
+				 * queue for the client (the tail of a full socket) */
+				int64_t oj = (sk.s[j].outq > 0 ? sk.s[j].outq : 0) + (sk.s[j].bq > 0 ? sk.s[j].bq : 0);
+				if (sk.s[j].bq >= 0)
+					bq = (bq < 0 ? 0 : bq) + sk.s[j].bq;
 				o += oj;
 				n += fdt_preg_ring_count(r, j, oj);
 			}
@@ -479,6 +484,7 @@ uint32_t fdt_preg_backlog(struct fdt_preg *r, int64_t t, int64_t now_us)
 		s->Q = Q;
 		s->bo = o;
 		s->bn = n;
+		s->bq = bq;
 	}
 	return Q;
 }
@@ -842,7 +848,7 @@ static void summary_json(struct fdt_preg *r, struct jbuf *j, const struct fdt_ps
 	   s->t, r->vessel, fdt_pmode_name(r->mode), s->have_d ? "true" : "false", s->have_p ? "true" : "false",
 	   s->late_v, s->late_p1, s->outq, s->nsd);
 	if (s->have_Q)
-		jp(j, ",\"Q\":%u,\"o\":%" PRId64 ",\"n\":%" PRId64, s->Q, s->bo, s->bn);
+		jp(j, ",\"Q\":%u,\"o\":%" PRId64 ",\"bq\":%" PRId64 ",\"n\":%" PRId64, s->Q, s->bo, s->bq, s->bn);
 	else
 		jp(j, ",\"Q\":null");
 	if (s->have_p)

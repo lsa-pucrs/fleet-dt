@@ -100,7 +100,7 @@ Prefix `boat/b<i>/` with the vessel index i (1..M). All binary fields in network
 | `fleet/order` | GS | operation control software | 1 | JSON `{"t":…, "order":[names], "needed":[names]}` |
 | `fleet/throughput` | GS (from the GS radio) | channel monitor | 0 | JSON `{"t":…, "y":bytes, "Tb":s, "To":s}` |
 | `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "cap":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…], "a":{…}, "A":…, "Q":…, "Q_M":…, "Q_out":…, "Qi":{…}, "Qbar":{…}}` (topic indices from 1) |
-| `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "n", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `n` = Q_i(t) of the demand table and the o_i(t), n_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |
+| `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "bq", "n", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `bq`, `n` = Q_i(t) of the demand table and the o_i(t), its part in the output queue of the broker (-1 unknown) and n_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |
 
 The video publisher splits each JPEG frame into messages of at most `bound` bytes; the content of
 each message starts with an 8-byte header `frame:u32, k:u16, n:u16` (index of the frame, index of the
@@ -118,7 +118,9 @@ Both bridges use `cleansession true`, `bridge_max_packet_size` unset, `max_infli
 control bridges with QoS 1; `--data-qos 2` keeps the QoS 2 data bridge of the as2 stack of SPEC_v2.md). Patch
 `mosquitto/patches/0002-bridge-apply-set_tcp_nodelay.patch` applies `set_tcp_nodelay true` to the
 bridge sockets, and patch `0001-plugin_tick-keep-pending-deadline.patch` keeps the deadline of a
-plugin tick when another event wakes the broker, so phase 3 starts within 1 ms (R8).
+plugin tick when another event wakes the broker, so phase 3 starts within 1 ms (R8). Patch
+`0004-plugin-client-out-queued-bytes.patch` adds the plugin accessor `mosquitto_client_out_queued_bytes`
+(bytes of the output queue of a client not yet written to its socket) for o_i of the backlog (Section 5).
 
 Every MQTT client of Fleet-DT sets TCP_NODELAY on its socket (paho-mqtt leaves Nagle's algorithm
 on): without it, a small PUBLISH that follows a PUBACK of the same client waits for the delayed ACK of
@@ -136,19 +138,35 @@ in the order of the DTP field `order`. Without the demand table or the priority 
 vessel regulator withholds every message of step t. A topic with no raw message in the last
 `--idle` steps (default 8) gets d_{i,l}(t) = 0 from the DTI program.
 
-Backlog. The demand table carries Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t)), computed at the start of phase 1:
-o_i(t) = bytes in the send queue of the TCP socket of the data bridge not yet sent or not yet acknowledged
-(SIOCOUTQ) and n_i(t) = forwarded MQTT PUBLISH packets with at least one byte among those o_i(t) bytes;
-Q_i(t) = 0 when o_i = 0 and when the socket cannot be read (no data bridge, SIOCOUTQ unavailable). The socket
-belongs to the vessel broker, so the vessel regulator (the broker plugin, which finds the socket by its local
-port, `vessel/regulator/fdt_sock.c`) computes Q_i(t). It keeps a ring (FIFO, 16384 packets per socket) of the
-byte lengths of the PUBLISH packets that the broker writes to the data-bridge socket, in write order
-(MOSQ_EVT_MESSAGE_OUT; the length of the MQTT 3.1.1 packet); at the start of phase 1 it walks the ring from the
+Backlog. The demand table carries Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t)), computed at the start of phase 1.
+o_i(t) bounds from above the bytes of the data-bridge connection that the channel has not carried yet:
+o_i(t) = SIOCOUTQ of the TCP socket of the data bridge (bytes not yet sent or not yet acknowledged) + the bytes
+that the vessel broker still holds in its output queue for the data-bridge client and has not written to the
+socket (the remaining `to_process` of every queued packet, the unwritten tail of a partly written packet
+included; accessor `mosquitto_client_out_queued_bytes` of patch 0004). SIOCOUTQ alone misses these bytes, and
+they exist exactly when the socket is full, which is the backlog case. n_i(t) = forwarded MQTT PUBLISH packets
+with at least one byte among those o_i(t) bytes. Q_i(t) = 0 when o_i = 0 and when the socket cannot be read
+(no data bridge, SIOCOUTQ unavailable). The socket and the queue belong to the vessel broker, so the vessel
+regulator (the broker plugin, which finds the socket by its local port, `vessel/regulator/fdt_sock.c`)
+computes Q_i(t). It keeps a ring (FIFO, 16384 packets per socket) of the byte lengths of the PUBLISH packets
+that the broker hands to the data-bridge client, in order (MOSQ_EVT_MESSAGE_OUT, which comes before the broker
+queues the packet; the length of the MQTT 3.1.1 packet); at the start of phase 1 it walks the ring from the
 newest packet back, summing the lengths until the sum reaches o_i(t), and n_i(t) is the number of packets
-visited (every packet of the ring when the ring holds fewer bytes). With `plugin_opt_demand external` the DTI
-program writes Q_i = 0 and the plugin overwrites the 4 bytes in place when the table enters the vessel broker
-(MOSQ_EVT_MESSAGE_IN, before the broker routes it to the control bridge), at start(t) + offset; with
-`internal` the regulator writes Q_i(t) when it builds the table. The step log records `Q`, `o` and `n`.
+visited. With `plugin_opt_demand external` the DTI program writes Q_i = 0 and the plugin overwrites the 4 bytes in
+place when the table enters the vessel broker (MOSQ_EVT_MESSAGE_IN, before the broker routes it to the control
+bridge), at start(t) + offset; with `internal` the regulator writes Q_i(t) when it builds the table. The step
+log records `Q`, `o`, `bq` (the broker part of o) and `n`.
+
+Limits: (1) a broker without patch 0004 has no accessor; the plugin (weak symbol) then logs a warning at start,
+writes `bq` = -1 and uses SIOCOUTQ alone, which is not an upper bound when the socket is full. (2) The bytes of
+non-PUBLISH packets of the connection (PINGRESP, 2 bytes; CONNACK and SUBACK at the connection) are in o_i but
+not in the ring, so the walk charges them to PUBLISH packets and n_i can exceed the exact count by one packet
+(the bound stays an upper bound). (3) When the ring holds fewer bytes than o_i (more than 16384 packets
+queued), n_i counts every packet of the ring. The alternative without a patch, o_i = bytes handed to the client
+since an anchor minus tcpi_bytes_acked, needs the non-PUBLISH bytes that the broker writes (PINGRESP after each
+PINGREQ of the bridge client, which sends nothing else under QoS 0) and an anchor taken while the broker queue is
+empty; it is not an upper bound in every case, so the regulator does not use it.
+
 The AS takes Q(t) of the vessels of M(t) and of the vessels outside M(t) (phase 2, Section 2), and vertex i of
 G(t) keeps Q_i(t), its membership in M(t) and, outside M(t), the bound Qbar_i(t) (`vertices` of the DTA).
 

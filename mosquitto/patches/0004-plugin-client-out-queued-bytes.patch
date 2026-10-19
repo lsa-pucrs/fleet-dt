@@ -1,0 +1,56 @@
+--- a/include/mosquitto/broker.h
++++ b/include/mosquitto/broker.h
+@@ -623,6 +623,16 @@
+ 
+ 
+ /*
++ * Function: mosquitto_client_out_queued_bytes
++ *
++ * Bytes that the broker holds in its output queue for the client and has not
++ * yet written to the socket (the remaining to_process of every queued packet,
++ * the unwritten tail of a partly written packet included), or -1 on error.
++ */
++mosq_EXPORT int64_t mosquitto_client_out_queued_bytes(const struct mosquitto *client);
++
++
++/*
+  * Function: mosquitto_client_clean_session
+  *
+  * Retrieve the clean session flag value for a client.
+--- a/src/linker.syms
++++ b/src/linker.syms
+@@ -14,6 +14,7 @@
+ 	mosquitto_client_id_hashv;
+ 	mosquitto_client_keepalive;
+ 	mosquitto_client_port;
++	mosquitto_client_out_queued_bytes;
+ 	mosquitto_client_protocol;
+ 	mosquitto_client_protocol_version;
+ 	mosquitto_client_sub_count;
+--- a/src/plugin_public.c
++++ b/src/plugin_public.c
+@@ -89,6 +89,24 @@
+ }
+ 
+ 
++BROKER_EXPORT int64_t mosquitto_client_out_queued_bytes(const struct mosquitto *client)
++{
++	struct mosquitto *mosq = (struct mosquitto *)client;
++	struct mosquitto__packet *packet;
++	int64_t bytes = 0;
++
++	if(!mosq){
++		return -1;
++	}
++	COMPAT_pthread_mutex_lock(&mosq->out_packet_mutex);
++	for(packet = mosq->out_packet; packet; packet = packet->next){
++		bytes += packet->to_process;
++	}
++	COMPAT_pthread_mutex_unlock(&mosq->out_packet_mutex);
++	return bytes;
++}
++
++
+ BROKER_EXPORT bool mosquitto_client_clean_session(const struct mosquitto *client)
+ {
+ 	if(client){

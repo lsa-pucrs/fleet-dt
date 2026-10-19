@@ -395,6 +395,59 @@ static void test_backlog(void)
 	fdt_preg_free(&r);
 }
 
+/* the socket is full: the broker holds the tail of the queue (bq); o_i = SIOCOUTQ + bq and n_i counts the packets,
+ * newest first, that hold any of these bytes */
+static void test_backlog_full_socket(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	uint32_t t, Q, d[FDT_L_MAX];
+	fdt_preg_opts_default(&o);
+	start_at(&r, &o, 90);
+	raw(&r, IMU, 48, S(89) + 15000, 1);
+	/* 20 packets of 1400 bytes written in order: the socket holds 16384 bytes (11.7 packets, the head of the
+	 * oldest of them partly acknowledged), the broker the last 4 packets and 600 bytes of the fifth newest */
+	for (int k = 0; k < 20; k++)
+		fdt_preg_on_out(&r, 0, 1400);
+	fake.n = 1;
+	fake.s[0].outq = 16384;
+	fake.s[0].bq = 4 * 1400 + 600;
+	fdt_preg_tick(&r, S(90));
+	int64_t ob = 16384 + 4 * 1400 + 600;                    /* 22584 bytes not yet carried */
+	int64_t nb = (ob + 1399) / 1400;                          /* 17 packets hold some of them */
+	CHECK(fdt_preg_ring_count(&r, 0, ob) == nb && nb == 17);
+	struct fdt_pstep *st = fdt_preg_step(&r, 90);
+	CHECK(st && st->have_Q && st->bo == ob && st->bq == 4 * 1400 + 600 && st->bn == nb);
+	CHECK(st && st->Q == fdt_p_backlog(&D, ob, nb));
+	const struct sent *s = find_topic("boat/b1/demand", 0);
+	CHECK(s && fdt_demand_decode(s->p, s->len, D.L, &t, &Q, d) == 0 && t == 90 && Q == fdt_p_backlog(&D, ob, nb));
+	/* SIOCOUTQ alone misses the tail: the bound with bq exceeds it by the 6200 bytes and their 5 packets */
+	CHECK(Q > fdt_p_backlog(&D, 16384, (16384 + 1399) / 1400));
+	CHECK(Q - fdt_p_backlog(&D, 16384, 12) >= (uint32_t)floor(D.c_b * 6200 + D.c_k * 5) - 1);
+	/* a broker without patch 0004 (bq unknown): SIOCOUTQ alone, and the step log says bq = -1 */
+	fake.s[0].bq = -1;
+	int from = nsent;
+	fdt_preg_tick(&r, S(91));
+	st = fdt_preg_step(&r, 91);
+	CHECK(st && st->bo == 16384 && st->bq == -1 && st->bn == 12);
+	const struct sent *sm = find_topic("boat/b1/regulator", from);
+	if (sm) {
+		cJSON *j = cJSON_ParseWithLength((const char *)sm->p, sm->len);
+		CHECK(j && cJSON_GetObjectItem(j, "o")->valuedouble == ob && cJSON_GetObjectItem(j, "bq")->valuedouble == 6200 &&
+		      cJSON_GetObjectItem(j, "n")->valuedouble == nb);
+		cJSON_Delete(j);
+	} else {
+		CHECK(sm != NULL);
+	}
+	/* an empty socket and an empty broker queue: Q_i = 0 */
+	fake.s[0].outq = 0;
+	fake.s[0].bq = 0;
+	fdt_preg_tick(&r, S(92));
+	st = fdt_preg_step(&r, 92);
+	CHECK(st && st->Q == 0 && st->bn == 0);
+	fdt_preg_free(&r);
+}
+
 /* wire format of the demand table: t, L, Q, d_1..d_L in network byte order */
 static void test_demand_wire(void)
 {
@@ -1059,6 +1112,7 @@ int main(void)
 	test_demand();
 	test_ring();
 	test_backlog();
+	test_backlog_full_socket();
 	test_demand_wire();
 	test_forward();
 	test_no_table();

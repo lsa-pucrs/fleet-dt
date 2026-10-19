@@ -238,7 +238,7 @@ scenarios of `--lag-exempt`, default S2, count only by the steps above 1 ms, see
 | Data NIC | `-netdev dgram` UDP 127.0.0.1: QEMU `41000+2h`, emulator `41001+2h`; MAC `52:54:00:fd:00:hh`; IP 10.10.0.1 (GS), 10.10.0.(10+i); permanent neighbor entries, no ARP, IPv6 off (`ipv6.disable=1`); route `10.10.0.0/24 quickack 1 rto_min 20ms`; `tcp_slow_start_after_idle=0` (`fdt-netsetup`) |
 | Management | `-netdev user`: ssh on 127.0.0.1:`2300+h`, GS broker 1883 on 127.0.0.1:2883; vsock CID `100+h` |
 | Clock | GS: chrony with `refclock PHC /dev/ptp0` (ptp_kvm, the host clock) and `allow 10.10.0.0/24`. Vessel: before chronyd, `fdt-clockinit` sets CLOCK_REALTIME to the host clock read through ptp_kvm plus an offset U[−50, 50] ms and the frequency error U[−50, 50] ppm (ADJ_FREQUENCY); chronyd then follows `10.10.0.1` over the emulated channel only, `minpoll 0 maxpoll 2`, no `makestep` (slew only) |
-| Stack | `/opt/mosquitto-2.1` (cJSON 1.7.19, Mosquitto 2.1.2 + patches 0001, 0002, built by `mosquitto/build.sh`), python3-paho-mqtt, numpy, chrony, nftables, iproute2, iperf3, build-essential; the repository is copied at run time |
+| Stack | `/opt/mosquitto-2.1` (cJSON 1.7.19, Mosquitto 2.1.2 + the patches of `mosquitto/patches/` (0004, the broker queue in o_i of the backlog, needs an image rebuild), built by `mosquitto/build.sh`), python3-paho-mqtt, numpy, chrony, nftables, iproute2, iperf3, build-essential; the repository is copied at run time |
 
 Tarballs (`vm/dist.sha256`, `~/fleetdt-deploy/emu/dist/`): `mosquitto-2.1.2.tar.gz` from mosquitto.org
 (GPG signature of Roger Light, key A0D6 EEA1 DCAE 49A6 35A3 B2F0 779B 22DF B3E7 17B7, verified; no sha256 is

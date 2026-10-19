@@ -14,9 +14,10 @@
  *                  in the last `idle` steps. off = 0 by default (no phase-1 offset). With demand
  *                  "external" the regulator publishes nothing and takes D_i(t) from the DTI program
  *                  (vessel/dti/fdt_dti) as it passes through the vessel broker on boat/b<i>/demand.
- *                  Backlog: Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t)) (fdt_preg_backlog), o_i the SIOCOUTQ of
- *                  the data-bridge socket read through io.sock at the start of phase 1 and n_i the PUBLISH
- *                  packets with at least one byte among those o_i bytes: the core keeps a ring of the
+ *                  Backlog: Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t)) (fdt_preg_backlog), o_i = SIOCOUTQ of the
+ *                  data-bridge socket + the bytes that the broker still holds in its output queue for the
+ *                  data-bridge client (bq of io.sock; patch 0004), read at the start of phase 1, and n_i the
+ *                  PUBLISH packets with at least one byte among those o_i bytes: the core keeps a ring of the
  *                  lengths of the PUBLISH packets written to each data-bridge socket in write order
  *                  (fdt_preg_on_out, from MOSQ_EVT_MESSAGE_OUT) and walks it from the newest packet back
  *                  until the lengths sum to o_i or more; n_i = the packets visited (all of the ring when
@@ -142,6 +143,7 @@ struct fdt_pstep {
 	int have_Q;                    /* Q_i(t) computed at the start of phase 1 */
 	uint32_t Q;                    /* backlog Q_i(t) of the demand table */
 	int64_t bo, bn;                /* its o_i(t) and n_i(t) (-1: no data-bridge socket) */
+	int64_t bq;                    /* the part of o_i(t) in the output queue of the broker (-1: unknown) */
 	uint32_t seq[FDT_L_MAX];       /* next sequence number of the topic in the step */
 	uint32_t rx[FDT_L_MAX];        /* raw messages of the step */
 	uint32_t fwd[FDT_L_MAX];       /* messages of the step forwarded in the step */

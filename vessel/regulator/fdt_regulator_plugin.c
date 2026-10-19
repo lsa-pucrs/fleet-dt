@@ -50,7 +50,10 @@
  *                                               and writes the backlog Q_i(t) into it (below)
  *
  * Backlog Q_i(t) = ceil(c_b o_i + c_k n_i) of the demand table (mode paper, SPEC.md Section 5), read at the
- * start of phase 1: o_i = SIOCOUTQ of the data-bridge socket (fdt_sock_read), n_i = the PUBLISH packets with at
+ * start of phase 1: o_i = SIOCOUTQ of the data-bridge socket (fdt_sock_read) + the bytes that the broker still
+ * holds in its output queue for the data-bridge client and has not written to the socket (the accessor
+ * mosquitto_client_out_queued_bytes of patch 0004, mosquitto/patches/; a broker without the patch leaves it
+ * unknown, o_i is then SIOCOUTQ alone and the plugin warns at start), n_i = the PUBLISH packets with at
  * least one byte among those o_i bytes. MOSQ_EVT_MESSAGE_OUT gives each PUBLISH that the broker writes to a
  * data bridge; the plugin passes its length (MQTT 3.1.1, fdt_p_publish_len) to the ring of the core
  * (fdt_preg_on_out), which walks it from the newest packet back at phase 1. With demand external the DTI
@@ -74,6 +77,10 @@
 #include "fdt_sock.h"
 
 MOSQUITTO_PLUGIN_DECLARE_VERSION(5);
+
+/* patch 0004 (mosquitto/patches/0004-plugin-client-out-queued-bytes.patch): unwritten bytes of the output
+ * queue of a client; weak, so the plugin also loads into a broker without the patch (the address is NULL) */
+extern int64_t mosquitto_client_out_queued_bytes(const struct mosquitto *client) __attribute__((weak));
 
 struct dsock {
 	const struct mosquitto *client;
@@ -133,6 +140,8 @@ static void io_sock(void *ctx, struct fdt_sock *s)
 		s->s[k].outq = si.outq;
 		s->s[k].acked = si.acked;
 		s->s[k].has_acked = si.has_acked;
+		s->s[k].bq = (g.paper && mosquitto_client_out_queued_bytes && g.ds[k].client)
+		                 ? mosquitto_client_out_queued_bytes(g.ds[k].client) : -1;
 	}
 	s->n = any ? g.n_ports : 0;
 }
@@ -397,6 +406,10 @@ static int init_paper(mosquitto_plugin_id_t *identifier, const char *dtp_path, c
 		return MOSQ_ERR_NOMEM;
 	}
 	mosquitto_plugin_set_info(identifier, "fdt_regulator", "paper");
+	if (!mosquitto_client_out_queued_bytes)
+		mosquitto_log_printf(MOSQ_LOG_WARNING, "fdt_regulator: broker without patch 0004 "
+		                     "(mosquitto_client_out_queued_bytes): o_i of the backlog omits the bytes that the broker "
+		                     "still queues for the data bridge");
 	if (register_callbacks(identifier))
 		return MOSQ_ERR_UNKNOWN;
 	mosquitto_log_printf(MOSQ_LOG_NOTICE,
