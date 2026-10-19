@@ -8,9 +8,9 @@ The GS broker opens two bridges per vessel i: b<i>-ctl to vessel:1883 (demand an
 the vessel regulator in, priority table and goals out, QoS 1) and b<i>-data to vessel:1884, the
 dedicated listener of the data bridge (boat/b<i>/tx/# in, QoS 1: the paper forwards both levels with
 QoS 1 and the GS removes repeated copies by the pair (t, s); --data-qos 2 keeps the QoS 2 subscription
-of the as2 stack, whose regulator forwards the required topics with QoS 2). Both brokers disable Nagle's algorithm on every socket (set_tcp_nodelay and
-patch 0002 for the bridge sockets) and set no limit on the QoS 1/2 messages in flight
-(max_inflight_messages 0, PR9, SPEC_v2 Section 5).
+of the as2 stack, whose regulator forwards the required topics with QoS 2). Both brokers disable Nagle's
+algorithm on every socket (set_tcp_nodelay and patch 0002 for the bridge sockets) and set no limit on the
+QoS 1/2 messages in flight (max_inflight_messages 0, PR9, SPEC_v2 Section 5).
 
 Baseline B2 (--b2): the data bridge splits into one bridge per DSCP class, each over its own TCP
 connection to its own listener of the vessel broker, so the vessel marks each class by its port
