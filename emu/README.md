@@ -265,8 +265,8 @@ published) and `cJSON-1.7.19.tar.gz` = GitHub tag archive v1.7.19.
 ### Fixed bytes per frame h_W (DTP fields `h_W`, `T_DIFS`, `T_bo`)
 
 `h_W` converts the fixed time of one frame exchange of the emulated PHY into bytes at R_PHY, so the cost
-bound of the paper (C6: c_b = 1 + 2 (h_T + h_W) / MSS, c_m,l = c_b h_P,l + 2 (h_T + h_W) +
-3 (h_A + 2 h_T + 2 h_W)) and the saturation throughput C(t) of `replay_subsets.py` count channel bytes in
+bound of the paper (eq. cons: c_b = 1 + 2 (h_T + h_W) / MSS, c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W),
+c_m,l = c_b h_P,l + c_k) and the saturation throughput C(t) of `replay_subsets.py` count channel bytes in
 one unit. The values are those of `fdt-emu` (802.11g ERP-OFDM, short slot, QoS/EDCA, constant rate 24 Mb/s
 for data and control, `edca` of the scenarios: stations AC_BE AIFSN 3, CWmin 15) for a data frame of a
 vessel on its data bridge (AC_BE) and its MAC ACK:
@@ -290,9 +290,11 @@ the AIFS and the backoff as idle time, so Ts − T_busy(t) holds them already. T
 CWmin 7 (its frames carry the TCP acknowledgments and the MQTT control packets of the GS); h_W takes the
 station values, the larger ones, for every frame. With 1500-byte IP packets, 1500 + h_W − 202.5 = 1867.75
 bytes (622.6 µs) match T_succ = 623 µs of `eta.py edca`. The per-message overhead is large: with h_T = 80 and
-h_A = 4, c_b = 1.898 and c_m,l ≈ 5.26 kB (a QoS 2 message costs 8 frames: PUBLISH, PUBREC, PUBREL, PUBCOMP and
-a TCP acknowledgment of each), so the telemetry of one vessel declares 85678 bytes per step
-(`tests/test_video_layers.py`).
+h_A = 4, c_b = 1.898, c_k = 1300.5 + 1304.5 = 2605 bytes and c_m,l = c_b h_P,l + c_k ≈ 2.6 kB (2643 to 2654
+bytes for the topics of `dtp.json`; a QoS 1 message costs 4 frames: its last segment, the PUBACK and the TCP
+acknowledgment of each), so the telemetry of one vessel declares 43934 bytes per step (16 messages;
+`tests/test_video_layers.py`). With M = 4 and C = 320000 bytes per step, b(t) = U C (T3 − T_m) / (Ts M) =
+48640 bytes (T_m = 0) admits it and leaves 4706 bytes per vessel for the video layers.
 
 ### Monitor batch (PR6)
 

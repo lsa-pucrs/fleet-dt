@@ -270,16 +270,12 @@ def forwarded_over_demand(d, vessel, scale, steps=600, seed=1001, delay_ms=3.0, 
     return {n: sum(v[1:]) / ((steps - 1) * dem[n]) for n, v in acc.items()}, held
 
 
-# Under the cost bound of the paper (C6) with h_W of the 802.11g PHY (570.25 bytes), a message costs
-# c_m,l = 5252 to 5263 channel bytes besides c_b (x + 6), c_b = 1.898, so the telemetry of one vessel declares
-# 85678 bytes per step (16 messages) and a layer topic at least about 5.3 kB. With M = 4 the telemetry alone
-# declares 342712 bytes > C = 320000 bytes per step, and with one message per layer the fleet declares about
-# 683 kB > 2 C: plan_for_rho finds no video setting, and b(t) = 48640 bytes does not even admit the telemetry
-# of a vessel (Algorithm 1 admits state, imu and gps). The M = 4 cells stay here as strict expected failures
-# until the experiment design changes (C, U, the telemetry rates, or a cost bound per QoS level).
-_M4 = pytest.mark.xfail(strict=True, raises=ValueError,
-                        reason="C6 cost bound: the M = 4 telemetry and one message per layer exceed rho C")
-CELLS = [(2, 1.5), (2, 2.0), pytest.param(4, 1.5, marks=_M4), pytest.param(4, 2.0, marks=_M4)]
+# Under the cost bound of the paper (eq. cons) with h_W of the 802.11g PHY (570.25 bytes), a QoS 1 message costs
+# c_m,l = c_b h_P,l + c_k = 2643 to 2654 channel bytes besides c_b (x + 6), c_b = 1.898, c_k = 2605 (the last
+# segment, the PUBACK and the TCP acknowledgment of each), so the telemetry of one vessel declares 43934 bytes per
+# step (16 messages). With M = 4, b(t) = 48640 bytes at C = 320000 bytes per step admits the telemetry of every
+# vessel and leaves 4706 bytes per vessel for the video layers; plan_for_rho finds a setting for every cell.
+CELLS = [(2, 1.5), (2, 2.0), (4, 1.5), (4, 2.0)]
 
 
 @pytest.mark.parametrize("M,rho", CELLS)
@@ -318,24 +314,27 @@ def test_cell_fill_and_use_of_the_demand(M, rho, capsys, tmp_path):
               "admitted; fill f = %.3f, per-step variation mean f = %.3f (min %.3f); forwarded / declared per "
               "layer: mean %.3f, min %.3f" % (M, rho, plan["fps"], plan["frame_cap"], plan["scale"], plan["rho"], b,
                                                n_layers, f, np.mean(fv), min(fv), mean, lo))
-    assert FILL_MIN <= f <= 0.99
+    assert FILL_MIN <= f <= 1.0                            # Algorithm 1 keeps a_i <= b
     assert np.mean(fv) >= FILL_MIN
     assert 1 <= n_layers < 16
     assert lo >= USE_MIN
 
 
-def test_m4_telemetry_exceeds_the_grant_limit():
-    """The numbers behind the M = 4 expected failures (C6 cost bound, h_W = 570.25 bytes)."""
+def test_m4_telemetry_fits_the_grant_limit():
+    """The M = 4 numbers of the cells (cost bound of eq. cons, h_W = 570.25 bytes): the telemetry of one vessel
+    declares 43934 bytes per step, b(t) = 48640 bytes at C = 320000 admits it and leaves 4706 bytes for video."""
     d = base_dtp()
     names = [t["name"] for t in d["topics"]]
     tel = sum(vl.channel_demand(d, n, jitter_s=J_DTI) for n in TELEMETRY)
-    assert tel == 85678
+    assert tel == 43934
     dtp = DTP.from_dict(d)
+    assert dtp.c_k == pytest.approx(2605.0)
     b4 = grant_limit(C_STEP, dtp.U, dtp.T3, dtp.Ts, 4)
-    assert 4 * tel > C_STEP and tel > b4
+    assert b4 == pytest.approx(48640.0) and b4 - tel == pytest.approx(4706.0)
+    assert 4 * tel < C_STEP and tel < b4
     D = {i: [vl.channel_demand(vl.resolve_vessel(d, i), n, jitter_s=J_DTI) for n in names] for i in range(1, 5)}
     p = admission(D, [dtp.index(n) for n in dtp.order], [dtp.index(n) for n in dtp.needed], b4)
-    assert [n for n, v in zip(names, p) if v > 0] == ["state", "imu", "gps"]
+    assert [n for n, v in zip(names, p) if v > 0] == TELEMETRY
 
 
 def test_dtp_json_default_cell_use():

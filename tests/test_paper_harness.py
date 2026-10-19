@@ -222,8 +222,9 @@ def test_dtp_v2_without_cost_takes_the_paper_bound():
     d = DTP.from_dict(DTP2)
     assert d.c_b == pytest.approx(1 + 160 / 1448)
     assert publish_header(4, "state", 48) == 22
-    # C6: c_m = c_b h_P + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W) with h_W = 0
-    assert d.topic_c_m(1) == pytest.approx(d.c_b * 22 + 160 + 492)
+    # eq. cons: c_m = c_b h_P + c_k, c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W) with h_W = 0
+    assert d.c_k == pytest.approx(160 + 164)
+    assert d.topic_c_m(1) == pytest.approx(d.c_b * 22 + 160 + 164)
     assert d.specs[1].rate == 240 and d.specs[1].bound == 1400
     assert d.message_bytes(1, 48) == pytest.approx(d.c_b * 54 + d.topic_c_m(1))
     # a file with c_b and c_m keeps them
@@ -232,7 +233,11 @@ def test_dtp_v2_without_cost_takes_the_paper_bound():
     # the values of tests/c/test_reg_paper.c with h_W = 570.25 (802.11g ERP-OFDM, emu/README.md)
     w = DTP.from_dict(dict(DTP2, h_W=570.25))
     assert w.c_b == pytest.approx(1 + 1300.5 / 1448)
-    assert w.topic_c_m(1) == pytest.approx(w.c_b * 22 + 1300.5 + 3913.5)
+    assert w.c_k == pytest.approx(1300.5 + 1304.5)
+    assert w.topic_c_m(1) == pytest.approx(w.c_b * 22 + 1300.5 + 1304.5)
+    # a file with c_k keeps it (the rule of common/fdt_paper.c)
+    k2 = DTP.from_dict(dict(DTP2, c_k=100))
+    assert k2.c_k == 100 and k2.topic_c_m(1) == pytest.approx(k2.c_b * 22 + 100)
 
 
 def _build_pdtp_dump(tmp):
@@ -252,8 +257,8 @@ def _build_pdtp_dump(tmp):
 
 @pytest.mark.parametrize("vessel", [None, 1, 4])
 def test_cost_bound_c_equals_python(tmp_path, vessel):
-    """C6: the C reader (common/fdt_paper.c), fleetdt/as_model.py and video_layers.cost_bound give the same
-    c_b and c_m,l, and fdt_p_demand the same d_l as video_layers.channel_demand, on dtp.json (h_W of the
+    """eq. cons: the C reader (common/fdt_paper.c), fleetdt/as_model.py and video_layers.cost_bound give the
+    same c_b, c_k and c_m,l, and fdt_p_demand the same d_l as video_layers.channel_demand, on dtp.json (h_W of the
     802.11g PHY, no "c_b"/"c_m" in the file) and on the per-vessel DTPs of video_layers.resolve_vessel."""
     exe = _build_pdtp_dump(str(tmp_path))
     if exe is None:
@@ -274,7 +279,8 @@ def test_cost_bound_c_equals_python(tmp_path, vessel):
         assert t["c_m"] == pytest.approx(dtp.topic_c_m(l), rel=1e-15) == pytest.approx(c_m, rel=1e-15)
         assert c_b == pytest.approx(out["c_b"], rel=1e-15)
         h_P = publish_header(max(d["vessels"]), t["name"], dtp.specs[l - 1].bound)
-        assert t["c_m"] == pytest.approx(c_b * h_P + 2 * (80 + 570.25) + 3 * (4 + 2 * 80 + 2 * 570.25), rel=1e-15)
+        assert t["c_m"] == pytest.approx(c_b * h_P + 2 * (80 + 570.25) + (4 + 2 * 80 + 2 * 570.25), rel=1e-15)
+        assert t["c_k"] == pytest.approx(dtp.c_k, rel=1e-15) == pytest.approx(2605.0, rel=1e-15)
         assert t["d"] == vl.channel_demand(d, t["name"], jitter_s=J)
 
 

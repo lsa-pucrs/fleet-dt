@@ -3,6 +3,7 @@ exponential smoothing (eq. 2), grant limit (eq. 3), Algorithm 1 (admission contr
 grants of baseline B7, and the cost bound of the channel bytes of the forwarded messages."""
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -17,7 +18,7 @@ def _varint_bytes(v: int) -> int:
 
 
 def publish_header(V: int, name: str, s: int) -> int:
-    """h_P,l: PUBLISH header (QoS 2) of a message of s content bytes plus the step header on
+    """h_P,l: PUBLISH header (QoS 1) of a message of s content bytes plus the step header on
     boat/b<V>/tx/<name>, the packet minus the payload (common/fdt_paper.c)."""
     tl = len(("boat/b%d/tx/%s" % (max(1, V), name)).encode())
     rem = 2 + tl + 2 + STEP_HEADER_BYTES + s
@@ -25,17 +26,32 @@ def publish_header(V: int, name: str, s: int) -> int:
 
 
 def cost_c_b(h_T: float, h_W: float, mss: float) -> float:
-    """c_b of the cost bound of the paper (C6): 1 + 2 (h_T + h_W) / MSS (a full segment of MSS content
+    """c_b of the cost bound of the paper (eq. cons): 1 + 2 (h_T + h_W) / MSS (a full segment of MSS content
     bytes carries h_T + h_W bytes of headers and fixed frame time, and its TCP acknowledgment as many)."""
     return 1.0 + 2.0 * (h_T + h_W) / mss
 
 
+def cost_c_k(h_T: float, h_W: float, h_A: float) -> float:
+    """c_k of the cost bound of the paper (eq. cons), the expression of common/fdt_paper.c in the same order:
+    2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W): the TCP/IP header and the frame of the last segment of a message
+    and of its TCP acknowledgment, and the PUBACK of QoS 1 (h_A bytes) in its own segment and frame with its
+    own TCP acknowledgment."""
+    return 2.0 * (h_T + h_W) + (h_A + 2.0 * h_T + 2.0 * h_W)
+
+
 def cost_c_m(c_b: float, h_P: float, h_T: float, h_W: float, h_A: float) -> float:
-    """c_m,l of the cost bound of the paper (C6), the expression of common/fdt_paper.c in the same order:
-    c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W). The last term charges three MQTT control packets
-    of h_A bytes (QoS 2: PUBREC, PUBREL, PUBCOMP; QoS 1 needs one, PUBACK), each in its own segment and
-    frame and with its own TCP acknowledgment."""
-    return c_b * h_P + 2.0 * (h_T + h_W) + 3.0 * (h_A + 2.0 * h_T + 2.0 * h_W)
+    """c_m,l = c_b h_P,l + c_k of the cost bound of the paper (eq. cons), the expression of common/fdt_paper.c
+    in the same order."""
+    return c_b * h_P + cost_c_k(h_T, h_W, h_A)
+
+
+def backlog_bytes(c_b: float, c_k: float, o: float, k: float) -> int:
+    """Q_i = ceil(c_b o + c_k k) of o unsent or unacknowledged bytes of the data-bridge socket and k forwarded
+    QoS 1 messages without PUBACK (fdt_p_backlog of common/fdt_paper.c); 0 when o = k = 0."""
+    o, k = max(0.0, float(o)), max(0.0, float(k))
+    if o == 0.0 and k == 0.0:
+        return 0
+    return int(min(4294967295.0, math.ceil(c_b * o + c_k * k - 1e-9)))
 
 
 def h_W_busy(h_W: float, R_PHY: float, T_DIFS: float, T_bo: float) -> float:
@@ -68,6 +84,7 @@ class DTP:
     C0: float = 300_000.0   # initial prediction, bytes per step
     c_b: float = 1.0        # c(x, n) = c_b x + c_m n (eq. 5)
     c_m: float = 0.0
+    c_k: float = 0.0        # per-message term of the cost bound without the PUBLISH header (eq. cons)
     epoch: Optional[float] = None   # Unix time of the start of step 0 of the operation
     R_PHY: float = 24e6             # bit rate of the radios, bit/s
     h_W: float = 0.0                # bytes that the PHY sends at R_PHY in the fixed time of one frame
@@ -121,11 +138,11 @@ class DTP:
     def from_dict(d: Dict) -> "DTP":
         """DTP of SPEC.md (topics with "rate" in messages per second and "bound") or DTP v2 of SPEC_v2.md
         (topics with "rate" in outputs per second, "n" messages per output and "s"; rate becomes n rate
-        and bound s). Without "c_b" (or "c_m") in the file, the cost bound of the paper (C6) applies, the
-        rule of common/fdt_paper.c: c_b = 1 + 2 (h_T + h_W) / MSS and, per topic,
-        c_m,l = c_b h_P,l + 2 (h_T + h_W) + 3 (h_A + 2 h_T + 2 h_W) (function cost_bound), with MSS, h_T
-        of "tcp" (1448, 80), h_A of "mqtt" (4, one MQTT control packet), h_W of the file (0) and h_P,l the
-        PUBLISH header of boat/b<V>/tx/<name> (QoS 2, V the largest vessel index)."""
+        and bound s). Without "c_b" (or "c_m") in the file, the cost bound of the paper (eq. cons) applies,
+        the rule of common/fdt_paper.c: c_b = 1 + 2 (h_T + h_W) / MSS, c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W)
+        (unless the file gives "c_k") and, per topic, c_m,l = c_b h_P,l + c_k, with MSS, h_T of "tcp"
+        (1448, 80), h_A of "mqtt" (4, one MQTT control packet), h_W of the file (0) and h_P,l the PUBLISH
+        header of boat/b<V>/tx/<name> (QoS 1, V the largest vessel index)."""
         d = dict(d)
         specs = []
         topics = d.get("topics", [])
@@ -142,11 +159,13 @@ class DTP:
         h_T, mss, h_A = float(tcp.get("h_T", 80)), float(tcp.get("mss", 1448)), float(mqtt.get("h_A", 4))
         if d.get("c_b") is None:
             d["c_b"] = cost_c_b(h_T, h_W, mss)
+        if d.get("c_k") is None:
+            d["c_k"] = cost_c_k(h_T, h_W, h_A)
         if d.get("c_m") is None:
             d.pop("c_m", None)
             V = max([int(v) for v in d.get("vessels") or []] or [1])
             for t in specs:
-                t.c_m = cost_c_m(float(d["c_b"]), publish_header(V, t.name, int(t.bound)), h_T, h_W, h_A)
+                t.c_m = float(d["c_b"]) * publish_header(V, t.name, int(t.bound)) + float(d["c_k"])
         keys = {k: v for k, v in d.items() if k in DTP.__dataclass_fields__ and k != "specs"}
         dtp = DTP(**keys)
         dtp.specs = specs or [TopicSpec(name=n) for n in dtp.topics]
