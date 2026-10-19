@@ -8,7 +8,7 @@ export DEBIAN_FRONTEND=noninteractive
 sudo -E apt-get update -q > /dev/null
 echo "iperf3 iperf3/start_daemon boolean false" | sudo debconf-set-selections
 sudo -E apt-get install -y -q --no-install-recommends build-essential pkg-config python3 python3-paho-mqtt \
-	python3-numpy chrony nftables iproute2 iperf3 rsync ethtool tcpdump iputils-ping procps jq \
+	python3-numpy python3-aiohttp chrony nftables iproute2 iperf3 rsync ethtool tcpdump iputils-ping procps jq \
 	linux-perf ca-certificates > /dev/null
 sudo -E apt-get purge -y -q unattended-upgrades systemd-timesyncd > /dev/null 2>&1 || true
 sudo systemctl disable --now apt-daily.timer apt-daily-upgrade.timer man-db.timer e2scrub_all.timer fstrim.timer 2>/dev/null || true
@@ -42,6 +42,7 @@ sudo update-grub > /dev/null 2>&1
 sudo sed -i 's/^#\?MaxRetentionSec=.*/MaxRetentionSec=1week/' /etc/systemd/journald.conf
 { /opt/mosquitto-2.1/sbin/mosquitto -h 2>&1 || true; } | head -1
 python3 -c "import paho.mqtt; print('paho-mqtt', paho.mqtt.__version__)"
+python3 -c "import aiohttp; print('aiohttp', aiohttp.__version__)"   # fleetdt.ve live (VE collector of the GS)
 iperf3 --version | head -1
 /usr/sbin/chronyd --version
 ldd /usr/local/lib/fdt/fdt-freqshim.so > /dev/null && echo "fdt-freqshim.so: ok"

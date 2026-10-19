@@ -2,10 +2,12 @@
 """Clock probe of the emulated hosts (SPEC_v2.md Section 7, Clock).
 
 Every --period seconds, reads CLOCK_REALTIME of each VM over vsock (emu/vm/guest/fdt-clockd.py, port
-5000, CID 100+i) and logs, per VM, the offset of the VM clock to the host clock
-(vm - (t_send + t_recv)/2) and the vsock round-trip time.
+5000, CID 100+i) or over the virtio-serial port fdt.clock of the VM (unix socket of the QEMU chardev,
+--socks; hosts without access to /dev/vhost-vsock) and logs, per VM, the offset of the VM clock to the
+host clock (vm - (t_send + t_recv)/2) and the round-trip time.
 
   probe.py --cids 100,101,102 --names gs,v1,v2 --out clock.csv [--period 0.1]
+  probe.py --socks VMS/gs/clock.sock,VMS/v1/clock.sock --names gs,v1 --out clock.csv
   probe.py summary clock.csv [--after S]      per host: first offset, time until |offset| < 1 ms, and the
                                              |offset| statistics (us) from 10 s after that
 
@@ -21,6 +23,11 @@ PORT = 5000
 
 
 def connect(cid):
+    if isinstance(cid, str):            # unix socket of the virtio-serial chardev
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(0.5)
+        s.connect(cid)
+        return s
     s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
     s.settimeout(0.5)
     s.connect((cid, PORT))
@@ -28,7 +35,7 @@ def connect(cid):
 
 
 def probe(a):
-    cids = [int(x) for x in a.cids.split(",")]
+    cids = a.socks.split(",") if a.socks else [int(x) for x in a.cids.split(",")]
     names = a.names.split(",") if a.names else [str(c) for c in cids]
     socks = {c: None for c in cids}
     out = open(a.out, "a", buffering=1 << 16)
@@ -99,7 +106,9 @@ def main():
         summary(ap.parse_args())
         return
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--cids", required=True)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--cids")
+    g.add_argument("--socks", help="unix sockets of the virtio-serial clock ports, one per VM")
     ap.add_argument("--names", default="")
     ap.add_argument("--out", required=True)
     ap.add_argument("--period", type=float, default=0.1)

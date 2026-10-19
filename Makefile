@@ -66,6 +66,13 @@ $(B)/test_reg_paper: tests/c/test_reg_paper.c $(PREG) $(PREG_H) $(REG_H) $(COMMO
 $(B)/test_reg_paper_san: tests/c/test_reg_paper.c $(PREG) $(PREG_H) $(REG_H) $(COMMON) $(COMMON_H) | $(B)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANFLAGS) -o $@ tests/c/test_reg_paper.c $(PREG) $(COMMON) $(LDFLAGS) -lcjson -lm
 
+# user-space CPU cap of the vessel QEMUs (emu/vm/cpu_profile.py, mechanism "user"; no MOSQ needed)
+$(B)/fdt_cpucap: emu/vm/cpucap.c | $(B)
+	$(CC) -O2 -g -Wall -Wextra -o $@ emu/vm/cpucap.c
+
+$(B)/cpucap_probe: emu/vm/cpucap_probe.c | $(B)
+	$(CC) -O2 -g -Wall -o $@ emu/vm/cpucap_probe.c
+
 test-c: $(B)/test_reg $(B)/test_reg_paper
 	$(B)/test_reg
 	$(B)/test_reg_paper

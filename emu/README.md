@@ -539,6 +539,19 @@ comparison is between distributions. `matrix.py eval --yans E4` writes the cells
 | `--cpu-ratio R` | each vessel QEMU runs in a systemd user scope with CPUQuota = R of one CPU (`emu/vm/cpu_profile.py wrap`, inside the CPU pinning); off by default; `state.json` "cpu_ratio" |
 | `--clock-inject` | the `emu-host.json` of each vessel names `/etc/fleetdt/clock-schedule.json` in "clock", so `fdt-clockinit` sets only the offset and the frequency error comes from the schedule of each run (`"clock": {"inject": true}`) |
 
+### Rootless hosts (hydra: Rocky Linux 8.10, QEMU 6.2 of RHEL, cgroup v1, no root)
+
+| Item | i7-14700 host | Rootless host (detected at run time, env override) |
+|---|---|---|
+| Data NIC | `-netdev dgram` (QEMU >= 7.2) | `-netdev socket,udp=127.0.0.1:41001+2h,localaddr=127.0.0.1:41000+2h`: the same raw Ethernet frames in UDP datagrams (`FDT_QEMU_NETDEV`) |
+| Clock probe | vhost-vsock, CID 100+h | virtio-serial port `fdt.clock` on the unix socket `VMS/<host>/clock.sock` when `/dev/vhost-vsock` is not readable and writable (`FDT_CLOCK_CHANNEL`); `fdt-clockd.py` serves the port when the VM has it; `probe.py --socks` |
+| NoCloud seed | xorriso | `emu/vm/seed.py`: xorriso, genisoimage or mkisofs when present, else ISO 9660 with Joliet and Rock Ridge from pycdlib (`PYTHON` of `build_image.sh`) |
+| CPU ratio (`--cpu-ratio`) | systemd scope with CPUQuota (cpu controller delegated) | `build/fdt_cpucap` (`emu/vm/cpucap.c`, `cpu_profile.py mechanism` = user, `FDT_CPU_CAP`): the cpu.max rule in user space on the vessel QEMUs (perf task-clock per thread, poll 100 us, SIGSTOP at the quota, SIGCONT at the period boundary); statistics in `SESS/cpucap.json`, in result.json `cpu_profile` |
+| Emulator CPUs | P-core 4 + K | `FDT_EMU_CPUS_SLOTS="a,b;c,d;..."` (entry K for slot K); `runner.py` post-processing on `FDT_AUX_CPUS` |
+
+Environment of hydra: `~/fleetdt-emu/env.sh` (`FDT_EMU` on the local disk `/var/tmp/c.jones-fdt/emu`, `QEMU=/usr/libexec/qemu-kvm`,
+`FDT_NS3`, `MOSQ`, `CJSON_CFLAGS`/`CJSON_LIBS` for `build_host.sh`, the venv with paho-mqtt, numpy, scipy, aiohttp and pycdlib).
+
 ### Post-processing and E0 conformance
 
 `experiments/runner.py` post-processes a paper-stack run with `analysis/paper_post.py RUN` (the metrics of

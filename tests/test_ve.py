@@ -136,6 +136,36 @@ def test_assembler_puts_qbar_on_vessels_outside_M():
     assert g2.Q == 500 and g2.vertex(2).Qbar == 400 and g2.vertex(5).Qbar == 100 and not g2.vertex(5).member
 
 
+def test_assembler_emits_each_step_once():
+    """a datum of a step whose G(t) has closed is counted and dropped: a second, partial G(t) (no M(t), no
+    y(t)) would replace the first one for the readers of the DTA, and the eq. (2) replay would step back"""
+    dtp = DTP(topics=["state", "video"], Ts=0.125, T1=0.02, T2=0.01, alpha=0.5, U=0.8, C0=1000.0)
+    fc = FakeClock()
+    asm = Assembler(dtp, StepClock(dtp.Ts, 0.0, now=fc))
+    t = 20
+    start = t * dtp.Ts
+    asm.on_message("boat/b1/demand", encode_demand(t, [64, 5000]), at=start + 0.002)
+    asm.on_message("boat/b1/tx/video", encode_step_header(t, 0) + bytes(994), at=start + 0.06)
+    asm.on_message("fleet/throughput", json.dumps({"t": t, "y": 900.0}).encode())
+    fc.now = start + dtp.Ts + 0.07
+    g1 = asm.close_ready(grace=0.0625)
+    assert [g.t for g in g1] == [t] and g1[0].vessels == [1]
+    # seconds later: data, a demand table, a priority table and a regulator log of step t (queued in a bridge)
+    fc.now = start + 8.0
+    asm.on_message("boat/b1/tx/video", encode_step_header(t, 1) + bytes(994), at=fc.now)
+    asm.on_message("boat/b1/demand", encode_demand(t, [64, 5000]), at=fc.now)
+    asm.on_message("boat/b1/levels", encode_levels(t, [2, 1]), at=fc.now)
+    asm.on_message("boat/b1/regulator", json.dumps({"t": t, "fwd": [1, 1], "held": [0, 0]}).encode(), at=fc.now)
+    assert t not in asm.open and asm.after_close == {t: 4}
+    t2 = t + 1
+    asm.on_message("boat/b1/demand", encode_demand(t2, [64, 5000]), at=fc.now)   # late for t2: no M(t2)
+    fc.now += 1.0
+    g2 = asm.close_ready(grace=0.0625)
+    assert [g.t for g in g2] == [t2]
+    assert g2[0].C_hat == pytest.approx(0.5 * 1000 + 0.5 * 900)   # eq. (2) from G(t), not from a re-opened step
+    assert asm.close_ready(grace=0.0625) == []
+
+
 def test_graph_dict_roundtrip():
     g = FleetSim(M=2, seed=3).step(0).graph
     h = Graph.from_dict(json.loads(json.dumps(g.to_dict())))

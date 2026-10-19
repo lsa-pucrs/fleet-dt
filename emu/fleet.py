@@ -837,9 +837,11 @@ def cpu_status(st):
     _emu_module("vm")
     import cpu_profile
     out = {}
+    cap = st.get("cpu_cap") or {}
     for name, pid in sorted((st.get("vm_pids") or {}).items()):
         try:
-            out[name] = cpu_profile.status(int(pid))
+            u = cpu_profile.status_user(cap["stats"], int(pid)) if cap.get("stats") else None
+            out[name] = u if u is not None else cpu_profile.status(int(pid))
         except (OSError, TypeError, ValueError) as e:
             out[name] = {"pid": pid, "error": str(e)}
     return out
@@ -1107,7 +1109,8 @@ def run_fleet_paper(R, spec, a):
         bg(R, 0, paper_jmcs_cmd(spec, S0), "jmcs")
         if paper_feedback_cmd(spec):
             bg(R, 0, paper_feedback_cmd(spec), "fb", rt=40)
-        watch = "as" if paper_as_cmd(spec) else "ve"
+        # the run fails when the AS (methods with tables) or the VE collector (the DTA) stops early
+        watch = ["as", "ve"] if paper_as_cmd(spec) else ["ve"]
         if paper_as_cmd(spec):
             bg(R, 0, paper_as_cmd(spec), "as", rt=40)
         if (spec.get("dti") or {}).get("enabled", True):
@@ -1131,9 +1134,10 @@ def run_fleet_paper(R, spec, a):
         while time.time() < t_end:
             time.sleep(min(5.0, max(0.0, t_end - time.time())))
             check_emulator(R, epid, res)
-            r = R.ssh(0, "kill -0 $(cat %s/%s.pid) 2>/dev/null && echo alive || echo dead" % (RUN, watch), timeout=20)
-            if "dead" in r.stdout and time.time() < t_end - 2.0:
-                raise RuntimeError("the %s stopped before the end of the run" % ("AS" if watch == "as" else "VE"))
+            for w in watch:
+                r = R.ssh(0, "kill -0 $(cat %s/%s.pid) 2>/dev/null && echo alive || echo dead" % (RUN, w), timeout=20)
+                if "dead" in r.stdout and time.time() < t_end - 2.0:
+                    raise RuntimeError("the %s stopped before the end of the run" % ("AS" if w == "as" else "VE"))
         check_emulator(R, epid, res)
         res["status"] = "ok"
     except (RuntimeError, OSError, subprocess.SubprocessError) as e:
