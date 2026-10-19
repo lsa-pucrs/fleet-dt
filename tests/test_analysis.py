@@ -108,9 +108,12 @@ def test_event_metrics_take_n_eff_from_the_margin_series():
 
 
 def test_margin_uses_kappa():
+    # slack K_y(t) - U K_hat(t) = (c_y y - U C_hat) (T3 - T_m)/Ts - B_ctl_bar, T3/Ts = 0.76
     recs = _records([100.0, 200.0], [100.0, 100.0], U=0.5)
     s = A.margin_series(recs, tiny_dtp(), kappa=0.9)
-    assert s.tolist() == pytest.approx([90 - 50, 180 - 50])
+    assert s.tolist() == pytest.approx([(90 - 50) * 0.76, (180 - 50) * 0.76])
+    d = DTP(topics=["state"], Ts=0.125, T1=0.02, T2=0.01, U=0.8, T_m=0.005, B_ctl_bar=3.0, c_y=0.9)
+    assert A.margin_series(recs, d).tolist() == pytest.approx([(90 - 50) * 0.72 - 3.0, (180 - 50) * 0.72 - 3.0])
 
 
 # --------------------------------------------------------------------------- exact signed-rank test
@@ -559,3 +562,142 @@ def test_c20_n_eff_clopper_pearson_and_signed_tost():
     a = np.linspace(0.5, 0.6, 40)
     r1, r2 = A.tost(a, 0.005, b=a - d), A.tost(d, 0.005)
     assert r1["equivalent"] == r2["equivalent"] and r1["p"] == pytest.approx(r2["p"], rel=1e-9)
+
+
+# --------------------------------------------------------------------------- revised model: fidelity and H4a
+
+
+def _rev_dtp(**kw):
+    base = dict(topics=["state"], Ts=0.125, T1=0.02, T2=0.01, U=0.8, T_m=0.005, B_ctl_bar=1000.0, c_y=0.9)
+    base.update(kw)
+    return DTP(**base)
+
+
+def test_picp_mape_and_u_with_K_y():
+    """PICP(U) = fraction of the steps with K_y(t) >= U K_hat(t), K_y = c_y y (T3 - T_m)/Ts - B_ctl_bar,
+    K_hat = C_hat (T3 - T_m)/Ts; MAPE of C_hat against c_y y; u = sum r / (K_y + B_ctl_bar)."""
+    d = _rev_dtp()
+    r = (0.095 - 0.005) / 0.125
+    y = np.array([100_000.0, 95_000.0, 90_000.0, 80_000.0])
+    C = np.full(4, 100_000.0)
+    recs = _records(y, C, U=0.8)
+    res = A.run_metrics(recs, d, criterion="bytes", ci=False)
+    Ky = 0.9 * y * r - 1000.0
+    want = np.mean(Ky >= 0.8 * C * r)
+    assert want == pytest.approx(0.5)          # 0.9 y - 1000 / r >= 80000: 90000 - 1389 and 85500 - 1389
+    assert res["PICP"]["value"] == pytest.approx(want)
+    assert res["c_y"] == 0.9 and res["T_m"] == 0.005 and res["B_ctl_bar"] == 1000.0
+    assert res["MAPE"]["value"] == pytest.approx(np.mean(np.abs(0.9 * y - C) / (0.9 * y)))
+    assert res["u"]["value"] == pytest.approx(200 * 4 / np.sum(Ky + 1000.0))
+    # the slack series is K_y - U K_hat
+    assert A.margin_series(recs, d).tolist() == pytest.approx((Ky - 0.8 * C * r).tolist())
+    # c_y given explicitly overrides the DTP
+    assert A.run_metrics(recs, d, criterion="bytes", ci=False, c_y=1.0)["c_y"] == 1.0
+    # the outer loop uses the same definition
+    gam = O.coverage(y, C, np.array([0.8]), T3_Ts=r, c_y=0.9, B_ctl_bar=1000.0)
+    assert gam[0] == pytest.approx(want)
+    assert O.k_y(y, r, 0.9, 1000.0).tolist() == pytest.approx(Ky.tolist())
+
+
+def test_picp_ground_truth_uses_K_minus_B_ctl():
+    """PICP_C(U): K(t) - B_ctl(t) >= U K_hat(t) with K(t) = C(t) (T3 - T_m)/Ts of the ground truth."""
+    d = _rev_dtp(B_ctl_bar=0.0)
+    r = (0.095 - 0.005) / 0.125
+    recs = _records([100_000.0] * 4, [100_000.0] * 4, U=0.8)
+    C_gt = {0: 85_000.0, 1: 79_000.0, 2: 81_000.0}             # step 3 without ground truth
+    B_ctl = {2: 2000.0 * r}                                      # 81000 - 2000 < 80000
+    res = A.run_metrics(recs, d, criterion="bytes", ci=False, C_gt=C_gt, B_ctl=B_ctl)
+    assert res["PICP_C"] == {"value": pytest.approx(1 / 3), "n": 3}
+    assert "PICP_C" not in A.run_metrics(recs, d, criterion="bytes", ci=False)
+
+
+def test_dmr_hat_uses_K_y():
+    """q_hat(t) = max(0, q_hat(t-1) + sum_i a_i(t) - K_y(t))"""
+    d = _rev_dtp()
+    r = (0.095 - 0.005) / 0.125
+    y = np.array([100_000.0, 100_000.0, 100_000.0])
+    recs = _records(y, y, U=0.8)
+    for rec, A_ in zip(recs, (63_000.0, 66_000.0, 50_000.0)):
+        rec["A"] = A_
+    Ky = 0.9 * 100_000.0 * r - 1000.0                            # 63800
+    q, want = 0.0, []
+    for A_ in (63_000.0, 66_000.0, 50_000.0):
+        q = max(0.0, q + A_ - Ky)
+        want.append(q)
+    assert want[0] == 0 and want[1] > 0 and want[2] == 0
+    res = A.run_metrics(recs, d, criterion="bytes", ci=False)
+    assert res["DMR_hat"]["value"] == pytest.approx(1 / 3)
+    qa, ok = O.backlog_admitted(y, np.array([63_000.0, 66_000.0, 50_000.0]), r, c_y=0.9, B_ctl_bar=1000.0)
+    assert qa == pytest.approx(want) and ok.all()
+
+
+def test_h4a_condition_needs_K_y_and_zero_backlog():
+    """H4a counts the failed fleet steps among the steps with K_y(t) >= U K_hat(t) and Q(t) = 0."""
+    n = 40
+    y, C = np.full(n, 100_000.0), np.full(n, 100_000.0)
+    recs = _records(y, C, U=0.8, fail_at={5, 15, 25})
+    for rec in recs:
+        rec["Q"] = 0
+    for t in range(10, 20):
+        recs[t]["Q"] = 3000                                      # backlog at the start of phase 1
+    recs[25]["y"] = 80_000.0                                     # 0.9 y < 0.8 C_hat: K_y < U K_hat
+    r = A.h4a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes")
+    assert r["n_cond"] == n - 10 - 1 and r["failures"] == 1 and r["backlog_known"] is True
+    # Q(t) from the vertices of M(t) when the record has no "Q"
+    for rec in recs:
+        del rec["Q"]
+        rec["vertices"] = [{"i": 1, "Q": 0, "member": True}, {"i": 2, "Q": 0, "member": True},
+                           {"i": 7, "Q": 99, "member": False}]
+    recs[3]["vertices"][1]["Q"] = 10
+    r2 = A.h4a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes")
+    assert r2["n_cond"] == n - 1 - 1 and r2["failures"] == 2
+
+
+def test_h5d_fairness_over_vessels_1_to_3():
+    """min_i PDR_i / max_i PDR_i over vessels 1 to 3; vessel 4 (no video in the fairness cells) stays out."""
+    def edges(t):
+        return [{"i": i, "l": 1, "d": 100, "p": 2, "r": {1: 100, 2: 90, 3: 80, 4: 10}[i], "n": 1, "dup": 0,
+                 "late": 0, "fwd": 1} for i in (1, 2, 3, 4)]
+    recs = _records([100.0] * 3, [100.0] * 3, M=(1, 2, 3, 4), edges=edges)
+    res = A.run_metrics(recs, tiny_dtp(), criterion="bytes", ci=True, B=50)
+    assert res["PDR_i"][4] == pytest.approx(0.1)
+    assert res["eta_minmax"]["value"] == pytest.approx(0.8) and res["eta_minmax"]["vessels"] == [1, 2, 3]
+    allv = A.run_metrics(recs, tiny_dtp(), criterion="bytes", ci=False, fair_vessels=None)
+    assert allv["eta_minmax"]["value"] == pytest.approx(0.1)
+
+
+def test_calibration_of_c_y_and_margins(tmp_path):
+    cal = A.calibrate_c_y({0: 90.0, 1: 120.0, 2: 50.0, 3: 10.0}, {0: 100.0, 1: 100.0, 2: 0.0})
+    assert cal == {"c_y": 0.9, "n": 2, "t_min": 0}
+    assert A.calibrate_c_y({0: 130.0}, {0: 100.0})["c_y"] == 1.0       # capped: c_y in (0, 1]
+    m = A.calibrate_margins([0.0004, 0.0012], [0.0015, 0.003], [800, 2100])
+    assert m["eps"] == pytest.approx(2 * 0.0012 + 0.001) and m["delta_GS"] == 0.003
+    assert m["T_m"] == pytest.approx(0.0034 + 0.003) and m["B_ctl_bar"] == 2100 and m["todo"] == []
+    none = A.calibrate_margins()
+    assert none["T_m"] is None and none["B_ctl_bar"] is None and len(none["todo"]) == 3
+    # a run directory with the subset replays and the monitor log, without the margin measurements
+    (tmp_path / "csub").mkdir()
+    (tmp_path / "csub" / "c_t.jsonl").write_text("".join(json.dumps({"k": k, "t": 10 + k, "C": c}) + "\n"
+                                                         for k, c in enumerate([95.0, 88.0, 99.0])))
+    (tmp_path / "throughput.jsonl").write_text("".join(json.dumps({"t": 10 + k, "y": 100.0}) + "\n" for k in range(3)))
+    run = A.calibrate_run(str(tmp_path))
+    assert run["c_y"] == pytest.approx(0.88) and run["T_m"] is None and run["todo"]
+    out = subprocess.run([sys.executable, "-m", "fleetdt.analysis", "calibrate", str(tmp_path), "--json"], cwd=ROOT,
+                         capture_output=True, text=True)
+    assert out.returncode == 0 and json.loads(out.stdout)["c_y"] == pytest.approx(0.88)
+
+
+def test_outer_loop_U_star_with_K_y():
+    """The outer loop picks U* from PICP(U) with K_y: the control bytes B_ctl_bar and c_y < 1 lower U*."""
+    rng = np.random.default_rng(4)
+    y = 300_000 + rng.normal(0, 10_000, 3000)
+    recs = [{"t": t, "y": float(v), "C_hat": 300_000.0, "U": 0.8, "K_hat": 300_000.0 * 0.72} for t, v in enumerate(y)]
+    base = O.outer_loop(recs, target=0.95, B=100, alpha=0.0)
+    assert base["T3_Ts"] == pytest.approx(0.72)
+    low = O.outer_loop(recs, target=0.95, B=100, alpha=0.0, c_y=0.9, B_ctl_bar=5000.0)
+    assert low["U_star_point"] < base["U_star_point"]
+    w = {x["U"]: x for x in low["whatif"]}
+    z = 0.9 * y - 5000.0 / 0.72
+    for u in (0.6, 0.8):
+        assert w[u]["PICP"] == pytest.approx(np.mean(z >= u * 300_000.0))
+    assert low["B_ctl_bar"] == 5000.0

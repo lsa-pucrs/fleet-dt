@@ -3,21 +3,27 @@
 Per run (names of the paper; the names of earlier versions stay in the JSON output as aliases for one
 release: gamma = PICP, delta = PDR_state, eta_vessel = PDR_i, Pi = PCR, nu = u, kappa = c_y; phi keeps the
 full-delivery fraction 1 - DMR):
-  MAPE       mean of |y(t) - C_hat(t)| / y(t) over the steps with y(t) > 0 (fidelity, Definition of the paper)
+  K_hat(t) = C_hat(t) (T3 - T_m)/Ts (predicted capacity of phase 3) and K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar
+  (measured capacity); c_y, T_m and B_ctl_bar come from the DTP (c_y can be overridden).
+  MAPE       mean of |c_y y(t) - C_hat(t)| / (c_y y(t)) over the steps with y(t) > 0 (fidelity, Definition of the
+             paper)
   PICP       prediction interval coverage probability: fraction of the steps of S (y(t) and C_hat(t)
-             defined) with y(t) >= U C_hat(t) (C13)
+             defined) with K_y(t) >= U K_hat(t) (C13)
+  PICP_C     the same with the ground truth K(t) - B_ctl(t) in place of K_y(t), K(t) = C(t) (T3 - T_m)/Ts (C(t) of
+             the subset replays, B_ctl(t) the control bytes outside the data bridges in phase 3), when given
   PDR_state  fraction of the pairs (t, i), i in M(t) and "state" in A(t) ∩ N(t), in which the GS
              applications receive every state message forwarded in step t exactly once within step t
              (C8: n_rx == n_fwd of the regulator log, else n_rx == ceil(r Ts), and no duplicate)
   DMR        deadline miss ratio: fraction of the fleet steps in which some message of level 1 or 2 of a
              vessel of M(t) misses its step (DMR = 1 - phi, phi the full-delivery fraction)
-  DMR_hat    DMR predicted by the backlog predictor of C5 (fleetdt.outer.backlog_admitted) with the admitted
-             bytes A(t) of the run and c_y
+  DMR_hat    DMR predicted by the backlog predictor of C5 (fleetdt.outer.backlog_admitted):
+             q_hat(t) = max(0, q_hat(t-1) + sum_i a_i(t) - K_y(t)), DMR_hat = fraction of the steps with q_hat > 0
   eta        bytes of the N(t) topics received within the step / bytes of the N(t) topics demanded
   PDR_i      per vessel i, the byte-weighted delivery ratio of the needed topics of vessel i (eta_i), with
-             Jain's fairness index J and the ratio min_i PDR_i / max_i PDR_i
+             Jain's fairness index J and the ratio min_i PDR_i / max_i PDR_i (H5d) over vessels 1 to 3 only
+             (the vessels with the same sources; vessel 4 has no video in the fairness cells)
   mu         late messages / (received + late)
-  u          measured utilization: received channel bytes / sum of y(t) T3 / Ts, over the steps with y(t)
+  u          measured utilization: sum r_il(t) / sum (K_y(t) + B_ctl_bar), over the steps with y(t)
   PCR        prefix completeness ratio (C21): mean over the pairs (t, i), i in M(t), |N(t)| >= 1, of the share
              of N(t) in the longest prefix of sigma_t that vessel i delivers complete within step t
              (denominator |N(t)|); prefix also holds, for each rank k of sigma_t, the fraction of the pairs
@@ -39,14 +45,22 @@ The full-reception criterion of an edge is explicit (argument `criterion`, requi
 Statistics (C20): integrated autocorrelation time tau_int = 1/2 + sum_{k>=1} rho(k) (one run or pooled over
 runs), effective sample size n_eff = n / (2 tau_int), circular block bootstrap (two-sided CI and one-sided
 bounds, blocks inside each run), Clopper-Pearson upper limit with the raw count k of events in n_eff
-trials (for k = 0 it is 1 - 0.05^(1/n_eff) at 95 %; the margin series s(t) = c_y y(t) - U C_hat(t) is the
-proxy whose tau_int gives n_eff for the event metrics), the H4a bound on the fleet steps (and on
-non-overlapping 8-step windows, Corollary 1), Diebold-Mariano test (Newey-West variance), one-sided exact
+trials (for k = 0 it is 1 - 0.05^(1/n_eff) at 95 %; the slack series s(t) = K_y(t) - U K_hat(t) is the
+proxy whose tau_int gives n_eff for the event metrics), the H4a bound on the fleet steps with
+K_y(t) >= U K_hat(t) and Q(t) = 0 (and on non-overlapping 8-step windows, Corollary 1), Diebold-Mariano test (Newey-West variance), one-sided exact
 Wilcoxon signed-rank test with Pratt's treatment of zeros (exact conditional distribution, ties
 included), Holm, the intersection-union test (IUT), the fixed-sequence gatekeeping
 H1 -> H2 -> H4 -> H5 -> H3 -> H6, TOST on the signed run-level differences, and the Hodges-Lehmann estimate.
 
   python -m fleetdt.analysis dta.jsonl [more.jsonl ...] --dtp dtp.json --criterion bytes|count [--c-y C] [--json]
+  python -m fleetdt.analysis calibrate RUN [RUN ...] [--json]     c_y, T_m and B_ctl_bar from calibration runs
+
+Calibration (calibrate_c_y, calibrate_margins, calibrate_run): c_y = smallest C(t)/y(t) of a saturation test
+(C(t) of emu/replay_subsets.py, RUN/csub/c_t.jsonl, y(t) of the channel monitor); T_m = eps + delta_GS with
+eps = 2 max (chrony max error) + 1 ms and delta_GS = largest delivery time of the GS broker measured in Q;
+B_ctl_bar = largest bytes outside the data bridges in phase 3 of a calibration step. TODO: the runs do not log
+the chrony max error, the delivery time of the GS broker nor the control bytes per phase, so calibrate_run
+reports T_m and B_ctl_bar as missing and the DTPs keep T_m = 0 and B_ctl_bar = 0 until those measurements exist.
 """
 from __future__ import annotations
 
@@ -59,10 +73,11 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from .as_model import DTP
-from .outer import admitted_bytes, backlog_admitted, load_dta
+from .outer import admitted_bytes, backlog_admitted, backlog_of, load_dta
 
 CRITERIA = ("bytes", "count")
 FILL_MIN = 0.85
+FAIR_VESSELS = (1, 2, 3)   # H5d: vessels with the same sources (vessel 4 has no video in the fairness cells)
 HYPOTHESIS_ORDER = ("H1", "H2", "H4", "H5", "H3", "H6")
 
 # --------------------------------------------------------------------------- autocorrelation
@@ -468,25 +483,45 @@ def _edge_complete(e: Optional[Dict], criterion: str, tol: float, n_expected: Di
     return e.get("r", 0) >= e.get("d", 0) * (1.0 - tol) - 1.0
 
 
-def _cy(c_y: Optional[float], kappa: Optional[float]) -> float:
-    """c_y, with kappa (its name in earlier versions) as a backward-compatible alias."""
+def _cy(c_y: Optional[float], kappa: Optional[float], default: float = 1.0) -> float:
+    """c_y, with kappa (its name in earlier versions) as a backward-compatible alias; `default` (the c_y of the
+    DTP) when neither is given."""
     if kappa is not None:
         if c_y is not None and float(c_y) != float(kappa):
             raise ValueError("c_y and kappa (its old name) differ")
         return float(kappa)
-    return 1.0 if c_y is None else float(c_y)
+    return float(default) if c_y is None else float(c_y)
+
+
+def capacities(g: Dict, dtp: DTP, cy: float) -> Tuple[float, float]:
+    """(K_y(t), K_hat(t)) of one record: K_y = c_y y (T3 - T_m)/Ts - B_ctl_bar and K_hat = C_hat (T3 - T_m)/Ts
+    (NaN without y or C_hat)."""
+    y, C = g.get("y"), g.get("C_hat")
+    r = dtp.T3m / dtp.Ts
+    Ky = cy * float(y) * r - dtp.B_ctl_bar if y is not None else np.nan
+    Kh = float(C) * r if C is not None else np.nan
+    return Ky, Kh
+
+
+def slack(g: Dict, dtp: DTP, cy: float, U: float) -> float:
+    """K_y(t) - U K_hat(t) of one record, computed as (c_y y - B_ctl_bar / r - U C_hat) r with r = (T3 - T_m)/Ts, so
+    the sign is exact at K_y = U K_hat when B_ctl_bar = 0 (NaN without y or C_hat)."""
+    y, C = g.get("y"), g.get("C_hat")
+    if y is None or C is None:
+        return np.nan
+    r = dtp.T3m / dtp.Ts
+    return (cy * float(y) - dtp.B_ctl_bar / r - U * float(C)) * r
 
 
 def margin_series(records: Sequence[Dict], dtp: DTP, c_y: Optional[float] = None,
                   kappa: Optional[float] = None) -> np.ndarray:
-    """Margin of the condition of Proposition 2, s(t) = c_y y(t) - U C_hat(t), sorted by t (NaN without
-    y or C_hat); c_y (kappa: old name) is the calibrated lower bound of C(t) / y(t)."""
-    cy = _cy(c_y, kappa)
+    """Slack of the condition of Proposition 2, s(t) = K_y(t) - U K_hat(t), sorted by t (NaN without y or
+    C_hat); c_y (kappa: old name; default: the c_y of the DTP) is the calibrated lower bound of C(t) / y(t)."""
+    cy = _cy(c_y, kappa, dtp.c_y)
     out = []
     for g in sorted(records, key=lambda r: int(r["t"])):
-        y, C = g.get("y"), g.get("C_hat")
         U = g.get("U") if g.get("U") is not None else dtp.U
-        out.append(cy * y - U * C if y is not None and C is not None else np.nan)
+        out.append(slack(g, dtp, cy, U))
     return np.asarray(out, dtype=float)
 
 
@@ -503,19 +538,19 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
               kappa: Optional[float] = None) -> Dict:
     """Per-step quantities of the metrics, sorted by t. Ratio metrics keep (numerator, denominator) rows."""
     _check_criterion(criterion)
-    cy = _cy(c_y, kappa)
+    cy = _cy(c_y, kappa, dtp.c_y)
     recs = sorted(records, key=lambda r: int(r["t"]))
     L = dtp.L
     state = dtp.index("state") if "state" in dtp.topics else None
     n_expected = {k + 1: int(math.ceil(s.rate * dtp.Ts - 1e-9)) for k, s in enumerate(dtp.specs) if s.rate}
-    ratio = dtp.T3 / dtp.Ts
     default_order = [dtp.index(n) for n in dtp.order] if dtp.order else list(range(1, L + 1))
     out = {"t": [], "ape": [], "cover": [], "phi": [], "delta": [], "delta_fail": [], "eta": [], "mu": [], "nu": [],
            "margin": [], "eta_i": {}, "eta_rows": [], "prefix": [], "pcr": [], "fleet": [], "unused": [], "fill": [],
-           "order": [], "A": [], "y": [], "C_hat": []}
+           "order": [], "A": [], "y": [], "C_hat": [], "K_y": [], "K_hat": [], "Q": [], "U": []}
     for g in recs:
         t, y, C = int(g["t"]), g.get("y"), g.get("C_hat")
         U = g.get("U") if g.get("U") is not None else dtp.U
+        Ky, Kh = capacities(g, dtp, cy)
         Mlist = sorted(set(g.get("vessels", [])))
         M = set(Mlist)
         N = set(g.get("needed", []))
@@ -524,11 +559,17 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
         by = {(e["i"], e["l"]): e for e in edges}
         out["t"].append(t)
         out["order"].append(sigma)
-        out["ape"].append(abs(y - C) / y if y is not None and C is not None and y > 0 else np.nan)
-        out["cover"].append(float(y >= U * C) if y is not None and C is not None else np.nan)
-        out["margin"].append(cy * y - U * C if y is not None and C is not None else np.nan)
+        # fidelity: C_hat(t) against c_y y(t); coverage and slack in bytes of phase 3
+        out["ape"].append(abs(cy * y - C) / (cy * y) if y is not None and C is not None and y > 0 else np.nan)
+        sl = slack(g, dtp, cy, U)
+        out["cover"].append(float(sl >= 0) if sl == sl else np.nan)          # K_y(t) >= U K_hat(t)
+        out["margin"].append(sl)
         out["y"].append(float(y) if y is not None else np.nan)
         out["C_hat"].append(float(C) if C is not None else np.nan)
+        out["K_y"].append(Ky)
+        out["K_hat"].append(Kh)
+        out["U"].append(float(U))
+        out["Q"].append(backlog_of(g))
         out["A"].append(admitted_bytes(g))
         inM = [e for e in edges if e["i"] in M]
         adm = [e for e in inM if (e.get("p") or 0) > 0]
@@ -557,7 +598,9 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
         out["eta_rows"].append(row)
         late = sum(e.get("late", 0) for e in edges)
         out["mu"].append((late, sum(e.get("n", 0) for e in edges) + late))
-        out["nu"].append((sum(e.get("r", 0) for e in edges), y * ratio) if y is not None else (np.nan, np.nan))
+        # u = sum r_il(t) / (K_y(t) + B_ctl_bar)
+        out["nu"].append((sum(e.get("r", 0) for e in edges), Ky + dtp.B_ctl_bar) if y is not None
+                         else (np.nan, np.nan))
         # prefix completeness: length of the complete prefix of sigma_t, per vessel of M(t)
         comp = {i: [_edge_complete(by.get((i, l)), criterion, tol, n_expected) for l in sigma] for i in Mlist}
         pre, pcr = {}, {}
@@ -660,8 +703,8 @@ def fleet_consistency(s: Dict, dtp: DTP) -> Dict[str, float]:
     return {dtp.topics[l - 1]: num[l] / den[l] for l in sorted(den)}
 
 
-def _eta_ratio_rows(s: Dict) -> Tuple[np.ndarray, List[int]]:
-    vs = sorted(s["eta_i"])
+def _eta_ratio_rows(s: Dict, vessels: Optional[Sequence[int]] = None) -> Tuple[np.ndarray, List[int]]:
+    vs = sorted(i for i in s["eta_i"] if vessels is None or i in vessels)
     rows = np.zeros((len(s["eta_rows"]), 2 * len(vs)))
     for k, row in enumerate(s["eta_rows"]):
         for j, i in enumerate(vs):
@@ -676,26 +719,46 @@ def _eta_minmax(rows: np.ndarray) -> float:
     return min_max_ratio(eta)
 
 
+def picp_ground_truth(s: Dict, dtp: DTP, C_gt: Dict[int, float], B_ctl: Optional[Dict[int, float]] = None) -> Dict:
+    """PICP_C(U): fraction of the steps of step_rows with K(t) - B_ctl(t) >= U K_hat(t), K(t) = C(t) (T3 - T_m)/Ts,
+    C(t) of the ground truth (subset replays) and B_ctl(t) the control bytes outside the data bridges in phase 3
+    (0 when not given), over the steps with C(t) and C_hat(t)."""
+    r = dtp.T3m / dtp.Ts
+    hits = []
+    for t, Ch, U in zip(s["t"], s["C_hat"], s["U"]):
+        C = C_gt.get(t)
+        if C is None or Ch != Ch:
+            continue
+        # K(t) - B_ctl(t) >= U K_hat(t), compared in units of C (divided by (T3 - T_m)/Ts)
+        hits.append(float(float(C) - float((B_ctl or {}).get(t, 0.0)) / r >= U * Ch))
+    return {"value": float(np.mean(hits)) if hits else float("nan"), "n": len(hits)}
+
+
 def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float = 1e-6, ci: bool = True,
                 B: int = 2000, conf: float = 0.95, seed: int = 0, c_y: Optional[float] = None,
-                kappa: Optional[float] = None) -> Dict:
+                kappa: Optional[float] = None, C_gt: Optional[Dict[int, float]] = None,
+                B_ctl: Optional[Dict[int, float]] = None, fair_vessels: Optional[Sequence[int]] = FAIR_VESSELS) -> Dict:
     """Metrics of one run (Section VI) with an explicit full-reception criterion ("bytes" or "count").
-    The event metrics (PICP, DMR, PDR_state) take tau_int from the margin series s(t) = c_y y(t) - U C_hat(t)
+    The event metrics (PICP, DMR, PDR_state) take tau_int from the slack series s(t) = K_y(t) - U K_hat(t)
     and the fleet step as the unit (n_eff = steps / (2 tau_int), no factor of messages per step).
-    c_y has the alias kappa (old name). The output holds the names of the paper and, for one release, the
-    names of earlier versions (module docstring)."""
+    c_y (default: the DTP; alias kappa, its old name) enters K_y and the MAPE; C_gt (t -> C(t)) and B_ctl
+    (t -> B_ctl(t)) give PICP_C; the H5d ratio min_i PDR_i / max_i PDR_i takes the vessels of fair_vessels
+    (None: every vessel). The output holds the names of the paper and, for one release, the names of earlier
+    versions (module docstring)."""
     _check_criterion(criterion)
-    cy = _cy(c_y, kappa)
+    cy = _cy(c_y, kappa, dtp.c_y)
     s = step_rows(records, dtp, criterion, tol, cy)
     mean = lambda z: float(np.mean(z))
     res = {"steps": len(s["t"]), "t_first": s["t"][0] if s["t"] else None, "t_last": s["t"][-1] if s["t"] else None,
-           "criterion": criterion, "c_y": cy, "kappa": cy}
+           "criterion": criterion, "c_y": cy, "kappa": cy, "T_m": dtp.T_m, "B_ctl_bar": dtp.B_ctl_bar}
     mg = np.asarray(s["margin"], float)
     tau_m = tau_int(mg) if np.any(~np.isnan(mg)) else 0.5
     res["tau_margin"] = tau_m
     res["MAPE"] = _summary(np.asarray(s["ape"], float), mean, ci, B, conf, seed)
     res["PICP"] = res["gamma"] = _summary(np.asarray(s["cover"], float), mean, ci, B, conf, seed, event=True,
                                           tau=tau_m)
+    if C_gt:
+        res["PICP_C"] = picp_ground_truth(s, dtp, C_gt, B_ctl)
     phi = np.asarray(s["phi"], float)
     miss = np.where(np.isnan(phi), np.nan, 1.0 - phi)
     res["DMR"] = _summary(miss, mean, ci, B, conf, seed, event=True, tau=tau_m, fail=miss)
@@ -708,8 +771,9 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
         else:
             res[k] = _summary(rows, _ratio, ci, B, conf, seed)
     res["PDR_state"], res["u"] = res["delta"], res["nu"]
-    # C5: DMR predicted from the admitted bytes A(t) of the run and c_y
-    q, ok = backlog_admitted(np.asarray(s["y"], float), np.asarray(s["A"], float), dtp.T3 / dtp.Ts, c_y=cy)
+    # C5: DMR predicted from the admitted bytes A(t) of the run and K_y(t)
+    q, ok = backlog_admitted(np.asarray(s["y"], float), np.asarray(s["A"], float), dtp.T3m / dtp.Ts, c_y=cy,
+                             B_ctl_bar=dtp.B_ctl_bar)
     res["DMR_hat"] = {"value": float(np.mean(q[ok] > 0.0)) if ok.any() else float("nan"), "n": int(ok.sum()),
                       "c_y": cy}
     # RelMSE of the ES prediction C_hat(t) of the run against persistence y(t - 1)
@@ -718,9 +782,10 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
     eta_i = {int(i): (v[0] / v[1] if v[1] > 0 else float("nan")) for i, v in sorted(s["eta_i"].items())}
     res["PDR_i"] = res["eta_vessel"] = eta_i
     res["J"] = jain(list(eta_i.values()))
-    res["eta_minmax"] = {"value": min_max_ratio(list(eta_i.values()))}
-    if ci and len(eta_i) >= 2:
-        rows, _ = _eta_ratio_rows(s)
+    fair = {i: v for i, v in eta_i.items() if fair_vessels is None or i in fair_vessels}
+    res["eta_minmax"] = {"value": min_max_ratio(list(fair.values())), "vessels": sorted(fair)}
+    if ci and len(fair) >= 2:
+        rows, _ = _eta_ratio_rows(s, None if fair_vessels is None else list(fair_vessels))
         r = block_bootstrap_bounds([rows], _eta_minmax, conf=conf, B=B, tau=tau_m, seed=seed)
         res["eta_minmax"].update(lower=r["lower"], ci=r["ci"], block=r["block"])
     res["PDR_minmax"] = res["eta_minmax"]
@@ -757,20 +822,23 @@ def analyze(records: Sequence[Dict], dtp: DTP, criterion: Optional[str] = None, 
 
 def condition_steps(records: Sequence[Dict], dtp: DTP, criterion: str, c_y: Optional[float] = None,
                     tol: float = 1e-6, lag_fails: bool = True, kappa: Optional[float] = None) -> Dict[str, np.ndarray]:
-    """Per fleet step of one run (sorted by t): margin s(t) = c_y y(t) - U C_hat(t); cond(t) = s(t) >= 0
-    and the send buffers empty at the start of phase 3 (record field "buf_empty", taken as true when
-    absent) and m(t) >= 1; fail(t) = not every message of level 1 or 2 of M(t) received within the step
-    (criterion), or, with lag_fails, an emulator lag flagged in the record ("lag" true: worst case)."""
+    """Per fleet step of one run (sorted by t): slack s(t) = K_y(t) - U K_hat(t); cond(t) = s(t) >= 0 (that is
+    K_y(t) >= U K_hat(t)), the backlog Q(t) = 0 of the demand tables of M(t), the send buffers empty at the start
+    of phase 3 (record field "buf_empty", taken as true when absent) and m(t) >= 1; fail(t) = not every
+    message of level 1 or 2 of M(t) received within the step (criterion), or, with lag_fails, an emulator lag
+    flagged in the record ("lag" true: worst case)."""
     _check_criterion(criterion)
-    s = step_rows(records, dtp, criterion, tol, _cy(c_y, kappa))
+    s = step_rows(records, dtp, criterion, tol, _cy(c_y, kappa, dtp.c_y))
     recs = sorted(records, key=lambda r: int(r["t"]))
     mg = np.asarray(s["margin"], float)
     phi = np.asarray(s["phi"], float)
+    Q = np.asarray(s["Q"], float)
     buf = np.asarray([bool(r.get("buf_empty", True)) for r in recs])
     lag = np.asarray([bool(r.get("lag", False)) for r in recs])
-    cond = (~np.isnan(mg)) & (np.nan_to_num(mg, nan=-1.0) >= 0) & buf & ~np.isnan(phi)
+    cond = (~np.isnan(mg)) & (np.nan_to_num(mg, nan=-1.0) >= 0) & (Q == 0) & buf & ~np.isnan(phi)
     fail = (phi == 0.0) | (lag & bool(lag_fails))
-    return {"margin": mg, "cond": cond, "fail": fail, "buf_known": np.asarray(["buf_empty" in r for r in recs])}
+    return {"margin": mg, "cond": cond, "fail": fail, "buf_known": np.asarray(["buf_empty" in r for r in recs]),
+            "Q_known": np.asarray([r.get("Q") is not None or bool(r.get("vertices")) for r in recs])}
 
 
 def _windows(c: Dict[str, np.ndarray], w: int) -> Dict[str, np.ndarray]:
@@ -788,20 +856,21 @@ def _windows(c: Dict[str, np.ndarray], w: int) -> Dict[str, np.ndarray]:
 
 def h4a_bound(runs: Sequence[Sequence[Dict]], dtp: DTP, criterion: str, c_y: Optional[float] = None, window: int = 1,
               conf: float = 0.95, tol: float = 1e-6, lag_fails: bool = True, kappa: Optional[float] = None) -> Dict:
-    """H4a pooled over runs: P(failure of the fleet step | condition of Proposition 2) with window = 1, or
-    P(failure of an 8-step window | condition in every step of the window) with window = 8 (Corollary 1,
-    non-overlapping windows). tau_int comes from the margin series (window minimum for windows), pooled
-    over the runs; n_eff = condition units / (2 tau_int). upper: Clopper-Pearson with the raw events in
-    n_eff trials (pre-registered, conservative; C20); upper_scaled: with k n_eff / n events. c_y has the
-    alias kappa (old name)."""
-    cy = _cy(c_y, kappa)
+    """H4a pooled over runs: P(failure of the fleet step | condition of Proposition 2: K_y(t) >= U K_hat(t) and
+    Q(t) = 0) with window = 1, or P(failure of an 8-step window | condition in every step of the window) with
+    window = 8 (Corollary 1, non-overlapping windows). tau_int comes from the slack series K_y(t) - U K_hat(t)
+    (window minimum for windows), pooled over the runs; n_eff = condition units / (2 tau_int). upper:
+    Clopper-Pearson with the raw events in n_eff trials (pre-registered, conservative; C20); upper_scaled:
+    with k n_eff / n events. c_y has the alias kappa (old name); default: the c_y of the DTP."""
+    cy = _cy(c_y, kappa, dtp.c_y)
     margins, n_cond, k = [], 0, 0
-    buf_known = True
+    buf_known = Q_known = True
     for recs in runs:
         if not recs:
             continue
         c = condition_steps(recs, dtp, criterion, cy, tol, lag_fails)
         buf_known = buf_known and bool(c["buf_known"].all())
+        Q_known = Q_known and bool(c["Q_known"].all())
         if window > 1:
             c = _windows(c, window)
         margins.append(c["margin"])
@@ -813,7 +882,86 @@ def h4a_bound(runs: Sequence[Sequence[Dict]], dtp: DTP, criterion: str, c_y: Opt
             "upper": clopper_pearson_upper_eff(k, n_cond, ne, conf=conf, events="raw") if n_cond else 1.0,
             "upper_scaled": clopper_pearson_upper_eff(k, n_cond, ne, conf=conf, events="scaled") if n_cond else 1.0,
             "conf": conf, "c_y": cy, "kappa": cy, "criterion": criterion, "buffers_known": buf_known,
-            "runs": len(margins)}
+            "backlog_known": Q_known, "runs": len(margins)}
+
+
+# --------------------------------------------------------------------------- calibration of c_y, T_m, B_ctl_bar
+
+
+def calibrate_c_y(C_by_t: Dict[int, float], y_by_t: Dict[int, float]) -> Dict:
+    """c_y = smallest C(t) / y(t) over the steps of a saturation test with both values and y(t) > 0, capped at 1
+    (c_y lies in (0, 1]). Returns {"c_y", "n", "t_min"} (c_y None without a step)."""
+    best, t_best, n = None, None, 0
+    for t, C in C_by_t.items():
+        y = y_by_t.get(t)
+        if C is None or y is None or not y > 0 or not C > 0:
+            continue
+        n += 1
+        v = float(C) / float(y)
+        if best is None or v < best:
+            best, t_best = v, t
+    return {"c_y": None if best is None else min(1.0, best), "n": n, "t_min": t_best}
+
+
+def calibrate_margins(chrony_max_error_s: Optional[Sequence[float]] = None,
+                      gs_delivery_s: Optional[Sequence[float]] = None,
+                      ctl_bytes_phase3: Optional[Sequence[float]] = None) -> Dict:
+    """T_m = eps + delta_GS with eps = 2 max (chrony max error) + 1 ms and delta_GS = largest delivery time of the
+    GS broker measured in Q, and B_ctl_bar = largest bytes outside the data bridges in phase 3 of a calibration
+    step. A term without measurements stays None and is listed in "todo" (the DTP then keeps its default 0)."""
+    todo = []
+    eps = 2.0 * max(chrony_max_error_s) + 1e-3 if chrony_max_error_s else None
+    dgs = float(max(gs_delivery_s)) if gs_delivery_s else None
+    bctl = float(max(ctl_bytes_phase3)) if ctl_bytes_phase3 else None
+    if eps is None:
+        todo.append("eps: no chrony max error in the calibration logs")
+    if dgs is None:
+        todo.append("delta_GS: no delivery time of the GS broker measured in Q")
+    if bctl is None:
+        todo.append("B_ctl_bar: no bytes outside the data bridges per phase 3 in the calibration logs")
+    T_m = eps + dgs if eps is not None and dgs is not None else None
+    return {"eps": eps, "delta_GS": dgs, "T_m": T_m, "B_ctl_bar": bctl, "todo": todo}
+
+
+def _jsonl(path: str) -> List[Dict]:
+    out = []
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        out.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        continue
+    except OSError:
+        pass
+    return out
+
+
+def calibrate_run(run_dir: str) -> Dict:
+    """Calibration from one saturation run of emu/fleet.py: c_y from RUN/csub/c_t.jsonl (C(t) of
+    emu/replay_subsets.py) and y(t) of RUN/throughput.jsonl (else of the DTA RUN/vms/gs/dta.jsonl); T_m and
+    B_ctl_bar from the measurements of calibrate_margins when the run holds them (RUN/calib.json with the lists
+    "chrony_max_error_s", "gs_delivery_s", "ctl_bytes_phase3"), else None with a TODO."""
+    import os
+    C = {int(r["t"]): float(r["C"]) for r in _jsonl(os.path.join(run_dir, "csub", "c_t.jsonl"))
+         if r.get("C") is not None and r.get("t") is not None}
+    ys = _jsonl(os.path.join(run_dir, "throughput.jsonl")) or _jsonl(os.path.join(run_dir, "vms", "gs", "dta.jsonl"))
+    y = {int(r["t"]): float(r["y"]) for r in ys if r.get("y") is not None and r.get("t") is not None}
+    out = {"run": run_dir}
+    out.update(calibrate_c_y(C, y))
+    meas = {}
+    try:
+        with open(os.path.join(run_dir, "calib.json"), encoding="utf-8") as f:
+            meas = json.load(f)
+    except (OSError, ValueError):
+        pass
+    out.update(calibrate_margins(meas.get("chrony_max_error_s"), meas.get("gs_delivery_s"),
+                                 meas.get("ctl_bytes_phase3")))
+    if out["c_y"] is None:
+        out["todo"].append("c_y: no C(t) of the subset replays (csub/c_t.jsonl) with y(t)")
+    return out
 
 
 # --------------------------------------------------------------------------- report
@@ -847,7 +995,34 @@ def format_table(name: str, res: Dict) -> str:
     return "\n".join(lines)
 
 
+def main_calibrate(argv: List[str]) -> None:
+    ap = argparse.ArgumentParser(prog="fleetdt.analysis calibrate",
+                                 description="c_y, T_m and B_ctl_bar of the DTP from calibration runs")
+    ap.add_argument("runs", nargs="+", help="run directories of emu/fleet.py (saturation runs with csub/)")
+    ap.add_argument("--json", action="store_true")
+    a = ap.parse_args(argv)
+    per = [calibrate_run(r) for r in a.runs]
+    cys = [p["c_y"] for p in per if p["c_y"] is not None]
+    tms = [p["T_m"] for p in per if p["T_m"] is not None]
+    bcs = [p["B_ctl_bar"] for p in per if p["B_ctl_bar"] is not None]
+    out = {"c_y": min(cys) if cys else None, "T_m": max(tms) if tms else None,
+           "B_ctl_bar": max(bcs) if bcs else None, "runs": per}
+    if a.json:
+        print(json.dumps(out, indent=1))
+        return
+    print("c_y = %s, T_m = %s s, B_ctl_bar = %s bytes (None: not measured, the DTP keeps its default)" % (
+        out["c_y"], out["T_m"], out["B_ctl_bar"]))
+    for p in per:
+        for td in p["todo"]:
+            print("TODO %s: %s" % (p["run"], td))
+
+
 def main(argv: Optional[List[str]] = None) -> None:
+    import sys
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "calibrate":
+        main_calibrate(argv[1:])
+        return
     ap = argparse.ArgumentParser(prog="fleetdt.analysis", description="Section VI metrics of a Fleet-DT DTA")
     ap.add_argument("dta", nargs="+", help="DTA files (JSON lines of G(t)), one per run")
     ap.add_argument("--dtp", required=True, help="DTP file (dtp.json)")
@@ -855,8 +1030,9 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--criterion", choices=CRITERIA, required=True,
                     help="full reception of an admitted edge (pre-registered): n >= messages forwarded by the vessel "
                          "regulator (count; n_l = ceil(r_l Ts) without the regulator log) or r >= d (1 - tol) - 1 (bytes)")
-    ap.add_argument("--c-y", "--kappa", dest="c_y", type=float, default=1.0,
-                    help="c_y of the margin c_y y - U C_hat (calibration minimum of C/y; --kappa: old name)")
+    ap.add_argument("--c-y", "--kappa", dest="c_y", type=float, default=None,
+                    help="c_y of K_y(t) = c_y y (T3 - T_m)/Ts - B_ctl_bar and of the MAPE (calibration minimum of C/y; "
+                         "default: the DTP; --kappa: old name)")
     ap.add_argument("--tol", type=float, default=1e-6)
     ap.add_argument("--B", type=int, default=2000, help="bootstrap resamples")
     ap.add_argument("--conf", type=float, default=0.95)

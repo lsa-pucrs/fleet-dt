@@ -675,6 +675,19 @@ bytes in its data bridge at every 1-ms sample of phase 3, with samples covering 
 phase 3). Cost: a short run of 80 steps at M = 4 (S3, spectrum) took 4-5 s per set offline on this
 2-core machine (37 s for the 15 sets with 2 jobs); 1200 steps take about 70 s per set.
 
+### Calibration of c_y, T_m and B_ctl_bar (DTP fields)
+
+`python -m fleetdt.analysis calibrate RUN [RUN ...]` sets c_y = smallest C(t)/y(t) of the saturation runs
+(C(t) of `RUN/csub/c_t.jsonl`, y(t) of `RUN/throughput.jsonl`, capped at 1); the AS smooths c_y y(t-1) in
+eq. (2). T_m = eps + delta_GS (eps = 2 max chrony max error + 1 ms, delta_GS = largest delivery time of the GS
+broker measured in Q) shortens phase 3 in K_hat(t) = C_hat(t) (T3 − T_m)/Ts, and B_ctl_bar = largest bytes
+outside the data bridges in phase 3 of a calibration step enters K_y(t) of the fidelity metrics. The tool
+reads these three measurements from `RUN/calib.json` (lists `chrony_max_error_s`, `gs_delivery_s`,
+`ctl_bytes_phase3`). TODO: no run logs them yet (the runs keep `chronyc tracking` before the run and the
+clock offsets of the probe, not the max error of chrony; the GS records no delivery time and no control
+bytes per phase), so `dtp.json` and `experiments/dtp_base.json` leave T_m = 0 and B_ctl_bar = 0 (the
+defaults, which give the grant of the model before the revision) and c_y = 1 until a calibration sets them.
+
 ## Vessel sampler of SIOCOUTQ (`emu/tools/outq_sampler.c`, `emu/tools/outq.py`)
 
 `fdt_outq --epoch E --ts-us 125000 --t1-us 20000 --t2-us 10000 --port 1884 --port 1883 --out

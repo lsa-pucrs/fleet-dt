@@ -338,9 +338,13 @@ class Service:
         pkg = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         env = dict(os.environ)
         env["PYTHONPATH"] = pkg + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+        # c_y, B_ctl_bar and (T3 - T_m)/Ts of the DTP: the PICP(U) of the outer loop compares
+        # K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar with U K_hat(t)
         args = [sys.executable, "-c", "import os, sys; os.nice(10); from fleetdt.outer import run_job; "
-                "run_job(sys.argv[1], float(sys.argv[2]), int(sys.argv[3]) or None, sys.argv[4])",
-                str(self.outer_dta), repr(float(self.outer_target)), str(int(self.outer_window or 0)), out]
+                "run_job(sys.argv[1], float(sys.argv[2]), int(sys.argv[3]) or None, sys.argv[4], "
+                "float(sys.argv[5]), float(sys.argv[6]), float(sys.argv[7]))",
+                str(self.outer_dta), repr(float(self.outer_target)), str(int(self.outer_window or 0)), out,
+                repr(float(self.dtp.c_y)), repr(float(self.dtp.B_ctl_bar)), repr(self.dtp.T3m / self.dtp.Ts)]
         try:
             try:
                 pid = os.posix_spawn(sys.executable, args, env,
