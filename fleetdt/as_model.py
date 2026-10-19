@@ -228,6 +228,33 @@ def grant_limit(C_hat: float, U: float, T3: float, Ts: float, m: int, Q: float =
     return grant_cap(C_hat, U, T3, Ts, Q, T_m) / m
 
 
+class BacklogBook:
+    """Backlog of the vessels outside M(t) (eq. 3). For each vessel i the book keeps the step s_i of its last
+    demand table that reached the AS in phase 1, the Q_i(s_i) of that table and the final a_i(s_i) that
+    Algorithm 1 granted to i in s_i. A vessel outside M(t) still sends its bytes of s_i and earlier in phase 3
+    of t, and those bytes stay within Qbar_i(t) = Q_i(s_i) + a_i(s_i) (0 for a vessel that never reported).
+    Q(t) = sum_{i in M(t)} Q_i(t) + sum_{i not in M(t)} Qbar_i(t)."""
+
+    def __init__(self) -> None:
+        self.last: Dict[int, Tuple[int, int, int]] = {}   # i -> (s_i, Q_i(s_i), a_i(s_i))
+
+    def qbar(self, i: int) -> int:
+        s = self.last.get(int(i))
+        return 0 if s is None else int(s[1] + s[2])
+
+    def split(self, M: Sequence[int], Qi: Dict[int, int]) -> Tuple[int, int, Dict[int, int]]:
+        """(sum of Q_i(t) over M(t), sum of Qbar_i(t) outside M(t), Qbar_i(t) per vessel outside M(t) that has
+        reported before)."""
+        inM = set(int(i) for i in M)
+        qbar = {i: self.qbar(i) for i in sorted(self.last) if i not in inM}
+        return int(sum(int(Qi.get(i, 0)) for i in inM)), int(sum(qbar.values())), qbar
+
+    def record(self, t: int, M: Sequence[int], Qi: Dict[int, int], a: Dict[int, int]) -> None:
+        """After the decision of step t: s_i = t, Q_i(t) and a_i(t) for every vessel of M(t)."""
+        for i in M:
+            self.last[int(i)] = (int(t), int(Qi.get(i, 0)), int(a.get(i, 0)))
+
+
 def admission_b7(D: Dict[int, Sequence[int]], order: Sequence[int], needed: Sequence[int],
                  b: float) -> Tuple[Dict[int, List[int]], Dict[int, float]]:
     """Baseline B7: per-vessel grants with redistribution of the unused grant (IPACT limited service with

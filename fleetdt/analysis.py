@@ -17,7 +17,8 @@ full-delivery fraction 1 - DMR):
   DMR        deadline miss ratio: fraction of the fleet steps in which some message of level 1 or 2 of a
              vessel of M(t) misses its step (DMR = 1 - phi, phi the full-delivery fraction)
   DMR_hat    DMR predicted by the backlog predictor of C5 (fleetdt.outer.backlog_admitted):
-             q_hat(t) = max(0, q_hat(t-1) + sum_i a_i(t) - K_y(t)), DMR_hat = fraction of the steps with q_hat > 0
+             q_hat(t) = max(0, max(q_hat(t-1), Q(t)) + sum_i a_i(t) - K_y(t)) with the logged Q(t) (Q_i over M(t)
+             plus Qbar_i outside M(t)), DMR_hat = fraction of the steps with q_hat > 0
   eta        bytes of the N(t) topics received within the step / bytes of the N(t) topics demanded
   PDR_i      per vessel i, the byte-weighted delivery ratio of the needed topics of vessel i (eta_i), with
              Jain's fairness index J and the ratio min_i PDR_i / max_i PDR_i (H5d) over vessels 1 to 3 only
@@ -773,7 +774,7 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
     res["PDR_state"], res["u"] = res["delta"], res["nu"]
     # C5: DMR predicted from the admitted bytes A(t) of the run and K_y(t)
     q, ok = backlog_admitted(np.asarray(s["y"], float), np.asarray(s["A"], float), dtp.T3m / dtp.Ts, c_y=cy,
-                             B_ctl_bar=dtp.B_ctl_bar)
+                             B_ctl_bar=dtp.B_ctl_bar, Q=np.asarray(s["Q"], float))
     res["DMR_hat"] = {"value": float(np.mean(q[ok] > 0.0)) if ok.any() else float("nan"), "n": int(ok.sum()),
                       "c_y": cy}
     # RelMSE of the ES prediction C_hat(t) of the run against persistence y(t - 1)

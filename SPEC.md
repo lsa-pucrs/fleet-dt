@@ -73,10 +73,14 @@ Phases of step t (wall clock of each host, synchronized by chrony):
 | `start(t) + Ts` | end of step t: the channel monitor publishes y(t); the GS discards messages of step t that arrive later |
 
 Phase 2 (AS): Ĉ(t) = (1 - alpha) Ĉ(t-1) + alpha c_y y(t-1), or Ĉ(t-1) when y(t-1) did not arrive in phase 1;
-K̂(t) = Ĉ(t) (T3 - T_m) / Ts; Q(t) = sum of the backlogs Q_i(t) of the demand tables of M(t) (Section 5);
-b(t) = max(0, U K̂(t) - Q(t)) / m(t); Algorithm 1 over sigma_t: level 2 for a needed topic that fits, 1 for
-another topic that fits, 0 otherwise. The decision log and `fleet/as` hold `K_hat` (without U), `cap` =
-max(0, U K̂(t) - Q(t)) = m(t) b(t), `Q` and `Qi`.
+K̂(t) = Ĉ(t) (T3 - T_m) / Ts; Q(t) = Q_M(t) + Q_out(t), with Q_M(t) = sum of the backlogs Q_i(t) of the demand
+tables of M(t) (Section 5) and Q_out(t) = sum of Qbar_i(t) = Q_i(s_i) + a_i(s_i) over the vessels outside M(t),
+s_i the step of the last demand table of vessel i that reached the AS in phase 1 and a_i(s_i) the final grant of
+Algorithm 1 to vessel i in s_i (Qbar_i = 0 for a vessel that never reported): a vessel outside M(t) gets no p(t)
+and forwards nothing new, so its bytes still queued stay within Qbar_i(t); b(t) = max(0, U K̂(t) - Q(t)) / m(t);
+Algorithm 1 over sigma_t: level 2 for a needed topic that fits, 1 for another topic that fits, 0 otherwise. The
+decision log and `fleet/as` hold `K_hat` (without U), `cap` = max(0, U K̂(t) - Q(t)) = m(t) b(t), `Q`, `Q_M`,
+`Q_out`, `Qi` and `Qbar`.
 
 A raw message belongs to step t when it reaches the vessel regulator in the interval
 `[start(t-1) + T1 + T2, start(t) + T1 + T2)`, so the vessel regulator forwards no message between
@@ -95,7 +99,7 @@ Prefix `boat/b<i>/` with the vessel index i (1..M). All binary fields in network
 | `boat/b<i>/tx/<topic>` | vessel (data bridge → GS) | vessel regulator | 0 (levels 2 and 1; level 2 leaves first in phase 3) | `t:u32, s:u16` + content; s = sequence number of the message in its topic and step, from 0; no MQTT acknowledgment crosses the channel; the GS removes repeated copies by (t, s) |
 | `fleet/order` | GS | operation control software | 1 | JSON `{"t":…, "order":[names], "needed":[names]}` |
 | `fleet/throughput` | GS (from the GS radio) | channel monitor | 0 | JSON `{"t":…, "y":bytes, "Tb":s, "To":s}` |
-| `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "cap":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…], "a":{…}, "A":…, "Q":…, "Qi":{…}}` (topic indices from 1) |
+| `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "cap":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…], "a":{…}, "A":…, "Q":…, "Q_M":…, "Q_out":…, "Qi":{…}, "Qbar":{…}}` (topic indices from 1) |
 | `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "n", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `n` = Q_i(t) of the demand table and the o_i(t), n_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |
 
 The video publisher splits each JPEG frame into messages of at most `bound` bytes; the content of

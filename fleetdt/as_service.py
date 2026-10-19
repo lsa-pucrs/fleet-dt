@@ -2,7 +2,8 @@
 
 At start(t) + T1 the AS closes M(t), computes C_hat(t) = (1 - alpha) C_hat(t-1) + alpha c_y y(t-1) (eq. 2;
 C_hat(t-1) when y(t-1) did not arrive in phase 1), K_hat(t) = C_hat(t) (T3 - T_m) / Ts and
-b(t) = max(0, U K_hat(t) - Q(t)) / m(t) (eq. 3, Q(t) = sum of the backlogs Q_i(t) of the demand tables of M(t);
+b(t) = max(0, U K_hat(t) - Q(t)) / m(t) (eq. 3, Q(t) = sum of the backlogs Q_i(t) of the demand tables of M(t)
+plus, for each vessel outside M(t), Qbar_i(t) = Q_i(s_i) + a_i(s_i) of its last step s_i in M (BacklogBook);
 c_y and T_m from the DTP), runs Algorithm 1 over sigma_t and N(t), publishes (t, p(t)) on boat/b<i>/levels
 (QoS 1) for every i in M(t) and the JSON summary on fleet/as. The decision (log line and fleet/as) holds D (the demand tables of M(t)),
 the table, and the admitted bytes a_i(t) of each vessel ("a") with their sum A(t) ("A"), which the backlog
@@ -42,7 +43,7 @@ import time
 import uuid
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .as_model import DTP, admission, admission_b7, grant_cap, smooth
+from .as_model import DTP, BacklogBook, admission, admission_b7, grant_cap, smooth
 from .model import decode_demand, encode_levels, tcp_nodelay
 
 log = logging.getLogger("fleetdt.as")
@@ -80,6 +81,7 @@ class AS:
             raise ValueError("the order of the DTP is not a permutation of its topics")
         self.sigma, self.N = sigma, needed
         self.C_hat: Optional[float] = None   # C_hat(last_t)
+        self.book = BacklogBook()            # s_i, Q_i(s_i), a_i(s_i) of every vessel (Qbar outside M(t))
         self.last_t: Optional[int] = None    # last step closed
         self.last: Optional[Dict] = None     # state of the last step closed (also for m = 0)
 
@@ -177,7 +179,9 @@ class AS:
             for k in [k for k in self._backlog if k < t]:
                 del self._backlog[k]
             M = sorted(D)
-            Q = int(sum(Qi.get(i, 0) for i in M))          # Q(t): backlog of the vessels of M(t)
+            # Q(t) = sum of Q_i(t) over M(t) + sum of Qbar_i(t) = Q_i(s_i) + a_i(s_i) over the vessels outside M(t)
+            Q_M, Q_out, Qbar = self.book.split(M, Qi)
+            Q = Q_M + Q_out
             m = len(M)
             K_hat = self.dtp.K_hat(C)                          # C_hat(t) (T3 - T_m) / Ts
             cap = grant_cap(C, self.U, self.dtp.T3, self.dtp.Ts, Q, self.dtp.T_m)   # max(0, U K_hat - Q)
@@ -187,7 +191,8 @@ class AS:
                    "c_y": self.dtp.c_y, "T_m": self.dtp.T_m,
                    "m": m, "p": None, "M": M, "order": list(self.sigma), "needed": list(self.N),
                    "D": {str(i): list(D[i]) for i in M}, "y_used": y_used,
-                   "Qi": {str(i): int(Qi.get(i, 0)) for i in M}, "Q": Q}
+                   "Qi": {str(i): int(Qi.get(i, 0)) for i in M}, "Q": Q, "Q_M": Q_M, "Q_out": Q_out,
+                   "Qbar": {str(i): v for i, v in Qbar.items()}}
             self.last = dec
             if m == 0:
                 return None
@@ -198,9 +203,11 @@ class AS:
                 dec["p_by"] = {i: p_by[i] for i in M}
                 dec["grants"] = {i: g[i] for i in M}
                 self._admitted(dec, D, {i: p_by[i] for i in M})
+                self.book.record(t, M, Qi, {int(i): v for i, v in dec["a"].items()})
                 return dec
             dec["p"] = admission(D, self.sigma, self.N, b)            # Algorithm 1
             self._admitted(dec, D, {i: dec["p"] for i in M})
+            self.book.record(t, M, Qi, {int(i): v for i, v in dec["a"].items()})
             return dec
 
     @staticmethod
@@ -423,7 +430,7 @@ class Service:
             for i in dec["M"]:
                 self.client.publish("boat/b%d/levels" % i, payload, qos=1)
         keys = ("t", "C_hat", "K_hat", "cap", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants", "a",
-                "A", "Q", "Qi")
+                "A", "Q", "Qi", "Q_M", "Q_out", "Qbar")
         self.client.publish("fleet/as", json.dumps({k: dec[k] for k in keys if k in dec}, separators=(",", ":")),
                             qos=0)
 

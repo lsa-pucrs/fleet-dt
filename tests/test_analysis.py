@@ -701,3 +701,25 @@ def test_outer_loop_U_star_with_K_y():
     for u in (0.6, 0.8):
         assert w[u]["PICP"] == pytest.approx(np.mean(z >= u * 300_000.0))
     assert low["B_ctl_bar"] == 5000.0
+
+
+def test_backlog_with_qbar_in_h4a_and_dmr_hat():
+    """Q(t) of the analysis counts Qbar_i(t) of the vertices outside M(t): H4a drops such steps, and DMR-hat
+    carries max(q_hat(t-1), Q(t)) into phase 3."""
+    r = {"vessels": [1], "vertices": [{"i": 1, "Q": 0, "member": True}, {"i": 2, "Q": 0, "member": False, "Qbar": 900}]}
+    assert O.backlog_of(r) == 900 and O.backlog_of(dict(r, Q=5)) == 5
+    n = 20
+    y, C = np.full(n, 100_000.0), np.full(n, 100_000.0)
+    recs = _records(y, C, U=0.8, fail_at={4})
+    for rec in recs:
+        rec["vertices"] = [{"i": 1, "Q": 0, "member": True}, {"i": 2, "Q": 0, "member": True}]
+    recs[4]["vertices"].append({"i": 3, "Q": 0, "member": False, "Qbar": 700})
+    h = A.h4a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes")
+    assert h["n_cond"] == n - 1 and h["failures"] == 0
+    # DMR-hat: K_y = 0.9 * 1000 * 0.72 = 648 per step, A = 600: no backlog unless Q(t) brings one
+    yy = np.full(4, 1000.0)
+    A_ = np.full(4, 600.0)
+    q0, _ = O.backlog_admitted(yy, A_, 0.72, c_y=0.9)
+    assert np.all(q0 == 0)
+    q1, _ = O.backlog_admitted(yy, A_, 0.72, c_y=0.9, Q=np.array([0.0, 100.0, 0.0, 0.0]))
+    assert q1.tolist() == pytest.approx([0.0, 52.0, 4.0, 0.0])

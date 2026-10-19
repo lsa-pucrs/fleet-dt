@@ -104,11 +104,12 @@ def admitted_bytes(r: Dict) -> float:
 
 
 def backlog_of(r: Dict) -> float:
-    """Q(t) of one record: "Q" of the AS or of G(t), else the sum of Q_i(t) of the vertices in M(t), else 0."""
+    """Q(t) of one record: "Q" of the AS or of G(t), else the sum of Q_i(t) of the vertices in M(t) and of
+    Qbar_i(t) of the vertices outside M(t), else 0."""
     if r.get("Q") is not None:
         return float(r["Q"])
     M = set(r.get("vessels") or [])
-    return float(sum(float(v.get("Q") or 0) for v in r.get("vertices") or [] if v.get("i") in M))
+    return float(sum(float((v.get("Q") if v.get("i") in M else v.get("Qbar")) or 0) for v in r.get("vertices") or []))
 
 
 def fill_series(records: Iterable[Dict], T3_Ts: float) -> np.ndarray:
@@ -296,19 +297,21 @@ def backlog(y: np.ndarray, C_hat: np.ndarray, U_grid=U_GRID, T3_Ts: float = T3_T
 
 def backlog_admitted(y: np.ndarray, A: np.ndarray, T3_Ts: float = T3_TS_DEFAULT,
                      c_y: Optional[float] = None, kappa: Optional[float] = None,
-                     B_ctl_bar: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+                     B_ctl_bar: float = 0.0, Q: Optional[np.ndarray] = None) -> Tuple[np.ndarray, np.ndarray]:
     """The predictor of C5 on the logged run itself (DMR-hat): q_hat(t) = max(0, q_hat(t-1) + A(t) - K_y(t)),
-    K_y(t) = c_y y(t) T3_Ts - B_ctl_bar, with the admitted bytes A(t) = sum_i a_i(t) (admitted_bytes); a step
-    without y(t) or A(t) leaves q unchanged and is not evaluated. Returns q (n,) and the mask of the evaluated
-    steps."""
+    K_y(t) = c_y y(t) T3_Ts - B_ctl_bar, with the admitted bytes A(t) = sum_i a_i(t) (admitted_bytes). With the
+    logged backlog Q(t) of the AS (Q_i(t) over M(t) plus Qbar_i(t) outside M(t)), the backlog carried into
+    phase 3 of step t is max(q_hat(t-1), Q(t)): the measured bound replaces a smaller prediction. A step without
+    y(t) or A(t) leaves q unchanged and is not evaluated. Returns q (n,) and the mask of the evaluated steps."""
     cy = _c_y(c_y, kappa)
     y, A = np.asarray(y, dtype=float), np.asarray(A, dtype=float)
+    Qv = np.zeros(len(y)) if Q is None else np.nan_to_num(np.asarray(Q, dtype=float), nan=0.0)
     ok = ~(np.isnan(y) | np.isnan(A))
     q = np.zeros(len(y))
     cur = 0.0
     for t in range(len(y)):
         if ok[t]:
-            cur = max(0.0, cur + A[t] - (cy * y[t] * T3_Ts - B_ctl_bar))
+            cur = max(0.0, max(cur, Qv[t]) + A[t] - (cy * y[t] * T3_Ts - B_ctl_bar))
         q[t] = cur
     return q, ok
 

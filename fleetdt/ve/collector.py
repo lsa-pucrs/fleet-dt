@@ -27,7 +27,7 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
-from ..as_model import DTP, grant_limit, smooth
+from ..as_model import DTP, BacklogBook, grant_limit, smooth
 from ..model import Graph, decode_demand, decode_levels, decode_step_header, tcp_nodelay
 
 VESSEL_RE = re.compile(r"^boat/b(\d+)/(demand|levels|regulator|tx/(.+))$")
@@ -66,6 +66,7 @@ class Assembler:
         self.last_C_hat: Optional[float] = None
         self.last_t: Optional[int] = None
         self._y_prev: Optional[float] = None
+        self.book = BacklogBook()   # Qbar_i(t) of the vessels outside M(t) when the AS publishes none
         self.index = {name: k + 1 for k, name in enumerate(dtp.topics)}
 
     # ------------------------------------------------------------------ helpers
@@ -192,6 +193,13 @@ class Assembler:
             v.member = v.i in g.vessels
         g.y = self.y.pop(t, None)
         a = self.as_values.pop(t, None)
+        # Qbar_i(t) on vertex i outside M(t): from the AS (fleet/as), else from the book of the VE
+        qbar = {int(i): int(v) for i, v in (a.get("Qbar") or {}).items()} if a and a.get("Qbar") is not None \
+            else self.book.split(g.vessels, {})[2]
+        for i, v in qbar.items():
+            if i not in g.vessels:
+                x = g.vertex(i)
+                x.member, x.Qbar = False, v
         g.Q = float(a["Q"]) if a and a.get("Q") is not None else float(g.backlog())
         if a and a.get("order"):          # sigma_t and N(t) that the AS used
             g.order, g.needed = [int(v) for v in a["order"]], [int(v) for v in a.get("needed", [])]
@@ -204,7 +212,7 @@ class Assembler:
             for k in ("C_hat", "K_hat", "b", "U", "alpha", "A"):
                 if k in a:
                     setattr(g, k, a[k])
-        else:  # the VE reproduces eq. (2) and eq. (3), with the backlog Q(t) of the vertices of M(t)
+        else:  # the VE reproduces eq. (2) and eq. (3), with the backlog Q(t) of the vertices (Q_i in M, Qbar_i outside)
             g.U, g.alpha = self.dtp.U, self.dtp.alpha
             if self.last_C_hat is None:
                 g.C_hat = self.dtp.C0
@@ -215,6 +223,10 @@ class Assembler:
             g.K_hat = self.dtp.K_hat(g.C_hat)
             g.b = grant_limit(g.C_hat, self.dtp.U, self.dtp.T3, self.dtp.Ts, g.m, Q=g.Q, T_m=self.dtp.T_m)
         self.last_C_hat, self.last_t, self._y_prev = g.C_hat, t, g.y
+        # s_i, Q_i(t) and the final a_i(t) of the vessels of M(t) (the "a" of the AS, else the levels of G(t))
+        adm = {int(i): int(v) for i, v in a["a"].items()} if a and isinstance(a.get("a"), dict) else \
+            {i: g.admitted(i) for i in g.vessels}
+        self.book.record(t, g.vessels, {v.i: v.Q for v in g.vertices if v.member}, adm)
         for k in [k for k in self.y if k < t - 1]:
             del self.y[k]
         return g

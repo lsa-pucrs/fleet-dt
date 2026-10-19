@@ -91,10 +91,11 @@ class Edge:
 class Vertex:
     """Vertex i of G(t): a vessel whose demand table D_i(t) reached the GS for step t, with its backlog Q_i(t)
     (bytes of earlier steps still to cross the channel at the start of phase 1) and its membership in M(t)
-    (the table arrived within phase 1)."""
+    (the table arrived within phase 1), or a vessel outside M(t) with the bound Qbar_i(t) of its backlog."""
     i: int
     Q: int = 0
     member: bool = False
+    Qbar: Optional[int] = None   # outside M(t): Q_i(s_i) + a_i(s_i) of the last step s_i in M (eq. 3)
 
 
 @dataclass
@@ -105,7 +106,7 @@ class Graph:
     topics: List[str]
     vessels: List[int] = field(default_factory=list)       # M(t), sorted
     edges: List[Edge] = field(default_factory=list)
-    vertices: List[Vertex] = field(default_factory=list)   # vessels with a demand table of step t, sorted by i
+    vertices: List[Vertex] = field(default_factory=list)   # vessels with a table of step t or a Qbar, sorted by i
     # attributes of vertex 0
     y: Optional[float] = None       # measured throughput of step t (bytes per T_s)
     C_hat: Optional[float] = None   # prediction of step t
@@ -140,9 +141,9 @@ class Graph:
         return v
 
     def backlog(self) -> int:
-        """Q(t) = sum of Q_i(t) over the vertices in M(t)."""
+        """Q(t) = sum of Q_i(t) over the vertices in M(t) + sum of Qbar_i(t) over the vertices outside M(t)."""
         M = set(self.vessels)
-        return int(sum(v.Q for v in self.vertices if v.i in M))
+        return int(sum(v.Q if v.i in M else (v.Qbar or 0) for v in self.vertices))
 
     def admitted(self, i: int) -> int:
         """Final value a_i of Algorithm 1: demand of vessel i over the admitted topics."""

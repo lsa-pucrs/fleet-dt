@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from fleetdt.as_model import DTP, admission, grant_limit, smooth
+from fleetdt.as_model import DTP, BacklogBook, admission, grant_limit, smooth
 from fleetdt.as_service import AS, Service, decode_throughput
 from fleetdt.model import decode_levels, encode_demand, tcp_nodelay
 
@@ -70,6 +70,36 @@ def test_grant_limit_subtracts_the_backlog():
     dec = a.close_phase1(0)
     assert dec["K_hat"] == pytest.approx(4000.0 * (0.5 - 0.1) / 1.0) and dec["T_m"] == 0.1
     assert dec["b"] == pytest.approx(0.8 * 4000.0 * 0.4)
+
+
+def test_backlog_of_vessels_outside_M():
+    """Q(t) = sum of Q_i(t) over M(t) + sum of Qbar_i(t) = Q_i(s_i) + a_i(s_i) over the vessels outside M(t), s_i the
+    last step in which the table of i reached the AS in phase 1; a vessel that never reported adds 0."""
+    dtp = small_dtp(U=1.0)                                       # U K_hat = 2000 per step
+    a = AS(dtp, epoch=0.0)
+    a.on_demand(1, 0, D1, at=0.01, Q=50)
+    a.on_demand(2, 0, D2, at=0.02, Q=70)
+    d0 = a.close_phase1(0)
+    assert d0["Q"] == 120 and d0["Q_out"] == 0 and d0["Qbar"] == {}
+    a1, a2 = d0["a"]["1"], d0["a"]["2"]
+    # step 1: vessel 2 misses phase 1 (its table comes late); vessel 9 never reported
+    a.on_demand(1, 1, D1, at=1.01, Q=10)
+    assert not a.on_demand(2, 1, D2, at=1.30, Q=5)
+    d1 = a.close_phase1(1)
+    assert d1["M"] == [1] and d1["Q_M"] == 10
+    assert d1["Qbar"] == {"2": 70 + a2} and d1["Q_out"] == 70 + a2 and d1["Q"] == 10 + 70 + a2
+    assert d1["b"] == pytest.approx(max(0.0, 2000.0 - d1["Q"]) / 1)
+    assert a.book.qbar(9) == 0
+    # step 2: vessel 2 still outside: the same bound (s_2 = 0); vessel 1 now outside with s_1 = 1
+    a.on_demand(2, 2, D2, at=2.01, Q=30)
+    d2 = a.close_phase1(2)
+    assert d2["Qbar"] == {"1": 10 + d1["a"]["1"]} and d2["Q_M"] == 30
+    assert d2["Q"] == 30 + 10 + d1["a"]["1"]
+    # step 3: vessel 2 back in M(t) with its own Q_2(3); vessel 1 bound from s_1 = 1
+    a.on_demand(2, 3, D2, at=3.01, Q=0)
+    d3 = a.close_phase1(3)
+    assert d3["Qbar"] == {"1": 10 + d1["a"]["1"]} and d3["Q_M"] == 0
+    assert a1 > 0
 
 
 def test_smoothing_with_c_y():
@@ -338,6 +368,7 @@ def test_service_over_mqtt(tmp_path):
         pub_delay = {r["t"]: r["pub_delay"] for r in lines if r.get("published")}
 
         C = dtp.C0
+        book, n_out = BacklogBook(), 0
         sigma = [dtp.index(n) for n in dtp.order]
         N = [dtp.index(n) for n in dtp.needed]
         for t in range(steps):
@@ -350,10 +381,15 @@ def test_service_over_mqtt(tmp_path):
             assert o["M"] == sorted(valid[t]), t
             assert o["m"] == len(valid[t])
             assert o["C_hat"] == pytest.approx(C, rel=1e-12), t
-            b = grant_limit(C, dtp.U, dtp.T3, dtp.Ts, o["m"])
+            # vessels outside M(t) (vessel 3 every odd step, vessel 2 at step 7): Qbar_i = Q_i(s_i) + a_i(s_i)
+            Q_M, Q_out, qbar = book.split(o["M"], {})
+            assert o["Q_out"] == Q_out and o["Qbar"] == {str(i): v for i, v in qbar.items()}, t
+            b = grant_limit(C, dtp.U, dtp.T3, dtp.Ts, o["m"], Q=Q_M + Q_out)
             assert o["b"] == pytest.approx(b, rel=1e-12)
             p = admission(valid[t], sigma, N, o["b"])
             assert o["p"] == p and len(p) == L, t
+            book.record(t, o["M"], {}, {i: sum(valid[t][i][l] for l in range(L) if p[l] > 0) for i in o["M"]})
+            n_out += Q_out > 0
             assert o["order"] == sigma and o["needed"] == N, t
             deadline = epoch + t * dtp.Ts + dtp.T1
             assert pub_delay[t] < dtp.T2, (t, pub_delay[t])          # p(t) published within phase 2
@@ -363,6 +399,7 @@ def test_service_over_mqtt(tmp_path):
                 assert deadline <= at < deadline - dtp.T1 + dtp.Ts, (t, i, at - deadline)   # inside step t
             assert not any(k == (t, 3) for k in levels) or 3 in valid[t]
         assert len({p_t for p_t in (tuple(fas[t][0]["p"]) for t in range(steps))}) > 1  # the decisions vary
+        assert n_out > 0                                            # steps with a vessel outside M(t)
         assert summary["n"] == steps and summary["max"] < dtp.T2
     finally:
         if svc is not None:

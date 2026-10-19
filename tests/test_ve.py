@@ -105,6 +105,34 @@ def test_assembler_keeps_backlog_and_membership():
     assert h.vertices == g.vertices and h.Q == 1500
 
 
+def test_assembler_puts_qbar_on_vessels_outside_M():
+    """Vertex i outside M(t) carries Qbar_i(t) = Q_i(s_i) + a_i(s_i); the VE reproduces it without fleet/as and
+    takes it from fleet/as when the AS publishes it."""
+    dtp = DTP(topics=["state", "video"], Ts=0.125, T1=0.02, T2=0.01, alpha=0.5, U=0.8, C0=1000.0)
+    fc = FakeClock()
+    asm = Assembler(dtp, StepClock(dtp.Ts, 0.0, now=fc))
+    asm.on_message("boat/b1/demand", encode_demand(0, [64, 5000], Q=10), at=0.005)
+    asm.on_message("boat/b2/demand", encode_demand(0, [64, 5000], Q=20), at=0.006)
+    asm.on_message("boat/b1/levels", encode_levels(0, [2, 0]), at=0.025)
+    fc.now = 0.2
+    g0 = asm.close_ready(grace=0.05)[0]
+    assert g0.Q == 30 and all(v.Qbar is None for v in g0.vertices)
+    asm.on_message("boat/b1/demand", encode_demand(1, [64, 5000], Q=0), at=0.13)
+    fc.now = 0.33
+    g1 = asm.close_ready(grace=0.05)[0]
+    v2 = g1.vertex(2)
+    assert g1.vessels == [1] and v2.member is False and v2.Qbar == 20 + 64       # a_2(0) = d_state
+    assert g1.Q == 0 + 84 and g1.backlog() == 84
+    assert g1.b == pytest.approx(max(0.0, 0.8 * g1.C_hat * 0.095 / 0.125 - 84))
+    # the values of the AS win
+    asm.on_message("boat/b1/demand", encode_demand(2, [64, 5000]), at=0.255)
+    asm.on_message("fleet/as", json.dumps({"t": 2, "C_hat": 1000.0, "K_hat": 760.0, "b": 100.0, "U": 0.8,
+                                           "alpha": 0.5, "Q": 500, "Qbar": {"2": 400, "5": 100}}).encode(), at=0.27)
+    fc.now = 0.46
+    g2 = asm.close_ready(grace=0.05)[0]
+    assert g2.Q == 500 and g2.vertex(2).Qbar == 400 and g2.vertex(5).Qbar == 100 and not g2.vertex(5).member
+
+
 def test_graph_dict_roundtrip():
     g = FleetSim(M=2, seed=3).step(0).graph
     h = Graph.from_dict(json.loads(json.dumps(g.to_dict())))
