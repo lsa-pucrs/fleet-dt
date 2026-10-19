@@ -180,7 +180,8 @@ def prepare_cmd(R, spec, h, M):
              "chronyc -n tracking > %s/chrony-before.txt 2>&1 || true" % RUN]
     if h == 0:
         vs = " ".join("--vessel %d=%s" % (i, R.host_ip(i)) for i in range(1, M + 1))
-        lines += ["python3 -m fleetdt.gsconf gs %s%s > %s/m.conf" % (vs, " --b2" if pmode == "b2" else "", RUN),
+        # as2 stack: its regulator forwards the required topics with QoS 2 (the paper stack uses QoS 1)
+        lines += ["python3 -m fleetdt.gsconf gs %s%s --data-qos 2 > %s/m.conf" % (vs, " --b2" if pmode == "b2" else "", RUN),
                   "echo 'log_dest file %s/mosquitto.log' >> %s/m.conf" % (RUN, RUN)]
     else:
         lines += ["make -s build/fdt_regulator.so MOSQ=/opt/mosquitto-2.1 > %s/make.log 2>&1" % RUN,

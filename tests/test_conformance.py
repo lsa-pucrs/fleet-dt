@@ -154,7 +154,7 @@ def build_run(rd, seed=3):
                         c += cost(size)
                         x += size + 6
                         payload = struct.pack("!IH", t, s) + bytes(size)
-                        stream += mqtt_publish("boat/b%d/tx/%s" % (i, n), lv, pid[i], payload)
+                        stream += mqtt_publish("boat/b%d/tx/%s" % (i, n), 1, pid[i], payload)   # QoS 1, both levels
                         pid[i] += 1
                     else:
                         reason = "no_table" if not have_p else ("level0" if lv == 0 else "police")
@@ -230,7 +230,7 @@ def test_synthetic_run_conforms(run_dir):
     c = rep["checks"]
     assert c["alg1"]["replayed"] == STEPS and c["alg1"]["order_mismatch"] == 0
     assert c["no_p"]["pairs_without_p"] == 1
-    assert set(c["qos"]["qos_histogram"]) <= {"1", "2"} and c["qos"]["n"] > STEPS
+    assert set(c["qos"]["qos_histogram"]) == {"1"} and c["qos"]["n"] > STEPS
     assert c["dt"]["M_agreement"] == 1.0 and c["dt"]["dti_lag_max_steps"] < 1.0
     assert c["logged"]["src_steps_checked"] > 0 and c["logged"]["src_mismatch"] == 0
     # the pcap parser sees every forwarded message once (retransmission and reordering included)
@@ -285,7 +285,7 @@ def test_wrong_qos_fails(run_dir, monkeypatch):
     pubs = CF.uplink_publishes(os.path.join(run_dir, "emu", "ap.pcap"))
     bad = [list(p) for p in pubs]
     k = next(n for n, p in enumerate(bad) if p[2] == "state")
-    bad[k][3] = 1                                   # state is needed: level 2, so QoS 2
+    bad[k][3] = 2                                   # state is needed (level 2), which also crosses with QoS 1
     monkeypatch.setattr(CF, "uplink_publishes", lambda path: [tuple(p) for p in bad])
     rep, st = status(run_dir)
     assert st["qos"] == "fail" and rep["checks"]["qos"]["fail"] == 1
@@ -354,7 +354,7 @@ def test_baseline_skips_table_checks(run_dir):
     json.dump(r, open(os.path.join(run_dir, "result.json"), "w"))
     rep, st = status(run_dir)
     assert st["alg1"] == "skipped" and st["no_p"] == "skipped" and st["bytes"] == "skipped"
-    assert st["qos"] == "fail"                       # B1 forwards with QoS 1; the synthetic run used the levels
+    assert st["qos"] == "pass"                       # B1 forwards with QoS 1, as both levels do
 
 
 def test_pcap_resync_without_syn():

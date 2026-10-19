@@ -116,10 +116,10 @@ def test_held_cost():
 
 def test_gsconf_spec5():
     from fleetdt.gsconf import gs_conf, vessel_conf
-    c = gs_conf({1: "10.10.0.11"})
+    c = gs_conf({1: "10.10.0.11"}, data_qos=2)    # the as2 stack keeps the QoS 2 data bridge
     assert "max_inflight_messages 0" in c and "set_tcp_nodelay true" in c
     assert "connection b1-data\naddress 10.10.0.11:1884" in c and "topic boat/b1/tx/# in 2" in c
-    c2 = gs_conf({1: "10.10.0.11"}, b2=True)
+    c2 = gs_conf({1: "10.10.0.11"}, b2=True, data_qos=2)
     for cls, port in (("be", 1884), ("af41", 1885), ("ef", 1886)):
         assert "connection b1-data-%s\naddress 10.10.0.11:%d" % (cls, port) in c2
         assert "topic # in 2 boat/b1/tx/ boat/b1/tx2/%s/" % cls in c2

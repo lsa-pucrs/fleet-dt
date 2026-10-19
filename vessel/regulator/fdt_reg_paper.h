@@ -20,10 +20,12 @@
  *                  level 0 holds every message; levels 1 and 2 forward the messages while the sum of
  *                  c_b (x + 6) + c_m,l stays within the d_l(t) of D_i(t) (the value sent is the value
  *                  policed); the message that would exceed it and the later messages of topic l in
- *                  step t stay. Then it publishes the level-2 messages with QoS 2 and the level-1
- *                  messages with QoS 1, each level in order of reception, all in the same tick (no
+ *                  step t stay. Then it publishes the level-2 messages, then the level-1 messages
+ *                  (strict priority), each level in order of reception, all in the same tick (no
  *                  pacing), on boat/b<i>/tx/<topic> with payload t:u32, s:u16 + content, s = index of
- *                  the message in its topic and step from 0.
+ *                  the message in its topic and step from 0. Both levels use MQTT QoS 1 (fdt_preg_qos);
+ *                  the GS removes the repeated copies by the pair (t, s), so the applications receive
+ *                  each message once (the bridges keep cleansession true).
  *  start(t+1)      end of step t: every message of step t not forwarded is logged (one JSON line per
  *                  message in the vessel log file: step, topic, sequence number, bytes, reason) and
  *                  is never forwarded later; the step summary goes to boat/b<i>/regulator (QoS 0) and,
@@ -86,6 +88,12 @@ enum fdt_pmode { FDT_PMODE_PAPER = 0, FDT_PMODE_NOPOLICE = 1, FDT_PMODE_NOEOS = 
 enum fdt_preason { FDT_PR_NONE = 0, FDT_PR_FWD, FDT_PR_NO_TABLE, FDT_PR_NO_DEMAND, FDT_PR_LEVEL0, FDT_PR_POLICE,
                    FDT_PR_OVERFLOW, FDT_PR_RESYNC, FDT_PR_EOS, FDT_PR_SHUTDOWN, FDT_PR_BUDGET, FDT_PR_SLOT,
                    FDT_PR_N };
+
+/* MQTT QoS of a forwarded message of level 1 or 2: 1 for both levels (the order of the levels in phase 3
+ * gives the priority; the GS deduplicates by (t, s)) */
+#define FDT_P_QOS_LEVEL2 1
+#define FDT_P_QOS_LEVEL1 1
+int fdt_preg_qos(int level);
 
 /* paper | paper_nopolice | paper_noeos | paper_b1 | paper_b2 | paper_b3 | b8 (alias paper_b8) | paper_tdma;
  * -1 otherwise */

@@ -12,8 +12,8 @@ The script checks the run against the model of the paper from the logs that emu/
               p(t) that it received; sigma_t and N(t) equal the mode of the JMCS stub of step t
   bytes       forwarded channel bytes per edge <= d_il(t): the cost of the messages that each regulator
               forwarded (step log) and the r_il(t) that the GS received (G(t) of the DTA)
-  qos         every forwarded message crosses with the MQTT QoS of its level (2 or 1; baselines: QoS 1)
-              and no message of a level-0 topic crosses: the PUBLISH packets of the data bridges in the
+  qos         every forwarded message of a topic of level 1 or 2 crosses with MQTT QoS 1 (the revised
+              model forwards both levels with QoS 1; baselines: QoS 1) and no message of a level-0 topic crosses: the PUBLISH packets of the data bridges in the
               pcap of the AP (fdt-emu --pcap, "pcap": true of the experiment); skipped without a pcap
   no_p        no uplink message of step t from a vessel without p(t) (step log, DTA and pcap)
   logged      every message of step t that the regulator did not forward is in the vessel log with a
@@ -525,7 +525,7 @@ def check_qos(run, pubs=None):
             c.ok(False, {"t": t, "i": i, "topic": name, "s": s, "qos": qos, "why": "no table"})
             continue
         lv = int(p[idx[name]])
-        c.ok(lv in (1, 2) and qos == lv, {"t": t, "i": i, "topic": name, "s": s, "qos": qos, "level": lv})
+        c.ok(lv in (1, 2) and qos == 1, {"t": t, "i": i, "topic": name, "s": s, "qos": qos, "level": lv})
     c.extra["qos_histogram"] = {str(k): v for k, v in sorted(hist.items())}
     if c.n == 0:
         c.skipped("no uplink PUBLISH in the steps")

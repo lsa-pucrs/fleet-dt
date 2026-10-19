@@ -26,6 +26,11 @@ int fdt_pmode_parse(const char *s)
 	return -1;
 }
 
+int fdt_preg_qos(int level)
+{
+	return level >= 2 ? FDT_P_QOS_LEVEL2 : level == 1 ? FDT_P_QOS_LEVEL1 : 0;
+}
+
 const char *fdt_pmode_name(int mode)
 {
 	return mode >= 0 && mode < FDT_PMODE_N ? pmode_names[mode] : "?";
@@ -712,7 +717,7 @@ static void do_v(struct fdt_preg *r, int64_t t, int64_t now_us)
 			nf++;
 		}
 	}
-	/* strict priority: level 2 (QoS 2) before level 1 (QoS 1), each level in order of reception */
+	/* strict priority: level 2 before level 1, each level in order of reception; QoS 1 for both levels */
 	if (nf > 1)
 		qsort(fe, nf, sizeof *fe, cmp_arr);
 	for (int level = 2; level >= 1; level--)
@@ -723,7 +728,7 @@ static void do_v(struct fdt_preg *r, int64_t t, int64_t now_us)
 			struct fdt_pmsg *m = &r->q[l].m[fe[j].k];
 			fdt_put_u32(m->buf, (uint32_t)m->t);
 			fdt_put_u16(m->buf + 4, m->seq);
-			pub(r, r->tx_topic[l], level, m->buf, FDT_STEP_HEADER + (size_t)m->len);
+			pub(r, r->tx_topic[l], fdt_preg_qos(level), m->buf, FDT_STEP_HEADER + (size_t)m->len);
 			if (m->t == t) {
 				s->fwd[l]++;
 			} else {

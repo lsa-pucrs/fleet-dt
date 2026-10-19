@@ -1,6 +1,6 @@
 /*
  * Unit tests of the vessel regulator in mode paper (fdt_reg_paper.c) and of its DTP reader and 0-based
- * step clock (fdt_paper.c): wire formats of fleetdt/model.py, QoS from the level, no uplink without
+ * step clock (fdt_paper.c): wire formats of fleetdt/model.py, QoS 1 for both levels, no uplink without
  * p(t), policing to the d_il(t) of D_i(t), start(t) = epoch + t Ts, no pacing and no phase-1 offset,
  * the vessel log at the end of the step, the ablations paper_nopolice and paper_noeos, the step header.
  */
@@ -278,7 +278,8 @@ static void test_demand(void)
 	fdt_preg_free(&r);
 }
 
-/* items 1, 2 and 9: levels 2 then 1, QoS from the level, level 0 held, order of reception, header t, s */
+/* items 1, 2 and 9: levels 2 then 1 (strict priority), QoS 1 for both levels, level 0 held, order of reception,
+ * header t, s */
 static void test_forward(void)
 {
 	struct fdt_preg r;
@@ -314,7 +315,9 @@ static void test_forward(void)
 	CHECK(next == S(21));   /* no pacing: everything leaves in this tick, the next event is the end of the step */
 	const char *exp_topic[5] = {"boat/b1/tx/state", "boat/b1/tx/gps", "boat/b1/tx/state", "boat/b1/tx/imu",
 	                            "boat/b1/tx/imu"};
-	const int exp_qos[5] = {2, 2, 2, 1, 1};
+	/* revised model: QoS 1 for level 2 and level 1; level 2 still leaves first */
+	CHECK(fdt_preg_qos(2) == 1 && fdt_preg_qos(1) == 1 && fdt_preg_qos(0) == 0);
+	const int exp_qos[5] = {1, 1, 1, 1, 1};
 	const uint8_t exp_tag[5] = {0x21, 0x31, 0x22, 0x11, 0x12};
 	const int exp_seq[5] = {0, 0, 1, 0, 1};
 	CHECK(nsent - from == 5);

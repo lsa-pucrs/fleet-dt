@@ -83,7 +83,7 @@ Prefix `boat/b<i>/` with the vessel index i (1..M). All binary fields in network
 | `boat/b<i>/demand` | vessel (control bridge → GS) | DTI program | 1 | `t:u32, L:u8, d_1..d_L:u32` |
 | `boat/b<i>/levels` | GS (control bridge → vessel) | AS | 1 | `t:u32, L:u8, p_1..p_L:u8` (p ∈ {0,1,2}) |
 | `boat/b<i>/goals` | GS (control bridge → vessel) | operation control software | 1 | JSON `{"t":…, "lat":…, "lon":…, "speed":…}` |
-| `boat/b<i>/tx/<topic>` | vessel (data bridge → GS) | vessel regulator | p_l (2 → QoS 2, 1 → QoS 1) | `t:u32, s:u16` + content; s = sequence number of the message in its topic and step, from 0 |
+| `boat/b<i>/tx/<topic>` | vessel (data bridge → GS) | vessel regulator | 1 (levels 2 and 1; level 2 leaves first in phase 3) | `t:u32, s:u16` + content; s = sequence number of the message in its topic and step, from 0; the GS removes repeated copies by (t, s), so the applications receive each message once |
 | `fleet/order` | GS | operation control software | 1 | JSON `{"t":…, "order":[names], "needed":[names]}` |
 | `fleet/throughput` | GS (from the GS radio) | channel monitor | 0 | JSON `{"t":…, "y":bytes, "Tb":s, "To":s}` |
 | `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…]}` (topic indices from 1) |
@@ -97,11 +97,12 @@ message in the frame, number of messages of the frame).
 
 | Bridge | Address on the vessel | Topics | QoS |
 |---|---|---|---|
-| `b<i>-data` | vessel:1884 (dedicated listener) | `boat/b<i>/tx/# in 2` | 2 |
+| `b<i>-data` | vessel:1884 (dedicated listener) | `boat/b<i>/tx/# in 1` | 1 |
 | `b<i>-ctl` | vessel:1883 | `boat/b<i>/demand in 1`, `boat/b<i>/regulator in 0`, `boat/b<i>/levels out 1`, `boat/b<i>/goals out 1` | 1 |
 
 Both bridges use `cleansession true`, `bridge_max_packet_size` unset, `max_inflight_messages 65534`
-(R9). `python -m fleetdt.gsconf` writes both configurations. Patch
+(R9). `python -m fleetdt.gsconf` writes both configurations (`--data-qos 2` keeps the QoS 2 data bridge of
+the as2 stack of SPEC_v2.md). Patch
 `mosquitto/patches/0002-bridge-apply-set_tcp_nodelay.patch` applies `set_tcp_nodelay true` to the
 bridge sockets, and patch `0001-plugin_tick-keep-pending-deadline.patch` keeps the deadline of a
 plugin tick when another event wakes the broker, so phase 3 starts within 1 ms (R8).
