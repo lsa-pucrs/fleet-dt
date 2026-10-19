@@ -27,7 +27,7 @@ def test_gsconf_bridges():
     c = gs_conf({1: "10.0.0.1", 2: "10.0.0.2,2883,2884"})
     assert "connection b1-ctl\naddress 10.0.0.1:1883" in c
     assert "connection b2-data\naddress 10.0.0.2:2884" in c
-    assert "topic boat/b2/tx/# in 1" in c and "in 2" not in c and "topic boat/b1/levels out 1" in c
+    assert "topic boat/b2/tx/# in 0" in c and "tx/# in 1" not in c and "in 2" not in c and "topic boat/b1/levels out 1" in c
     assert "topic boat/b1/regulator in 0" in c and "set_tcp_nodelay true" in c
     v = vessel_conf(3, "/etc/fleetdt/dtp.json")
     assert "plugin_opt_vessel 3" in v and "listener 1884" in v

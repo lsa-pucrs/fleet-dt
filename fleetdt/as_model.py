@@ -19,12 +19,17 @@ def _varint_bytes(v: int) -> int:
     return 1 if v < 128 else 2 if v < 16384 else 3 if v < 2097152 else 4
 
 
+def publish_len(topic_len: int, qos: int, payload_len: int) -> int:
+    """Bytes of an MQTT 3.1.1 PUBLISH packet (fdt_p_publish_len of common/fdt_paper.c)."""
+    rem = 2 + topic_len + (2 if qos > 0 else 0) + payload_len
+    return 1 + _varint_bytes(rem) + rem
+
+
 def publish_header(V: int, name: str, s: int) -> int:
-    """h_P,l: PUBLISH header (QoS 1) of a message of s content bytes plus the step header on
-    boat/b<V>/tx/<name>, the packet minus the payload (common/fdt_paper.c)."""
+    """h_P,l: PUBLISH header (QoS 0, no packet identifier) of a message of s content bytes plus the step header
+    on boat/b<V>/tx/<name>, the packet minus the payload (common/fdt_paper.c)."""
     tl = len(("boat/b%d/tx/%s" % (max(1, V), name)).encode())
-    rem = 2 + tl + 2 + STEP_HEADER_BYTES + s
-    return 1 + _varint_bytes(rem) + 2 + tl + 2
+    return publish_len(tl, 0, STEP_HEADER_BYTES + s) - (STEP_HEADER_BYTES + s)
 
 
 def cost_c_b(h_T: float, h_W: float, mss: float) -> float:
@@ -33,12 +38,11 @@ def cost_c_b(h_T: float, h_W: float, mss: float) -> float:
     return 1.0 + 2.0 * (h_T + h_W) / mss
 
 
-def cost_c_k(h_T: float, h_W: float, h_A: float) -> float:
-    """c_k of the cost bound of the paper (eq. cons), the expression of common/fdt_paper.c in the same order:
-    2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W): the TCP/IP header and the frame of the last segment of a message
-    and of its TCP acknowledgment, and the PUBACK of QoS 1 (h_A bytes) in its own segment and frame with its
-    own TCP acknowledgment."""
-    return 2.0 * (h_T + h_W) + (h_A + 2.0 * h_T + 2.0 * h_W)
+def cost_c_k(h_T: float, h_W: float, h_A: float = 0.0) -> float:
+    """c_k of the cost bound of the paper (eq. cons), the expression of common/fdt_paper.c: 2 (h_T + h_W), the
+    TCP/IP header and the frame of the last segment of a message and of its TCP acknowledgment (QoS 0 has no
+    MQTT acknowledgment; h_A stays in the signature and does not enter the bound)."""
+    return 2.0 * (h_T + h_W)
 
 
 def cost_c_m(c_b: float, h_P: float, h_T: float, h_W: float, h_A: float) -> float:
@@ -47,13 +51,13 @@ def cost_c_m(c_b: float, h_P: float, h_T: float, h_W: float, h_A: float) -> floa
     return c_b * h_P + cost_c_k(h_T, h_W, h_A)
 
 
-def backlog_bytes(c_b: float, c_k: float, o: float, k: float) -> int:
-    """Q_i = ceil(c_b o + c_k k) of o unsent or unacknowledged bytes of the data-bridge socket and k forwarded
-    QoS 1 messages without PUBACK (fdt_p_backlog of common/fdt_paper.c); 0 when o = k = 0."""
-    o, k = max(0.0, float(o)), max(0.0, float(k))
-    if o == 0.0 and k == 0.0:
+def backlog_bytes(c_b: float, c_k: float, o: float, n: float) -> int:
+    """Q_i = ceil(c_b o + c_k n) of o unsent or unacknowledged bytes of the data-bridge socket held by n PUBLISH
+    packets (fdt_p_backlog of common/fdt_paper.c); 0 when o = n = 0."""
+    o, n = max(0.0, float(o)), max(0.0, float(n))
+    if o == 0.0 and n == 0.0:
         return 0
-    return int(min(4294967295.0, math.ceil(c_b * o + c_k * k - 1e-9)))
+    return int(min(4294967295.0, math.ceil(c_b * o + c_k * n - 1e-9)))
 
 
 def h_W_busy(h_W: float, R_PHY: float, T_DIFS: float, T_bo: float) -> float:
@@ -157,10 +161,9 @@ class DTP:
         """DTP of SPEC.md (topics with "rate" in messages per second and "bound") or DTP v2 of SPEC_v2.md
         (topics with "rate" in outputs per second, "n" messages per output and "s"; rate becomes n rate
         and bound s). Without "c_b" (or "c_m") in the file, the cost bound of the paper (eq. cons) applies,
-        the rule of common/fdt_paper.c: c_b = 1 + 2 (h_T + h_W) / MSS, c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W)
-        (unless the file gives "c_k") and, per topic, c_m,l = c_b h_P,l + c_k, with MSS, h_T of "tcp"
-        (1448, 80), h_A of "mqtt" (4, one MQTT control packet), h_W of the file (0) and h_P,l the PUBLISH
-        header of boat/b<V>/tx/<name> (QoS 1, V the largest vessel index)."""
+        the rule of common/fdt_paper.c: c_b = 1 + 2 (h_T + h_W) / MSS, c_k = 2 (h_T + h_W) (unless the file
+        gives "c_k") and, per topic, c_m,l = c_b h_P,l + c_k, with MSS, h_T of "tcp" (1448, 80), h_W of the
+        file (0) and h_P,l the PUBLISH header of boat/b<V>/tx/<name> (QoS 0, V the largest vessel index)."""
         d = dict(d)
         specs = []
         topics = d.get("topics", [])

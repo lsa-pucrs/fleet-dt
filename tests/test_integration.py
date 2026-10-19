@@ -111,9 +111,9 @@ def stack(tmp_path):
 def test_stack(stack):
     tmp, spawn, logs = stack
     # dtp.json with smaller video (8 frames per second, frame cap 8000 bytes): under the cost bound of the
-    # paper (eq. cons, h_W of the 802.11g PHY) a QoS 1 message costs about 2.6 kB of channel bytes besides its
-    # content, so the telemetry of a vessel takes 43934 bytes per step; with these stripes b(t) admits the 16
-    # layers at Y_HIGH and 1 at Y_LOW
+    # paper (eq. cons, h_W of the 802.11g PHY) a QoS 0 message costs about 1.3 kB of channel bytes besides its
+    # content, so the telemetry of a vessel takes 23000 bytes per step; with these stripes b(t) admits the 16
+    # layers at Y_HIGH and 3 at Y_LOW
     sys.path.insert(0, str(ROOT / "vessel" / "publishers"))
     import video_layers
     raw = video_layers.with_video(json.loads((ROOT / "dtp.json").read_text()), fps=8.0, frame_cap=8000)

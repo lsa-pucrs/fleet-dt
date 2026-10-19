@@ -193,7 +193,7 @@ def test_bridges_of_b2_and_b10():
     for i in (1, 2):
         for n in names:
             blk = conf.split("connection b%d-data-%s\n" % (i, n))[1].split("\nconnection ")[0]
-            assert "address 10.0.0.%d:1884" % i in blk and "topic boat/b%d/tx/%s in 1" % (i, n) in blk
+            assert "address 10.0.0.%d:1884" % i in blk and "topic boat/b%d/tx/%s in 0" % (i, n) in blk
     assert conf.count("topic fleet/feedback out 1") == 2
     b2 = gs_conf({1: "10.0.0.1"}, b2=True)
     assert len(re.findall(r"^connection ", b2, re.M)) == bridge_count(1, b2=True) == 4
@@ -300,10 +300,10 @@ def bring_up(tmp, mode, bridges="single", feedback=False, vessels=(1, 2), C0=300
     names = ["b1-ctl"]
     if bridges == "per_topic":
         for n in NAMES:
-            gconf += tps.BRIDGE.format(name="b1-data-%s" % n, port=data) + "topic boat/b1/tx/%s in 1\n" % n
+            gconf += tps.BRIDGE.format(name="b1-data-%s" % n, port=data) + "topic boat/b1/tx/%s in 0\n" % n
             names.append("b1-data-%s" % n)
     else:
-        gconf += tps.BRIDGE.format(name="b1-data", port=data) + "topic boat/b1/tx/# in 1\n"
+        gconf += tps.BRIDGE.format(name="b1-data", port=data) + "topic boat/b1/tx/# in 0\n"
         names.append("b1-data")
     (tmp / "vessel.conf").write_text(vconf)
     (tmp / "gs.conf").write_text(gconf)
@@ -386,7 +386,7 @@ def test_b10_per_topic_bridges_paper_b1(tmp_path):
     gs, epoch = st["gs"], st["epoch"]
     tx = by_step(gs)
     assert {name for at, name, qos, t, s, n in gs.tx} == set(NAMES)
-    assert {qos for at, name, qos, t, s, n in gs.tx} == {1}
+    assert {qos for at, name, qos, t, s, n in gs.tx} == {0}   # the QoS 0 data bridges carry the QoS 1 publications of the baseline with QoS 0
     checked = 0
     for t, msgs in tx.items():
         for at, name, qos, s, n in msgs:
@@ -431,7 +431,7 @@ def test_b3_strict_priority_in_sigma(tmp_path):
             continue
         order = [rank[name] for at, name, qos, s, n in sorted(tx[t])]
         assert order == sorted(order), (t, order)              # topic by topic in sigma_t
-        assert all(q == 1 for at, name, q, s, n in tx[t])
+        assert all(q == 0 for at, name, q, s, n in tx[t])   # QoS 0 data bridge
         assert reg["fwd"] == reg["rx"] and sum(reg["held"]) == 0
         checked += 1
     assert checked >= 10, sorted(gs.reg)[:5]
@@ -494,7 +494,7 @@ def test_b9_paper_tdma_slot(tmp_path):
         assert s0 == int(round(v * 1e6)) and s1 == s0 + int(round(T3 * 1e6)) // 2
         for at, name, q, s, n in msgs:
             assert v - 0.001 <= at < s1 / 1e6 + 0.015, (t, name, at - v)   # vessel 1: first half of phase 3
-            assert q == 1
+            assert q == 0   # QoS 0 data bridge
         checked += 1
     assert checked >= 10
 

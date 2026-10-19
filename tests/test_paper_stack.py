@@ -6,7 +6,7 @@ boat/b1/raw/<topic>, fleetdt.as_service (unchanged) on the GS broker, and a subs
 
 Checks, step by step and end to end: D_i(t) leaves the vessel in the binary format of fleetdt/model.py
 within phase 1 of step t (0-based clock of as_service.py), the AS answers with p(t), the regulator
-forwards exactly the topics of levels 1 and 2 with QoS 1 (both levels), holds level 0, polices each topic to
+forwards exactly the topics of levels 1 and 2 with QoS 0 (both levels, level 2 first), holds level 0, polices each topic to
 the d_il(t) it declared, puts t and the sequence number in the header, forwards nothing of a step
 without p(t) (AS stopped), and records every message not forwarded in the vessel log.
 
@@ -148,7 +148,7 @@ class GS(object):
         self.bridges = {}
         self.c = client("fdt-paper-gs-%d" % os.getpid())
         self.c.on_connect = lambda c, u, f, rc, props=None: c.subscribe(
-            [("boat/b1/tx/#", 1), ("boat/b1/demand", 1), ("boat/b1/levels", 1), ("boat/b1/regulator", 0),
+            [("boat/b1/tx/#", 0), ("boat/b1/demand", 1), ("boat/b1/levels", 1), ("boat/b1/regulator", 0),
              ("fleet/bridge/+/state", 0)])
         self.c.on_message = self.on_message
         self.c.connect("127.0.0.1", port, 10)
@@ -239,7 +239,7 @@ def stack(request, tmp_path):
     gconf = "listener %d 127.0.0.1\n" % gs + BASE.format(log=tmp_path / "gs.log")
     gconf += BRIDGE.format(name="b1-ctl", port=ctl)
     gconf += "topic boat/b1/demand in 1\ntopic boat/b1/regulator in 0\ntopic boat/b1/levels out 1\n"
-    gconf += BRIDGE.format(name="b1-data", port=data) + "topic boat/b1/tx/# in 1\n"
+    gconf += BRIDGE.format(name="b1-data", port=data) + "topic boat/b1/tx/# in 0\n"
     (tmp_path / "vessel.conf").write_text(vconf)
     (tmp_path / "gs.conf").write_text(gconf)
     procs = []
@@ -316,7 +316,7 @@ def test_paper_stack_end_to_end(stack):
         reg = gs.reg.get(t)
         if reg is not None and reg.get("Q") is not None:
             assert reg["Q"] == gs.backlog[t], (t, reg, gs.backlog[t])
-            assert reg["o"] >= 0 and reg["k"] >= 0
+            assert reg["o"] >= 0 and reg["n"] >= 0 and (reg["o"] > 0 or reg["n"] == 0)   # n_i = 0 when o_i = 0
 
     tx = defaultdict(list)
     for at, name, qos, t, s, n in gs.tx:
@@ -332,8 +332,8 @@ def test_paper_stack_end_to_end(stack):
         assert p[idx["bulk"]] == 0 and p[idx["state"]] == 2 and p[idx["imu"]] == 2 and p[idx["gps"]] == 1
         by = defaultdict(list)
         for at, name, qos, s, n in msgs:
-            # 2. QoS 1 for both levels (revised model); level 0 never leaves
-            assert p[idx[name]] in (1, 2) and qos == 1, (t, name, qos)
+            # 2. QoS 0 for both levels (revised model); level 0 never leaves
+            assert p[idx[name]] in (1, 2) and qos == 0, (t, name, qos)
             lev_seen.add(p[idx[name]])
             # firm deadline: received within step t on this host
             assert at < start(epoch, t + 1) + 0.02, (t, name, at - start(epoch, t))

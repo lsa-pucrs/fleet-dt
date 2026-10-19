@@ -325,18 +325,18 @@ def _varint_bytes(v):
 
 
 def publish_header(V, name, s):
-    """h_P,l: PUBLISH header (QoS 1) of a message of s content bytes plus the 6-byte step header on
-    boat/b<V>/tx/<name> (common/fdt_paper.c, fleetdt/as_model.py)."""
+    """h_P,l: PUBLISH header (QoS 0, no packet identifier) of a message of s content bytes plus the 6-byte step
+    header on boat/b<V>/tx/<name> (common/fdt_paper.c, fleetdt/as_model.py)."""
     tl = len(("boat/b%d/tx/%s" % (max(1, int(V)), name)).encode())
-    return 1 + _varint_bytes(2 + tl + 2 + 6 + int(s)) + 2 + tl + 2
+    return 1 + _varint_bytes(2 + tl + 6 + int(s)) + 2 + tl
 
 
 def cost_bound(dtp, name=None):
     """(c_b, c_m,l) of topic `name` as the readers of the paper stack compute them (common/fdt_paper.c,
     fleetdt/as_model.py; eq. cons of the paper): "c_b" and "c_m" of the file when present, else
-    c_b = 1 + 2 (h_T + h_W) / MSS and c_m,l = c_b h_P,l + c_k, c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W)
-    ("c_k" of the file when present), with MSS
-    and h_T of "tcp" (1448, 80), h_A of "mqtt" (4), h_W of the file (0) and h_P,l the PUBLISH header of
+    c_b = 1 + 2 (h_T + h_W) / MSS and c_m,l = c_b h_P,l + c_k, c_k = 2 (h_T + h_W) ("c_k" of the file when
+    present), with MSS
+    and h_T of "tcp" (1448, 80), h_W of the file (0) and h_P,l the PUBLISH header of
     boat/b<V>/tx/<name> (V the largest index of "vessels"). The bound s of a v2 topic stands for its
     "bound"."""
     tcp, mqtt = dtp.get("tcp") or {}, dtp.get("mqtt") or {}
@@ -350,7 +350,7 @@ def cost_bound(dtp, name=None):
     t = [x for x in dtp["topics"] if x["name"] == name][0]
     V = max([int(v) for v in dtp.get("vessels") or []] or [1])
     h_P = publish_header(V, name, int(t["bound"] if "bound" in t else t["s"]))
-    c_k = float(dtp["c_k"]) if dtp.get("c_k") is not None else 2.0 * (h_T + h_W) + (h_A + 2.0 * h_T + 2.0 * h_W)
+    c_k = float(dtp["c_k"]) if dtp.get("c_k") is not None else 2.0 * (h_T + h_W)
     return c_b, c_b * h_P + c_k
 
 

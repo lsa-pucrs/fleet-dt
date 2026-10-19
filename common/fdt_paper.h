@@ -12,17 +12,16 @@
  *   v2 (SPEC_v2.md):            topics [{"name", "rate" (outputs/s), "n" (messages/output), "s" (bytes),
  *                               "jitter" (s), ...}], "tcp": {"mss", "h_T"}, "mqtt": {"h_A"}
  * When the file holds no "c_b" (or no "c_m"), the reader computes the cost bound of the paper (eq. cons):
- *   c_b = 1 + 2 (h_T + h_W) / MSS,  c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W),  c_m,l = c_b h_P,l + c_k
- * with h_P,l the PUBLISH header of boat/b<V>/tx/<name> (QoS 1), h_T the TCP/IP header of a segment
- * ("tcp": "h_T", 80), h_A the bytes of one MQTT control packet ("mqtt": "h_A", 4) and h_W the top-level
- * "h_W" (bytes that the PHY sends at R_PHY in the fixed time of one frame, 0 when absent; emu/README.md,
- * "Fixed bytes per frame h_W"). c_k charges the TCP/IP header and the frame of the last segment of the
- * message and of its TCP acknowledgment, 2 (h_T + h_W), and the PUBACK of QoS 1 in its own segment and
- * frame with its own TCP acknowledgment, h_A + 2 h_T + 2 h_W. A file may give "c_k" itself.
+ *   c_b = 1 + 2 (h_T + h_W) / MSS,  c_k = 2 (h_T + h_W),  c_m,l = c_b h_P,l + c_k
+ * with h_P,l the PUBLISH header of boat/b<V>/tx/<name> (QoS 0: no packet identifier), h_T the TCP/IP header
+ * of a segment ("tcp": "h_T", 80) and h_W the top-level "h_W" (bytes that the PHY sends at R_PHY in the fixed
+ * time of one frame, 0 when absent; emu/README.md, "Fixed bytes per frame h_W"). c_k charges the TCP/IP
+ * header and the frame of the last segment of the message and of its TCP acknowledgment; QoS 0 has no MQTT
+ * acknowledgment ("mqtt": "h_A" is read and no longer enters the bound). A file may give "c_k" itself.
  * The backlog of the vessel at the start of phase 1 (SPEC.md Section 5) is
- *   Q_i(t) = ceil(c_b o_i(t) + c_k k_i(t))   (fdt_p_backlog)
- * with o_i the unsent or unacknowledged bytes of the data-bridge socket and k_i the forwarded QoS 1 messages
- * that still wait for their PUBACK.
+ *   Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t))   (fdt_p_backlog)
+ * with o_i the unsent or unacknowledged bytes of the data-bridge socket (SIOCOUTQ) and n_i the PUBLISH packets
+ * that have at least one byte among those o_i bytes.
  *
  * The reader also keeps what the baseline modes of the regulator use (fdt_reg_paper.h): "U" and "C0"
  * (defaults 0.8 and 300000), the order "order" (topics left out go last, in file order), "required"
@@ -89,8 +88,10 @@ uint32_t fdt_p_msgs(const struct fdt_pdtp *d, int l, double jitter_s);
 uint32_t fdt_p_demand(const struct fdt_pdtp *d, int l, double jitter_s);
 /* channel bytes of one forwarded message of topic l with x content bytes: c_b (x + 6) + c_m,l */
 double fdt_p_cost(const struct fdt_pdtp *d, int l, size_t x);
-/* backlog Q_i = ceil(c_b o + c_k k) of o unsent or unacknowledged bytes and k messages without PUBACK;
- * 0 when o <= 0 and k <= 0 (negative values count as 0) */
-uint32_t fdt_p_backlog(const struct fdt_pdtp *d, int64_t o, int64_t k);
+/* backlog Q_i = ceil(c_b o + c_k n) of o unsent or unacknowledged bytes in n PUBLISH packets;
+ * 0 when o <= 0 and n <= 0 (negative values count as 0) */
+uint32_t fdt_p_backlog(const struct fdt_pdtp *d, int64_t o, int64_t n);
+/* bytes of an MQTT 3.1.1 PUBLISH packet with a topic of topic_len bytes, QoS qos and payload_len bytes */
+uint32_t fdt_p_publish_len(size_t topic_len, int qos, size_t payload_len);
 
 #endif

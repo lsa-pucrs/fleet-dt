@@ -1,6 +1,6 @@
 /*
  * Unit tests of the vessel regulator in mode paper (fdt_reg_paper.c) and of its DTP reader and 0-based
- * step clock (fdt_paper.c): wire formats of fleetdt/model.py, QoS 1 for both levels, no uplink without
+ * step clock (fdt_paper.c): wire formats of fleetdt/model.py, QoS 0 for both levels, no uplink without
  * p(t), policing to the d_il(t) of D_i(t), start(t) = epoch + t Ts, no pacing and no phase-1 offset,
  * the vessel log at the end of the step, the ablations paper_nopolice and paper_noeos, the step header.
  */
@@ -176,28 +176,30 @@ static void test_dtp(void)
 	CHECK(fdt_pdtp_parse(DTP2, strlen(DTP2), &d, err, sizeof err) == 0);
 	CHECK(d.L == 2 && fabs(d.topic[1].rate - 240.0) < 1e-9 && d.topic[1].s == 1400);
 	CHECK(fabs(d.c_b - (1.0 + 160.0 / 1448.0)) < 1e-12);
-	/* h_P of boat/b4/tx/state (16 bytes) with QoS 1: 1 + 1 + 2 + 16 + 2 = 22;
-	 * c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W) = 160 + (4 + 160), c_m = c_b h_P + c_k (eq. cons) */
-	CHECK(fabs(d.c_k - (160 + 164)) < 1e-12);
-	CHECK(fabs(d.topic[0].c_m - (d.c_b * 22 + 160 + 164)) < 1e-9);
+	/* h_P of boat/b4/tx/state (16 bytes) with QoS 0: 1 + 1 + 2 + 16 = 20 (no packet identifier);
+	 * c_k = 2 (h_T + h_W) = 160, c_m = c_b h_P + c_k (eq. cons) */
+	CHECK(fdt_p_publish_len(16, 0, 54) == 74 && fdt_p_publish_len(16, 1, 54) == 76);
+	CHECK(fdt_p_publish_len(16, 0, 200) == 1 + 2 + 2 + 16 + 200);   /* remaining length 218: two varint bytes */
+	CHECK(fabs(d.c_k - 160) < 1e-12);
+	CHECK(fabs(d.topic[0].c_m - (d.c_b * 20 + 160)) < 1e-9);
 	/* the same file with h_W = 570.25 (802.11g ERP-OFDM at 24 Mb/s, emu/README.md):
-	 * c_b = 1 + 2 (80 + 570.25) / 1448, c_k = 2 (650.25) + (4 + 160 + 1140.5), c_m = c_b 22 + c_k */
+	 * c_b = 1 + 2 (80 + 570.25) / 1448, c_k = 2 (650.25) = 1300.5, c_m = c_b 20 + c_k */
 	{
 		char hw[1024];
 		snprintf(hw, sizeof hw, "{\"h_W\": 570.25, %s", DTP2 + 1);
 		CHECK(fdt_pdtp_parse(hw, strlen(hw), &d, err, sizeof err) == 0);
 		CHECK(fabs(d.c_b - (1.0 + 1300.5 / 1448.0)) < 1e-12);
-		CHECK(fabs(d.c_k - (1300.5 + 1304.5)) < 1e-12);
-		CHECK(fabs(d.topic[0].c_m - (d.c_b * 22 + 1300.5 + 1304.5)) < 1e-9);
-		/* backlog Q_i = ceil(c_b o + c_k k): 0 without bytes and messages, the cost bound otherwise */
+		CHECK(fabs(d.c_k - 1300.5) < 1e-12);
+		CHECK(fabs(d.topic[0].c_m - (d.c_b * 20 + 1300.5)) < 1e-9);
+		/* backlog Q_i = ceil(c_b o + c_k n): 0 without bytes and packets, the cost bound otherwise */
 		CHECK(fdt_p_backlog(&d, 0, 0) == 0 && fdt_p_backlog(&d, -1, -1) == 0);
 		CHECK(fdt_p_backlog(&d, 1000, 0) == (uint32_t)ceil(d.c_b * 1000 - 1e-9));
-		CHECK(fdt_p_backlog(&d, 0, 3) == (uint32_t)ceil(3 * 2605.0 - 1e-9));
-		CHECK(fdt_p_backlog(&d, 1448, 2) == (uint32_t)ceil(d.c_b * 1448 + 2 * 2605.0 - 1e-9));
+		CHECK(fdt_p_backlog(&d, 0, 3) == (uint32_t)ceil(3 * 1300.5 - 1e-9));
+		CHECK(fdt_p_backlog(&d, 1448, 2) == (uint32_t)ceil(d.c_b * 1448 + 2 * 1300.5 - 1e-9));
 		/* a file with c_k keeps it */
 		snprintf(hw, sizeof hw, "{\"c_k\": 100, %s", DTP2 + 1);
 		CHECK(fdt_pdtp_parse(hw, strlen(hw), &d, err, sizeof err) == 0);
-		CHECK(fabs(d.c_k - 100) < 1e-12 && fabs(d.topic[0].c_m - (d.c_b * 22 + 100)) < 1e-9);
+		CHECK(fabs(d.c_k - 100) < 1e-12 && fabs(d.topic[0].c_m - (d.c_b * 20 + 100)) < 1e-9);
 	}
 	/* L from the file: 6 telemetry topics and 16 video layers */
 	char big[8192];
@@ -290,8 +292,40 @@ static void test_demand(void)
 	fdt_preg_free(&r);
 }
 
-/* revised model, item 3: the backlog Q_i(t) = ceil(c_b o_i + c_k k_i) in the demand table, read at the start of
- * phase 1 from the data-bridge socket (o_i: SIOCOUTQ, k_i: QoS 1 messages without PUBACK); 0 without a socket */
+/* the ring of the PUBLISH lengths written to a data-bridge socket and n_i: the packets, newest first, whose
+ * lengths first reach o_i */
+static void test_ring(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	fdt_preg_opts_default(&o);
+	start_at(&r, &o, 80);
+	CHECK(fdt_preg_ring_count(&r, 0, 1000) == 0);          /* empty ring */
+	fdt_preg_on_out(&r, 0, 500);                            /* oldest */
+	fdt_preg_on_out(&r, 0, 1000);
+	fdt_preg_on_out(&r, 0, 1500);                           /* newest */
+	CHECK(fdt_preg_ring_count(&r, 0, 0) == 0);             /* o_i = 0 */
+	CHECK(fdt_preg_ring_count(&r, 0, 1) == 1);             /* o_i inside the newest packet */
+	CHECK(fdt_preg_ring_count(&r, 0, 1500) == 1);
+	CHECK(fdt_preg_ring_count(&r, 0, 1501) == 2);          /* spans two packets */
+	CHECK(fdt_preg_ring_count(&r, 0, 2500) == 2 && fdt_preg_ring_count(&r, 0, 2501) == 3);
+	CHECK(fdt_preg_ring_count(&r, 0, 3000) == 3);
+	CHECK(fdt_preg_ring_count(&r, 0, 99999) == 3);         /* the ring holds fewer bytes: every packet */
+	CHECK(fdt_preg_ring_count(&r, 1, 100) == 0 && fdt_preg_ring_count(&r, -1, 100) == 0);
+	/* wrap: the newest FDT_P_RING packets stay */
+	for (int k = 0; k < FDT_P_RING + 5; k++)
+		fdt_preg_on_out(&r, 1, (uint32_t)(k + 1));
+	CHECK(r.ring_n[1] == FDT_P_RING);
+	CHECK(fdt_preg_ring_count(&r, 1, FDT_P_RING + 5) == 1);                    /* newest: length R + 5 */
+	CHECK(fdt_preg_ring_count(&r, 1, 2 * FDT_P_RING + 9) == 2);                /* R + 5 + R + 4 */
+	CHECK(fdt_preg_ring_count(&r, 1, INT64_MAX / 2) == FDT_P_RING);
+	fdt_preg_ring_reset(&r, 1);
+	CHECK(r.ring_n[1] == 0 && fdt_preg_ring_count(&r, 1, 10) == 0 && fdt_preg_ring_count(&r, 0, 3000) == 3);
+	fdt_preg_free(&r);
+}
+
+/* the backlog Q_i(t) = ceil(c_b o_i + c_k n_i) in the demand table, read at the start of phase 1 from the
+ * data-bridge socket (o_i: SIOCOUTQ, n_i: PUBLISH packets with bytes among o_i); 0 without a socket */
 static void test_backlog(void)
 {
 	struct fdt_preg r;
@@ -302,10 +336,12 @@ static void test_backlog(void)
 	raw(&r, IMU, 48, S(59) + 15000, 1);
 	fake.n = 1;
 	fake.s[0].outq = 3000;
-	fake.s[0].pend = 2;
+	fdt_preg_on_out(&r, 0, 2000);
+	fdt_preg_on_out(&r, 0, 1200);
+	fdt_preg_on_out(&r, 0, 900);   /* 900 + 1200 < 3000 <= 900 + 1200 + 2000: n_i = 3 */
 	fdt_preg_tick(&r, S(60));
-	uint32_t want = (uint32_t)ceil(D.c_b * 3000 + D.c_k * 2 - 1e-9);
-	CHECK(want == fdt_p_backlog(&D, 3000, 2) && want > 3000);
+	uint32_t want = (uint32_t)ceil(D.c_b * 3000 + D.c_k * 3 - 1e-9);
+	CHECK(want == fdt_p_backlog(&D, 3000, 3) && want > 3000);
 	const struct sent *s = find_topic("boat/b1/demand", 0);
 	CHECK(s && s->len == 9 + 4 * (size_t)D.L);
 	if (s) {
@@ -313,10 +349,9 @@ static void test_backlog(void)
 		CHECK(d[IMU] == r.dmax[IMU]);
 	}
 	struct fdt_pstep *st = fdt_preg_step(&r, 60);
-	CHECK(st && st->have_Q && st->Q == want && st->bo == 3000 && st->bk == 2);
-	/* empty send queue and every PUBACK back: Q_i = 0; the summary of step 60 carries Q, o and k */
+	CHECK(st && st->have_Q && st->Q == want && st->bo == 3000 && st->bn == 3);
+	/* empty send queue: Q_i = 0; the summary of step 60 carries Q, o and n */
 	fake.s[0].outq = 0;
-	fake.s[0].pend = 0;
 	int from = nsent;
 	fdt_preg_tick(&r, S(61));
 	s = find_topic("boat/b1/demand", from);
@@ -326,7 +361,7 @@ static void test_backlog(void)
 	if (sm) {
 		cJSON *j = cJSON_ParseWithLength((const char *)sm->p, sm->len);
 		CHECK(j && cJSON_GetObjectItem(j, "Q")->valuedouble == want && cJSON_GetObjectItem(j, "o")->valuedouble == 3000 &&
-		      cJSON_GetObjectItem(j, "k")->valuedouble == 2);
+		      cJSON_GetObjectItem(j, "n")->valuedouble == 3);
 		cJSON_Delete(j);
 	}
 	fdt_preg_free(&r);
@@ -337,7 +372,8 @@ static void test_backlog(void)
 	start_at(&r, &o, 70);
 	fake.n = 1;
 	fake.s[0].outq = 1448;
-	fake.s[0].pend = 1;
+	fdt_preg_on_out(&r, 0, 1200);
+	fdt_preg_on_out(&r, 0, 2000);   /* o_i inside the newest packet: n_i = 1 */
 	uint32_t dz[FDT_L_MAX] = {0};
 	dz[GPS] = 777;
 	uint8_t b[9 + 4 * FDT_L_MAX];
@@ -348,7 +384,7 @@ static void test_backlog(void)
 	CHECK(d[GPS] == 777 && d[IMU] == 0);
 	CHECK(fdt_preg_on_demand(&r, b, n, S(70) + 1000) == 0);
 	st = fdt_preg_step(&r, 70);
-	CHECK(st && st->have_d && st->have_Q && st->Q == Q && st->bo == 1448 && st->bk == 1);
+	CHECK(st && st->have_d && st->have_Q && st->Q == Q && st->bo == 1448 && st->bn == 1);
 	/* no data-bridge socket (SIOCOUTQ unavailable): Q_i = 0 */
 	fake.n = 0;
 	n = fdt_demand_encode(b, 71, 5, D.L, dz);
@@ -372,7 +408,7 @@ static void test_demand_wire(void)
 	CHECK(fdt_demand_decode(b, n - 1, 3, &t, &Q, e) == -1 && fdt_demand_decode(b, n, 2, &t, &Q, e) == -1);
 }
 
-/* items 1, 2 and 9: levels 2 then 1 (strict priority), QoS 1 for both levels, level 0 held, order of reception,
+/* items 1, 2 and 9: levels 2 then 1 (strict priority), QoS 0 for both levels, level 0 held, order of reception,
  * header t, s */
 static void test_forward(void)
 {
@@ -409,9 +445,9 @@ static void test_forward(void)
 	CHECK(next == S(21));   /* no pacing: everything leaves in this tick, the next event is the end of the step */
 	const char *exp_topic[5] = {"boat/b1/tx/state", "boat/b1/tx/gps", "boat/b1/tx/state", "boat/b1/tx/imu",
 	                            "boat/b1/tx/imu"};
-	/* revised model: QoS 1 for level 2 and level 1; level 2 still leaves first */
-	CHECK(fdt_preg_qos(2) == 1 && fdt_preg_qos(1) == 1 && fdt_preg_qos(0) == 0);
-	const int exp_qos[5] = {1, 1, 1, 1, 1};
+	/* revised model: QoS 0 for level 2 and level 1; level 2 still leaves first */
+	CHECK(fdt_preg_qos(2) == 0 && fdt_preg_qos(1) == 0 && fdt_preg_qos(0) == 0);
+	const int exp_qos[5] = {0, 0, 0, 0, 0};
 	const uint8_t exp_tag[5] = {0x21, 0x31, 0x22, 0x11, 0x12};
 	const int exp_seq[5] = {0, 0, 1, 0, 1};
 	CHECK(nsent - from == 5);
@@ -696,7 +732,7 @@ static void test_no_pacing(void)
 	int64_t next = fdt_preg_tick(&r, V(80) + 300);
 	CHECK(count_topic("boat/b1/tx/video", from) == 4 && next == S(81));
 	for (int k = 0; k < 4 && from + k < nsent; k++)
-		CHECK(fdt_get_u16(sent[from + k].p + 4) == k && sent[from + k].qos == 1);
+		CHECK(fdt_get_u16(sent[from + k].p + 4) == k && sent[from + k].qos == 0);   /* level 1: QoS 0 */
 	struct fdt_pstep *s = fdt_preg_step(&r, 80);
 	CHECK(s->outq == 1234 && s->nsd == 99 && s->late_v == 300);
 	/* the p1 offset option */
@@ -1021,6 +1057,7 @@ int main(void)
 	test_dtp();
 	test_clock();
 	test_demand();
+	test_ring();
 	test_backlog();
 	test_demand_wire();
 	test_forward();

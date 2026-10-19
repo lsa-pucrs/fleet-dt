@@ -17,7 +17,7 @@ Each step t of Ts = 125 ms has three phases:
 |---|---|---|---|
 | 1 | [start(t), start(t) + T1) | DTI program of each vessel | publishes the demand table D_i(t) |
 | 2 | [start(t) + T1, start(t) + T1 + T2) | AS on the GS | closes M(t), predicts Ĉ(t) = (1 − α) Ĉ(t − 1) + α c_y y(t − 1) (eq. 2), computes K̂(t) = Ĉ(t) (T3 − T_m)/Ts and the grant limit b(t) = max(0, U K̂(t) − Q(t))/m(t) with the backlog Q(t) of the demand tables (eq. 3), runs Algorithm 1, publishes p(t) |
-| 3 | [start(t) + T1 + T2, start(t + 1)) | vessel regulator of each vessel | forwards the messages of step t: level 2, then level 1, both with QoS 1 (the GS deduplicates by (t, s)), each topic policed by c(x, n) = c_b x + c_m n ≤ d_{i,l}(t) (eq. 5) |
+| 3 | [start(t) + T1 + T2, start(t + 1)) | vessel regulator of each vessel | forwards the messages of step t: level 2, then level 1, both with QoS 0 (the GS deduplicates by (t, s)), each topic policed by c(x, n) = c_b x + c_m n ≤ d_{i,l}(t) (eq. 5) |
 
 At the end of each step the channel monitor of the GS radio publishes y(t), and the VE closes the
 graph G(t) of the network (Definition 7), draws it, and appends it to the DTA. The outer loop of the

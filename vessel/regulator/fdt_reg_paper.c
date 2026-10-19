@@ -94,7 +94,7 @@ static void step_reset(struct fdt_pstep *s, int64_t t)
 	s->t = t;
 	s->late_p1 = s->late_v = -1;
 	s->outq = s->nsd = -1;
-	s->bo = s->bk = -1;
+	s->bo = s->bn = -1;
 	s->budget = -1;
 	s->fb_t = -1;
 	s->gate_s = s->gate_e = -1;
@@ -279,8 +279,14 @@ int fdt_preg_init(struct fdt_preg *r, const struct fdt_pdtp *d, int vessel, cons
 	snprintf(r->log_topic, sizeof r->log_topic, "boat/b%d/regulator", vessel);
 	r->json_cap = 16384 + (size_t)d->L * 256;
 	r->json = malloc(r->json_cap);
-	if (!r->json)
+	r->ring = calloc((size_t)FDT_DATA_MAX * FDT_P_RING, sizeof *r->ring);
+	if (!r->json || !r->ring) {
+		free(r->json);
+		free(r->ring);
+		r->json = NULL;
+		r->ring = NULL;
 		return -1;
+	}
 	reset_clock(r, now_us);
 	return 0;
 }
@@ -300,6 +306,8 @@ void fdt_preg_free(struct fdt_preg *r)
 	}
 	free(r->json);
 	r->json = NULL;
+	free(r->ring);
+	r->ring = NULL;
 	free(r->scratch);
 	r->scratch = NULL;
 	r->scratch_cap = 0;
@@ -416,28 +424,61 @@ static int ring_holds(const struct fdt_preg *r, int64_t t, int64_t now_us)
 	return t >= r->next_v && t <= fdt_p_step_at(r->d, now_us) + 2;
 }
 
+void fdt_preg_on_out(struct fdt_preg *r, int k, uint32_t len)
+{
+	if (!r->ring || k < 0 || k >= FDT_DATA_MAX)
+		return;
+	uint32_t *ring = r->ring + (size_t)k * FDT_P_RING;
+	ring[r->ring_head[k]] = len;
+	r->ring_head[k] = (r->ring_head[k] + 1) % FDT_P_RING;
+	if (r->ring_n[k] < FDT_P_RING)
+		r->ring_n[k]++;   /* full: the newest packet replaces the oldest */
+}
+
+void fdt_preg_ring_reset(struct fdt_preg *r, int k)
+{
+	if (k >= 0 && k < FDT_DATA_MAX)
+		r->ring_head[k] = r->ring_n[k] = 0;
+}
+
+int64_t fdt_preg_ring_count(const struct fdt_preg *r, int k, int64_t o)
+{
+	if (o <= 0 || !r->ring || k < 0 || k >= FDT_DATA_MAX)
+		return 0;
+	const uint32_t *ring = r->ring + (size_t)k * FDT_P_RING;
+	int64_t sum = 0, n = 0;
+	int pos = r->ring_head[k];
+	while (sum < o && n < r->ring_n[k]) {
+		pos = (pos + FDT_P_RING - 1) % FDT_P_RING;   /* newest first */
+		sum += ring[pos];
+		n++;
+	}
+	return n;
+}
+
 uint32_t fdt_preg_backlog(struct fdt_preg *r, int64_t t, int64_t now_us)
 {
-	int64_t o = -1, k = -1;
+	int64_t o = -1, n = -1;
 	if (r->io.sock) {
 		struct fdt_sock sk;
 		memset(&sk, 0, sizeof sk);
 		r->io.sock(r->io.ctx, &sk);
 		if (sk.n > 0) {
-			o = k = 0;
+			o = n = 0;
 			for (int j = 0; j < sk.n && j < FDT_DATA_MAX; j++) {
-				o += sk.s[j].outq > 0 ? sk.s[j].outq : 0;
-				k += sk.s[j].pend > 0 ? sk.s[j].pend : 0;
+				int64_t oj = sk.s[j].outq > 0 ? sk.s[j].outq : 0;
+				o += oj;
+				n += fdt_preg_ring_count(r, j, oj);
 			}
 		}
 	}
-	uint32_t Q = fdt_p_backlog(r->d, o, k);   /* 0 without a socket (o = k = -1) */
+	uint32_t Q = fdt_p_backlog(r->d, o, n);   /* 0 without a socket (o = n = -1) */
 	if (ring_holds(r, t, now_us)) {
 		struct fdt_pstep *s = step_get(r, t);
 		s->have_Q = 1;
 		s->Q = Q;
 		s->bo = o;
-		s->bk = k;
+		s->bn = n;
 	}
 	return Q;
 }
@@ -764,7 +805,7 @@ static void do_v(struct fdt_preg *r, int64_t t, int64_t now_us)
 			nf++;
 		}
 	}
-	/* strict priority: level 2 before level 1, each level in order of reception; QoS 1 for both levels */
+	/* strict priority: level 2 before level 1, each level in order of reception; QoS 0 for both levels */
 	if (nf > 1)
 		qsort(fe, nf, sizeof *fe, cmp_arr);
 	for (int level = 2; level >= 1; level--)
@@ -801,7 +842,7 @@ static void summary_json(struct fdt_preg *r, struct jbuf *j, const struct fdt_ps
 	   s->t, r->vessel, fdt_pmode_name(r->mode), s->have_d ? "true" : "false", s->have_p ? "true" : "false",
 	   s->late_v, s->late_p1, s->outq, s->nsd);
 	if (s->have_Q)
-		jp(j, ",\"Q\":%u,\"o\":%" PRId64 ",\"k\":%" PRId64, s->Q, s->bo, s->bk);
+		jp(j, ",\"Q\":%u,\"o\":%" PRId64 ",\"n\":%" PRId64, s->Q, s->bo, s->bn);
 	else
 		jp(j, ",\"Q\":null");
 	if (s->have_p)

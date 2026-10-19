@@ -271,11 +271,11 @@ def forwarded_over_demand(d, vessel, scale, steps=600, seed=1001, delay_ms=3.0, 
     return {n: sum(v[1:]) / ((steps - 1) * dem[n]) for n, v in acc.items()}, held
 
 
-# Under the cost bound of the paper (eq. cons) with h_W of the 802.11g PHY (570.25 bytes), a QoS 1 message costs
-# c_m,l = c_b h_P,l + c_k = 2643 to 2654 channel bytes besides c_b (x + 6), c_b = 1.898, c_k = 2605 (the last
-# segment, the PUBACK and the TCP acknowledgment of each), so the telemetry of one vessel declares 43934 bytes per
-# step (16 messages). With M = 4, b(t) = 48640 bytes at C = 320000 bytes per step admits the telemetry of every
-# vessel and leaves 4706 bytes per vessel for the video layers; plan_for_rho finds a setting for every cell.
+# Under the cost bound of the paper (eq. cons) with h_W of the 802.11g PHY (570.25 bytes), a QoS 0 message costs
+# c_m,l = c_b h_P,l + c_k = 1335 to 1346 channel bytes besides c_b (x + 6), c_b = 1.898, c_k = 1300.5 (the last
+# segment and its TCP acknowledgment), so the telemetry of one vessel declares 23000 bytes per step (16 messages).
+# With M = 4, b(t) = 48640 bytes at C = 320000 bytes per step admits the telemetry of every vessel and leaves
+# 25640 bytes per vessel for the video layers; plan_for_rho finds a setting for every cell.
 CELLS = [(2, 1.5), (2, 2.0), (4, 1.5), (4, 2.0)]
 
 
@@ -323,19 +323,19 @@ def test_cell_fill_and_use_of_the_demand(M, rho, capsys, tmp_path):
 
 def test_m4_telemetry_fits_the_grant_limit():
     """The M = 4 numbers of the cells (cost bound of eq. cons, h_W = 570.25 bytes): the telemetry of one vessel
-    declares 43934 bytes per step, b(t) = 48640 bytes at C = 320000 admits it and leaves 4706 bytes for video."""
+    declares 23000 bytes per step, b(t) = 48640 bytes at C = 320000 admits it and leaves 25640 bytes for video."""
     d = base_dtp()
     names = [t["name"] for t in d["topics"]]
     tel = sum(vl.channel_demand(d, n, jitter_s=J_DTI) for n in TELEMETRY)
-    assert tel == 43934
+    assert tel == 23000
     dtp = DTP.from_dict(d)
-    assert dtp.c_k == pytest.approx(2605.0)
+    assert dtp.c_k == pytest.approx(1300.5)
     b4 = grant_limit(C_STEP, dtp.U, dtp.T3, dtp.Ts, 4)
-    assert b4 == pytest.approx(48640.0) and b4 - tel == pytest.approx(4706.0)
+    assert b4 == pytest.approx(48640.0) and b4 - tel == pytest.approx(25640.0)
     assert 4 * tel < C_STEP and tel < b4
     D = {i: [vl.channel_demand(vl.resolve_vessel(d, i), n, jitter_s=J_DTI) for n in names] for i in range(1, 5)}
     p = admission(D, [dtp.index(n) for n in dtp.order], [dtp.index(n) for n in dtp.needed], b4)
-    assert [n for n, v in zip(names, p) if v > 0] == TELEMETRY
+    assert [n for n, v in zip(names, p) if v > 0] == TELEMETRY + ["video_1"]   # one layer of the full-size video
 
 
 def test_dtp_json_default_cell_use():

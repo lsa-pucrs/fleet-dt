@@ -49,35 +49,14 @@
  *                                               regulator polices to the table it sees on that topic
  *                                               and writes the backlog Q_i(t) into it (below)
  *
- * Backlog Q_i(t) = ceil(c_b o_i + c_k k_i) of the demand table (mode paper, SPEC.md Section 5), read at the
- * start of phase 1: o_i = SIOCOUTQ of the data-bridge socket (fdt_sock_read), k_i = the QoS 1 PUBLISH
- * packets that the broker wrote to the data bridge (MOSQ_EVT_MESSAGE_OUT) minus the PUBACKs that came back.
- * The plugin API reports no PUBACK, so the plugin counts them from tcpi_bytes_received of the same socket:
- * after its SUBSCRIBE the bridge client sends only PUBACKs (4 bytes, MQTT 3.1.1) and the rare PINGREQ
- * (2 bytes), so acks = floor((rx - rx0) / 4) since the anchor rx0, taken at the first PUBLISH of the
- * connection and again whenever every written message has its PUBACK (k_i = 0), which also drops the
- * bytes of a PINGREQ. With demand external the DTI program (another process, which cannot read the socket)
- * writes Q_i = 0 and MOSQ_EVT_MESSAGE_IN overwrites the field in place before the broker routes the table
- * to the control bridge; with demand internal the regulator writes it when it builds the table.
- *   plugin_opt_log /var/log/fleetdt/reg-b1.jsonl  vessel log: one JSON line per message not forwarded
- *                                               (step, topic, seq, bytes, reason); absent: no file
- *   plugin_opt_step_log /var/log/fleetdt/reg-steps-b1.jsonl  step summaries: the JSON of boat/b<i>/regulator,
- *                                               one line per step (p, d, rx, fwd, held, police, cost, ...)
- *   plugin_opt_jitter_ms 2                      J_l of the topics without "jitter" in the DTP (internal demand)
- *   plugin_opt_idle 8                           steps without raw messages after which d_l = 0 (0: never)
- *   plugin_opt_p1_offset_us 0                   demand at start(t) + offset (default 0: no offset)
- *   plugin_opt_max_msgs 4096                    messages per topic and step
- *
- * Baselines of the paper stack in the same core (fdt_reg_paper.h): paper_b1 (B1, B10), paper_b2 (B2),
- * paper_b3 (B3), b8 (B8; alias paper_b8) and paper_tdma (B9). The names b1, b2, b3 and tdma stay with the
- * older core above (as2 stack).
- *   plugin_opt_feedback_topic fleet/feedback    fleet feedback of the GS (paper_b3, b8, paper_tdma)
- *   plugin_opt_U 0.8                            b8: U before the first feedback that carries one
- *                                               (default: "U" of the DTP)
- *   plugin_opt_lw_bytes 16384                   paper_tdma: unsent bytes of the data bridge plus bytes
- *                                               released in one tick
- *   plugin_opt_tick_us 1000                     paper_tdma: release period inside the slot
- *   plugin_opt_data_ports                       paper_b2 default 1884,1885,1886
+ * Backlog Q_i(t) = ceil(c_b o_i + c_k n_i) of the demand table (mode paper, SPEC.md Section 5), read at the
+ * start of phase 1: o_i = SIOCOUTQ of the data-bridge socket (fdt_sock_read), n_i = the PUBLISH packets with at
+ * least one byte among those o_i bytes. MOSQ_EVT_MESSAGE_OUT gives each PUBLISH that the broker writes to a
+ * data bridge; the plugin passes its length (MQTT 3.1.1, fdt_p_publish_len) to the ring of the core
+ * (fdt_preg_on_out), which walks it from the newest packet back at phase 1. With demand external the DTI
+ * program (another process, which cannot read the socket) writes Q_i = 0 and MOSQ_EVT_MESSAGE_IN overwrites
+ * the field in place before the broker routes the table to the control bridge; with demand internal the
+ * regulator writes it when it builds the table.
  */
 #define _GNU_SOURCE
 #include <stdbool.h>
@@ -101,9 +80,6 @@ struct dsock {
 	int port, fd, v5;
 	ino_t ino;
 	char addr[64];
-	/* mode paper: QoS 1 PUBLISH packets written since the anchor, and tcpi_bytes_received at the anchor */
-	int anchored;
-	uint64_t n_pub, rx0;
 };
 
 static struct {
@@ -138,22 +114,6 @@ static int ds_fd(struct dsock *ds)
 	return ds->fd;
 }
 
-/* mode paper: QoS 1 messages of the data bridge still without PUBACK (k_i of the backlog); re-anchors when
- * every written message has its PUBACK */
-static int64_t ds_pending(struct dsock *ds, int fd)
-{
-	uint64_t rx;
-	if (!ds->anchored || fdt_sock_received(fd, &rx) || rx < ds->rx0)
-		return 0;
-	uint64_t acks = (rx - ds->rx0) / 4;
-	if (acks >= ds->n_pub) {
-		ds->rx0 = rx;
-		ds->n_pub = 0;
-		return 0;
-	}
-	return (int64_t)(ds->n_pub - acks);
-}
-
 static void io_sock(void *ctx, struct fdt_sock *s)
 {
 	(void)ctx;
@@ -173,8 +133,6 @@ static void io_sock(void *ctx, struct fdt_sock *s)
 		s->s[k].outq = si.outq;
 		s->s[k].acked = si.acked;
 		s->s[k].has_acked = si.has_acked;
-		if (g.paper)
-			s->s[k].pend = ds_pending(&g.ds[k], fd);
 	}
 	s->n = any ? g.n_ports : 0;
 }
@@ -241,21 +199,12 @@ static int on_message_out(int event, void *event_data, void *userdata)
 	(void)event;
 	(void)userdata;
 	if (g.paper) {
-		/* k_i of the backlog: count the QoS 1 PUBLISH packets written to a data bridge */
+		/* n_i of the backlog: the length of each PUBLISH written to a data bridge, in write order */
 		for (int k = 0; k < g.n_ports; k++) {
 			struct dsock *ds = &g.ds[k];
-			if (!ds->client || m->client != ds->client || m->qos == 0)
+			if (!ds->client || m->client != ds->client || !m->topic)
 				continue;
-			if (!ds->anchored) {
-				int fd = ds_fd(ds);
-				uint64_t rx;
-				if (fd < 0 || fdt_sock_received(fd, &rx))
-					break;
-				ds->rx0 = rx;
-				ds->n_pub = 0;
-				ds->anchored = 1;
-			}
-			ds->n_pub++;
+			fdt_preg_on_out(&g.preg, k, fdt_p_publish_len(strlen(m->topic), m->qos, m->payloadlen) + (ds->v5 ? 1 : 0));
 			break;
 		}
 		return MOSQ_ERR_SUCCESS;
@@ -356,9 +305,9 @@ static int on_connect(int event, void *event_data, void *userdata)
 		ds->v5 = mosquitto_client_protocol_version(c->client) == 5;
 		snprintf(ds->addr, sizeof ds->addr, "%s", a ? a : "");
 		ds->fd = fdt_sock_find(ds->port, ds->addr, &ds->ino);
-		ds->anchored = 0;
-		ds->n_pub = ds->rx0 = 0;
-		if (!g.paper)
+		if (g.paper)
+			fdt_preg_ring_reset(&g.preg, k);
+		else
 			fdt_reg_sock_reset(&g.reg, k);
 		mosquitto_log_printf(MOSQ_LOG_NOTICE, "fdt_regulator: data bridge %s on port %d connected, fd=%d%s",
 		                     ds->addr, port, ds->fd, ds->v5 ? " (MQTT 5: use bridge_protocol_version mqttv311)" : "");
@@ -375,9 +324,9 @@ static int on_disconnect(int event, void *event_data, void *userdata)
 		if (d->client == g.ds[k].client) {
 			g.ds[k].client = NULL;
 			g.ds[k].fd = -1;
-			g.ds[k].anchored = 0;
-			g.ds[k].n_pub = g.ds[k].rx0 = 0;
-			if (!g.paper)
+			if (g.paper)
+				fdt_preg_ring_reset(&g.preg, k);
+			else
 				fdt_reg_sock_reset(&g.reg, k);
 			mosquitto_log_printf(MOSQ_LOG_NOTICE, "fdt_regulator: data bridge on port %d disconnected", g.ds[k].port);
 		}

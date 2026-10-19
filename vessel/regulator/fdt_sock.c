@@ -118,18 +118,6 @@ static int bytes_acked(int fd, uint64_t *acked)
 	return 0;
 }
 
-int fdt_sock_received(int fd, uint64_t *rx)
-{
-	struct tcp_info ti;
-	socklen_t l = sizeof ti;
-	memset(&ti, 0, sizeof ti);
-	if (getsockopt(fd, IPPROTO_TCP, TCP_INFO, &ti, &l) ||
-	    l < offsetof(struct tcp_info, tcpi_bytes_received) + sizeof ti.tcpi_bytes_received)
-		return -1;
-	*rx = ti.tcpi_bytes_received;
-	return 0;
-}
-
 /* SIOCOUTQ and tcpi_bytes_acked come from two system calls, and an acknowledgment that the kernel
  * processes between them (softirq, another CPU) makes acked + outq overshoot the bytes written.
  * snd_una only grows, so the reads acked, outq, acked with the same value of acked are consistent. */

@@ -14,9 +14,13 @@
  *                  in the last `idle` steps. off = 0 by default (no phase-1 offset). With demand
  *                  "external" the regulator publishes nothing and takes D_i(t) from the DTI program
  *                  (vessel/dti/fdt_dti) as it passes through the vessel broker on boat/b<i>/demand.
- *                  Backlog: Q_i(t) = ceil(c_b o_i(t) + c_k k_i(t)) (fdt_preg_backlog), o_i the SIOCOUTQ of
- *                  the data-bridge socket and k_i the forwarded QoS 1 messages still waiting for their
- *                  PUBACK, both read through io.sock at the start of phase 1; Q_i = 0 without a socket.
+ *                  Backlog: Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t)) (fdt_preg_backlog), o_i the SIOCOUTQ of
+ *                  the data-bridge socket read through io.sock at the start of phase 1 and n_i the PUBLISH
+ *                  packets with at least one byte among those o_i bytes: the core keeps a ring of the
+ *                  lengths of the PUBLISH packets written to each data-bridge socket in write order
+ *                  (fdt_preg_on_out, from MOSQ_EVT_MESSAGE_OUT) and walks it from the newest packet back
+ *                  until the lengths sum to o_i or more; n_i = the packets visited (all of the ring when
+ *                  it holds fewer bytes, 0 when o_i = 0). Q_i = 0 without a socket.
  *                  The DTI program is another process and cannot read that socket, so it writes Q_i = 0
  *                  and the plugin overwrites the field in place (fdt_preg_stamp_demand) when the table
  *                  enters the vessel broker, before the control bridge carries it to the GS.
@@ -29,9 +33,10 @@
  *                  step t stay. Then it publishes the level-2 messages, then the level-1 messages
  *                  (strict priority), each level in order of reception, all in the same tick (no
  *                  pacing), on boat/b<i>/tx/<topic> with payload t:u32, s:u16 + content, s = index of
- *                  the message in its topic and step from 0. Both levels use MQTT QoS 1 (fdt_preg_qos);
- *                  the GS removes the repeated copies by the pair (t, s), so the applications receive
- *                  each message once (the bridges keep cleansession true).
+ *                  the message in its topic and step from 0. Both levels use MQTT QoS 0 (fdt_preg_qos), and
+ *                  the data bridges subscribe with QoS 0: no MQTT acknowledgment crosses the channel; the
+ *                  GS still removes repeated copies by the pair (t, s) (the bridges keep cleansession
+ *                  true).
  *  start(t+1)      end of step t: every message of step t not forwarded is logged (one JSON line per
  *                  message in the vessel log file: step, topic, sequence number, bytes, reason) and
  *                  is never forwarded later; the step summary goes to boat/b<i>/regulator (QoS 0) and,
@@ -45,11 +50,10 @@
  *
  * Baselines of the paper stack (design Section 5). They keep the clock, the payload t:u32, s:u16, the
  * collection windows, the end-of-step rule, the vessel log and the step summary of mode paper, take no
- * priority table (a table that arrives is stored and ignored), and forward every message with QoS 1:
- * without a table no topic has level 2, and the GS records repeated copies (by t, s) in the log of the
- * operation and excludes them from the step (Corollary 2), so
- * QoS 1 gives the at-least-once delivery that every baseline needs and keeps the PUBACK exchange of
- * level 1. The modes take the names paper_<x> because b1, b2, b3 and tdma name the modes of the older
+ * priority table (a table that arrives is stored and ignored), and publish every message with QoS 1 on
+ * the vessel broker; the data bridges of the paper stack subscribe with QoS 0 (fleetdt/gsconf.py), so the
+ * messages cross the channel with QoS 0 as those of the levels do, and the GS records repeated copies
+ * (by t, s) in the log of the operation and excludes them from the step (Corollary 2). The modes take the names paper_<x> because b1, b2, b3 and tdma name the modes of the older
  * core (fdt_reg.c, as2 stack: DTP v2, 1-based clock, JSON tables).
  *  paper_b1    (B1, B10) no regulation: each raw message is forwarded when it reaches the regulator, with
  *              the step t = floor((now - epoch) / Ts) of that instant in its header.
@@ -95,10 +99,12 @@ enum fdt_preason { FDT_PR_NONE = 0, FDT_PR_FWD, FDT_PR_NO_TABLE, FDT_PR_NO_DEMAN
                    FDT_PR_OVERFLOW, FDT_PR_RESYNC, FDT_PR_EOS, FDT_PR_SHUTDOWN, FDT_PR_BUDGET, FDT_PR_SLOT,
                    FDT_PR_N };
 
-/* MQTT QoS of a forwarded message of level 1 or 2: 1 for both levels (the order of the levels in phase 3
+/* MQTT QoS of a forwarded message of level 1 or 2: 0 for both levels (the order of the levels in phase 3
  * gives the priority; the GS deduplicates by (t, s)) */
-#define FDT_P_QOS_LEVEL2 1
-#define FDT_P_QOS_LEVEL1 1
+#define FDT_P_QOS_LEVEL2 0
+#define FDT_P_QOS_LEVEL1 0
+/* PUBLISH packets per data-bridge socket in the ring of the backlog (n_i) */
+#define FDT_P_RING 16384
 int fdt_preg_qos(int level);
 
 /* paper | paper_nopolice | paper_noeos | paper_b1 | paper_b2 | paper_b3 | b8 (alias paper_b8) | paper_tdma;
@@ -135,7 +141,7 @@ struct fdt_pstep {
 	int64_t p_at, late_p1, late_v, outq, nsd;
 	int have_Q;                    /* Q_i(t) computed at the start of phase 1 */
 	uint32_t Q;                    /* backlog Q_i(t) of the demand table */
-	int64_t bo, bk;                /* its o_i(t) and k_i(t) (-1: no data-bridge socket) */
+	int64_t bo, bn;                /* its o_i(t) and n_i(t) (-1: no data-bridge socket) */
 	uint32_t seq[FDT_L_MAX];       /* next sequence number of the topic in the step */
 	uint32_t rx[FDT_L_MAX];        /* raw messages of the step */
 	uint32_t fwd[FDT_L_MAX];       /* messages of the step forwarded in the step */
@@ -192,6 +198,10 @@ struct fdt_preg {
 	uint8_t *scratch;               /* paper_b1, paper_b2: header + content of one message */
 	size_t scratch_cap;
 	char tx2_topic[FDT_L_MAX][160];
+	/* backlog: per data-bridge socket, a ring of the lengths of the PUBLISH packets written to it */
+	uint32_t *ring;                 /* FDT_DATA_MAX x FDT_P_RING */
+	int ring_head[FDT_DATA_MAX];    /* next slot */
+	int ring_n[FDT_DATA_MAX];       /* packets held (<= FDT_P_RING) */
 };
 
 /* Options of the core; fdt_preg_opts_default() fills the defaults. */
@@ -225,6 +235,13 @@ int fdt_preg_on_demand(struct fdt_preg *r, const void *payload, size_t len, int6
  * messages without PUBACK, both from io.sock; Q = 0 without a socket); kept in the record of step t when the
  * ring holds it */
 uint32_t fdt_preg_backlog(struct fdt_preg *r, int64_t t, int64_t now_us);
+/* a PUBLISH packet of len bytes written to data-bridge socket k (MOSQ_EVT_MESSAGE_OUT), in write order */
+void fdt_preg_on_out(struct fdt_preg *r, int k, uint32_t len);
+/* data-bridge socket k connected or disconnected: empties its ring */
+void fdt_preg_ring_reset(struct fdt_preg *r, int k);
+/* n: the packets of the ring of socket k, newest first, whose lengths first sum to o or more (all of the ring
+ * when it holds fewer bytes; 0 when o <= 0) */
+int64_t fdt_preg_ring_count(const struct fdt_preg *r, int k, int64_t o);
 /* demand table of the DTI program entering the vessel broker (demand external): writes Q_i(t) of
  * fdt_preg_backlog into its Q field in place (the table keeps its length); returns 0, or -1 malformed */
 int fdt_preg_stamp_demand(struct fdt_preg *r, void *payload, size_t len, int64_t now_us);

@@ -4,10 +4,10 @@
  * boat/b<i>/demand (QoS 1) of the vessel broker; the control bridge carries it to
  * the GS before the end of phase 1.
  *
- * Q_i(t) = ceil(c_b o_i(t) + c_k k_i(t)) is the backlog of the vessel at the start of phase 1:
- * o_i = SIOCOUTQ of the TCP socket of the data bridge and k_i = forwarded QoS 1 messages still
- * waiting for their PUBACK. That socket belongs to the vessel broker, and this program, another
- * process, can neither ioctl it nor see the PUBACKs, so it writes Q_i = 0 and the regulator plugin
+ * Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t)) is the backlog of the vessel at the start of phase 1:
+ * o_i = SIOCOUTQ of the TCP socket of the data bridge and n_i = PUBLISH packets with at least one
+ * byte among those o_i bytes. That socket belongs to the vessel broker, and this program, another
+ * process, can neither ioctl it nor see the packets written to it, so it writes Q_i = 0 and the regulator plugin
  * (plugin_opt_demand external) overwrites the field in place when the table enters the broker
  * (fdt_regulator_plugin.c, fdt_preg_stamp_demand; SPEC.md Section 5).
  *

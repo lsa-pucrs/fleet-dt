@@ -54,14 +54,19 @@ static int varint_bytes(uint32_t v)
 	return v < 128 ? 1 : v < 16384 ? 2 : v < 2097152 ? 3 : 4;
 }
 
-/* PUBLISH header of a QoS 1 message of s + 6 payload bytes on boat/b<V>/tx/<name>: the packet minus
- * the payload (QoS 1 and QoS 2 carry the same 2-byte packet identifier) */
+uint32_t fdt_p_publish_len(size_t topic_len, int qos, size_t payload_len)
+{
+	uint32_t rem = (uint32_t)(2 + topic_len + (qos > 0 ? 2 : 0) + payload_len);
+	return 1u + (uint32_t)varint_bytes(rem) + rem;
+}
+
+/* PUBLISH header of a QoS 0 message of s + 6 payload bytes on boat/b<V>/tx/<name>: the packet minus
+ * the payload (fixed header, topic; QoS 0 carries no packet identifier) */
 static double publish_header(int V, const char *name, long s)
 {
 	char topic[160];
 	int tl = snprintf(topic, sizeof topic, "boat/b%d/tx/%s", V > 0 ? V : 1, name);
-	uint32_t rem = (uint32_t)(2 + tl + 2 + FDT_STEP_HEADER + s);
-	return 1.0 + varint_bytes(rem) + 2 + tl + 2;
+	return (double)fdt_p_publish_len((size_t)tl, 0, (size_t)(FDT_STEP_HEADER + s)) - (double)(FDT_STEP_HEADER + s);
 }
 
 int fdt_pdtp_parse(const char *text, size_t len, struct fdt_pdtp *d, char *err, size_t errlen)
@@ -108,12 +113,12 @@ int fdt_pdtp_parse(const char *text, size_t len, struct fdt_pdtp *d, char *err, 
 			V = d->vessels[k];
 	if (!has_cb)
 		d->c_b = 1.0 + 2.0 * (h_T + h_W) / mss;
-	/* c_k of eq. (cons): the last segment of the message and its TCP acknowledgment, 2 (h_T + h_W), and the
-	 * PUBACK of QoS 1 in its own segment and frame with its own TCP acknowledgment, h_A + 2 h_T + 2 h_W.
-	 * fleetdt/as_model.py (cost_c_k) and vessel/publishers/video_layers.py (cost_bound) compute the same
-	 * expression in the same order. */
+	/* c_k of eq. (cons): the TCP/IP header and the frame of the last segment of the message and of its TCP
+	 * acknowledgment, 2 (h_T + h_W); QoS 0 has no MQTT acknowledgment. fleetdt/as_model.py (cost_c_k) and
+	 * vessel/publishers/video_layers.py (cost_bound) compute the same expression. */
+	(void)h_A;
 	if (!has_ck)
-		d->c_k = 2.0 * (h_T + h_W) + (h_A + 2.0 * h_T + 2.0 * h_W);
+		d->c_k = 2.0 * (h_T + h_W);
 	/* video layer topics: <base>_<j>, 1 <= j <= layers, of "video_layers" (base "video", 16 layers) */
 	char vbase[FDT_NAME_MAX] = "video";
 	double vlayers = 16;
@@ -172,7 +177,7 @@ int fdt_pdtp_parse(const char *text, size_t len, struct fdt_pdtp *d, char *err, 
 			long j = strtol(tp->name + bl + 1, &endp, 10);
 			tp->video = endp && !*endp && j >= 1 && j <= (long)vlayers;
 		}
-		/* cost bound of the paper (eq. cons), per topic: c_m,l = c_b h_P,l + c_k, the PUBLISH header (QoS 1)
+		/* cost bound of the paper (eq. cons), per topic: c_m,l = c_b h_P,l + c_k, the PUBLISH header (QoS 0)
 		 * at c_b and the per-message term c_k above. fleetdt/as_model.py (DTP.from_dict) and
 		 * vessel/publishers/video_layers.py (cost_bound) compute the same expression in the same order. */
 		tp->c_m = has_cm ? c_m : d->c_b * publish_header(V, tp->name, tp->s) + d->c_k;
@@ -275,11 +280,11 @@ double fdt_p_cost(const struct fdt_pdtp *d, int l, size_t x)
 	return d->c_b * (double)(x + FDT_STEP_HEADER) + d->topic[l].c_m;
 }
 
-uint32_t fdt_p_backlog(const struct fdt_pdtp *d, int64_t o, int64_t k)
+uint32_t fdt_p_backlog(const struct fdt_pdtp *d, int64_t o, int64_t n)
 {
-	double ob = o > 0 ? (double)o : 0.0, kb = k > 0 ? (double)k : 0.0;
-	if (ob == 0.0 && kb == 0.0)
+	double ob = o > 0 ? (double)o : 0.0, nb = n > 0 ? (double)n : 0.0;
+	if (ob == 0.0 && nb == 0.0)
 		return 0;
-	double v = ceil(d->c_b * ob + d->c_k * kb - 1e-9);
+	double v = ceil(d->c_b * ob + d->c_k * nb - 1e-9);
 	return v > 4294967295.0 ? 4294967295u : v < 0 ? 0u : (uint32_t)v;
 }

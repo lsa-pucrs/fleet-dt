@@ -66,7 +66,6 @@ struct fdt_sock {
 		int64_t outq;            /* SIOCOUTQ: bytes not yet acknowledged */
 		uint64_t acked;          /* tcpi_bytes_acked */
 		int has_acked;
-		int64_t pend;            /* mode paper: QoS 1 PUBLISH packets written without PUBACK (0 unknown) */
 	} s[FDT_DATA_MAX];
 };
 
