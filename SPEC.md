@@ -53,6 +53,9 @@ Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Ve
 | `epoch` | Unix time (GS clock) of the start of step 0 of the operation. Step t starts at `epoch + t*Ts`. With `null`, every program uses 1767225600 (2026-01-01T00:00:00Z), so t fits the u32 field until 2043. |
 | `Ts`, `T1`, `T2` | Step and phase durations in seconds; `T3 = Ts - T1 - T2` |
 | `alpha`, `U`, `C0` | Gain of eq. (2), target utilization, initial prediction (bytes per step) |
+| `c_y` | Optional (default 1): smallest ratio C(t)/y(t) of a saturation test, in (0, 1]; eq. (2) smooths c_y y(t-1) (`fleetdt.analysis.calibrate_c_y`) |
+| `T_m` | Optional (default 0 s): margin of phase 3, T_m = eps + delta_GS (eps = 2 max chrony max error + 1 ms, delta_GS = largest delivery time of the GS broker measured in Q); K_hat(t) = C_hat(t) (T3 - T_m) / Ts. TODO: no measurement of the two terms exists yet, so every DTP of the repository leaves it at 0 (`fleetdt.analysis.calibrate_margins`) |
+| `B_ctl_bar` | Optional (default 0 bytes): largest bytes of control traffic outside the data bridges in phase 3 of a calibration step; used by the fidelity metrics only (K_y(t)). TODO as for T_m |
 | `c_b`, `c_m` | Optional coefficients of the bound c(x, n) = c_b x + c_m n of eq. (5) (channel bytes of n messages with x content bytes). Without them, the readers of the paper stack (`common/fdt_paper.c`, `fleetdt/as_model.py`, `vessel/publishers/video_layers.py`) compute the cost bound of the paper (eq. cons) per topic: c_b = 1 + 2 (h_T + h_W) / MSS, c_k = 2 (h_T + h_W) + (h_A + 2 h_T + 2 h_W) (the last segment of the message, the PUBACK of QoS 1 and the TCP acknowledgment of each), c_m,l = c_b h_P,l + c_k, h_P,l the PUBLISH header of boat/b\<V\>/tx/\<name\> (QoS 1). An optional `c_k` overrides c_k. `dtp.json` gives none of them |
 | `tcp`, `mqtt` | MSS and h_T (largest TCP/IP header of a segment, options included; 1448, 80), h_A (bytes of one MQTT control packet; 4) |
 | `R_PHY`, `h_W` | Bit rate of the radios (bit/s) and fixed bytes per frame at R_PHY (DIFS or AIFS, mean backoff, PHY preamble and header, signal extension, MAC header, LLC, FCS, SERVICE and tail bits, mean OFDM padding, SIFS, MAC ACK); derivation in emu/README.md, "Fixed bytes per frame h_W" |
@@ -65,9 +68,15 @@ Phases of step t (wall clock of each host, synchronized by chrony):
 | Instant | Event |
 |---|---|
 | `start(t) = epoch + t*Ts` | phase 1: the DTI program publishes D_i(t) |
-| `start(t) + T1` | phase 2: the AS closes M(t), computes Ĉ(t), b(t), p(t), publishes p(t) |
+| `start(t) + T1` | phase 2: the AS closes M(t), computes Ĉ(t), b(t), p(t), publishes p(t) (below) |
 | `start(t) + T1 + T2` | phase 3: the vessel regulator forwards the messages of step t |
 | `start(t) + Ts` | end of step t: the channel monitor publishes y(t); the GS discards messages of step t that arrive later |
+
+Phase 2 (AS): Ĉ(t) = (1 - alpha) Ĉ(t-1) + alpha c_y y(t-1), or Ĉ(t-1) when y(t-1) did not arrive in phase 1;
+K̂(t) = Ĉ(t) (T3 - T_m) / Ts; Q(t) = sum of the backlogs Q_i(t) of the demand tables of M(t) (Section 5);
+b(t) = max(0, U K̂(t) - Q(t)) / m(t); Algorithm 1 over sigma_t: level 2 for a needed topic that fits, 1 for
+another topic that fits, 0 otherwise. The decision log and `fleet/as` hold `K_hat` (without U), `cap` =
+max(0, U K̂(t) - Q(t)) = m(t) b(t), `Q` and `Qi`.
 
 A raw message belongs to step t when it reaches the vessel regulator in the interval
 `[start(t-1) + T1 + T2, start(t) + T1 + T2)`, so the vessel regulator forwards no message between
@@ -86,7 +95,7 @@ Prefix `boat/b<i>/` with the vessel index i (1..M). All binary fields in network
 | `boat/b<i>/tx/<topic>` | vessel (data bridge → GS) | vessel regulator | 1 (levels 2 and 1; level 2 leaves first in phase 3) | `t:u32, s:u16` + content; s = sequence number of the message in its topic and step, from 0; the GS removes repeated copies by (t, s), so the applications receive each message once |
 | `fleet/order` | GS | operation control software | 1 | JSON `{"t":…, "order":[names], "needed":[names]}` |
 | `fleet/throughput` | GS (from the GS radio) | channel monitor | 0 | JSON `{"t":…, "y":bytes, "Tb":s, "To":s}` |
-| `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…]}` (topic indices from 1) |
+| `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "cap":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…], "a":{…}, "A":…, "Q":…, "Qi":{…}}` (topic indices from 1) |
 | `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "k", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `k` = Q_i(t) of the demand table and the o_i(t), k_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |
 
 The video publisher splits each JPEG frame into messages of at most `bound` bytes; the content of
@@ -136,8 +145,8 @@ data bridge (MOSQ_EVT_MESSAGE_OUT) minus the PUBACKs received: the plugin API re
 SUBSCRIBE the bridge client sends only PUBACKs (4 bytes, MQTT 3.1.1) and the rare PINGREQ (2 bytes) on that
 socket, so the plugin counts floor((tcpi_bytes_received - rx0) / 4) PUBACKs since an anchor rx0 that it sets
 at the first PUBLISH of the connection and again whenever every written message has its PUBACK (which drops
-the bytes of a PINGREQ). The AS takes Q(t) = sum of Q_i(t) over M(t) (Section 6), and vertex i of G(t) keeps
-Q_i(t) and its membership in M(t) (`vertices` of the DTA).
+the bytes of a PINGREQ). The AS takes Q(t) = sum of Q_i(t) over M(t) (phase 2, Section 2), and vertex i of G(t)
+keeps Q_i(t) and its membership in M(t) (`vertices` of the DTA).
 
 ## 6. Channel monitor (Section V-B)
 

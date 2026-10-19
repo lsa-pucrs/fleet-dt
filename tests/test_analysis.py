@@ -288,7 +288,7 @@ def test_prefix_fleet_unused_fill_and_fairness(criterion):
     # fleet consistency: state complete from every vessel in both steps; imu fails in step 0 (vessel 2);
     # video fails in step 0 (held)
     assert res["fleet_consistency"] == {"state": 1.0, "imu": 0.5, "video": 0.5}
-    # unused share: vessel 3 (zero demand) in step 0 holds b = 500 of K_hat 1500 + 2000
+    # unused share: vessel 3 (zero demand) in step 0 holds b = 500 of the caps m b = 1500 + 2000
     assert res["unused"]["value"] == pytest.approx(500 / 3500)
     # fill ratio: step 0: a = (400, 300, 0), b = 500 -> 0.8; step 1: a = (900, 700), b = 1000 -> 0.9
     assert res["fill"]["mean"] == pytest.approx(0.85) and res["fill"]["min"] == pytest.approx(0.8)
@@ -404,7 +404,7 @@ def test_calibrate_by_M():
         lev = scale * (300_000 + np.cumsum(rng.normal(0, 2000, n)))
         y = lev + rng.normal(0, 15_000 * scale, n)
         return [{"t": t, "y": float(v), "C_hat": scale * 300_000.0, "vessels": list(range(1, M + 1)),
-                 "U": 0.8, "K_hat": 0.8 * scale * 300_000.0 * 0.76} for t, v in enumerate(y)]
+                 "U": 0.8, "K_hat": scale * 300_000.0 * 0.76} for t, v in enumerate(y)]
     runs = [run(2, 1.0), run(2, 1.0), run(4, 0.6), run(4, 0.6), run(4, 0.6)]
     res = O.calibrate_by_M(runs, target=0.95, B=200)
     assert sorted(res) == [2, 4]
@@ -475,7 +475,7 @@ def test_admitted_bytes_sources():
 def test_outer_loop_whatif_names_and_aliases():
     rng = np.random.default_rng(5)
     y = 300_000 + rng.normal(0, 20_000, 2000)
-    recs = [{"t": t, "y": float(v), "C_hat": 300_000.0, "U": 0.8, "K_hat": 0.8 * 300_000.0 * 0.76,
+    recs = [{"t": t, "y": float(v), "C_hat": 300_000.0, "U": 0.8, "K_hat": 300_000.0 * 0.76,
              "A": 0.6 * 300_000.0 * 0.76} for t, v in enumerate(y)]
     res = O.outer_loop(recs, target=0.95, B=200, alpha=0.0, c_y=0.95)
     assert res["PICP_nom"] == res["gamma_target"] == 0.95 and res["c_y"] == res["kappa"] == 0.95

@@ -1,8 +1,10 @@
 """Allocation system (AS) of the GS: phase 2 of each step (Section V-C of the Fleet-DT paper).
 
-At start(t) + T1 the AS closes M(t), computes C_hat(t) (eq. 2), K_hat(t) and b(t) (eq. 3), runs
-Algorithm 1 over sigma_t and N(t), publishes (t, p(t)) on boat/b<i>/levels (QoS 1) for every i in M(t)
-and the JSON summary on fleet/as. The decision (log line and fleet/as) holds D (the demand tables of M(t)),
+At start(t) + T1 the AS closes M(t), computes C_hat(t) = (1 - alpha) C_hat(t-1) + alpha c_y y(t-1) (eq. 2;
+C_hat(t-1) when y(t-1) did not arrive in phase 1), K_hat(t) = C_hat(t) (T3 - T_m) / Ts and
+b(t) = max(0, U K_hat(t) - Q(t)) / m(t) (eq. 3, Q(t) = sum of the backlogs Q_i(t) of the demand tables of M(t);
+c_y and T_m from the DTP), runs Algorithm 1 over sigma_t and N(t), publishes (t, p(t)) on boat/b<i>/levels
+(QoS 1) for every i in M(t) and the JSON summary on fleet/as. The decision (log line and fleet/as) holds D (the demand tables of M(t)),
 the table, and the admitted bytes a_i(t) of each vessel ("a") with their sum A(t) ("A"), which the backlog
 predictor of the outer loop replays (C5). The optional outer loop (fleetdt.outer, contribution (iv)) updates
 U and alpha from the DTA every `outer_every` steps; it runs in a child process (fleetdt.outer.run_job,
@@ -40,7 +42,7 @@ import time
 import uuid
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .as_model import DTP, admission, admission_b7, grant_limit, smooth
+from .as_model import DTP, admission, admission_b7, grant_cap, smooth
 from .model import decode_demand, encode_levels, tcp_nodelay
 
 log = logging.getLogger("fleetdt.as")
@@ -158,7 +160,7 @@ class AS:
                 for k in range(self.last_t + 1, t + 1):
                     yk = self._y.get(k - 1)
                     y_used = yk[0] if yk is not None and yk[1] < self.deadline(k) else None
-                    C = smooth(C, y_used, self.alpha)
+                    C = smooth(C, y_used, self.alpha, self.dtp.c_y)
             self.C_hat, self.last_t = C, t
             for k in [k for k in self._y if k < t]:
                 del self._y[k]
@@ -177,17 +179,19 @@ class AS:
             M = sorted(D)
             Q = int(sum(Qi.get(i, 0) for i in M))          # Q(t): backlog of the vessels of M(t)
             m = len(M)
-            K_hat = self.U * C * self.dtp.T3 / self.dtp.Ts     # eq. (3)
+            K_hat = self.dtp.K_hat(C)                          # C_hat(t) (T3 - T_m) / Ts
+            cap = grant_cap(C, self.U, self.dtp.T3, self.dtp.Ts, Q, self.dtp.T_m)   # max(0, U K_hat - Q)
             # D (the demand tables of M(t)) and y_used (the y(t - 1) of eq. (2), None when missing or late)
             # make the decision reproducible offline (emu/experiments/conformance.py)
-            dec = {"t": t, "C_hat": C, "K_hat": K_hat, "b": None, "U": self.U, "alpha": self.alpha,
+            dec = {"t": t, "C_hat": C, "K_hat": K_hat, "cap": cap, "b": None, "U": self.U, "alpha": self.alpha,
+                   "c_y": self.dtp.c_y, "T_m": self.dtp.T_m,
                    "m": m, "p": None, "M": M, "order": list(self.sigma), "needed": list(self.N),
                    "D": {str(i): list(D[i]) for i in M}, "y_used": y_used,
                    "Qi": {str(i): int(Qi.get(i, 0)) for i in M}, "Q": Q}
             self.last = dec
             if m == 0:
                 return None
-            b = grant_limit(C, self.U, self.dtp.T3, self.dtp.Ts, m)   # eq. (3)
+            b = cap / m                                               # eq. (3)
             dec["b"] = b
             if self.policy == "b7":                                   # baseline B7
                 p_by, g = admission_b7(D, self.sigma, self.N, b)
@@ -414,8 +418,8 @@ class Service:
             payload = encode_levels(dec["t"], dec["p"])
             for i in dec["M"]:
                 self.client.publish("boat/b%d/levels" % i, payload, qos=1)
-        keys = ("t", "C_hat", "K_hat", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants", "a", "A",
-                "Q", "Qi")
+        keys = ("t", "C_hat", "K_hat", "cap", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants", "a",
+                "A", "Q", "Qi")
         self.client.publish("fleet/as", json.dumps({k: dec[k] for k in keys if k in dec}, separators=(",", ":")),
                             qos=0)
 

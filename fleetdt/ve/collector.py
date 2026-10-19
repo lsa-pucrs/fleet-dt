@@ -204,16 +204,16 @@ class Assembler:
             for k in ("C_hat", "K_hat", "b", "U", "alpha", "A"):
                 if k in a:
                     setattr(g, k, a[k])
-        else:  # the VE reproduces eq. (2) and eq. (3)
+        else:  # the VE reproduces eq. (2) and eq. (3), with the backlog Q(t) of the vertices of M(t)
             g.U, g.alpha = self.dtp.U, self.dtp.alpha
             if self.last_C_hat is None:
                 g.C_hat = self.dtp.C0
             else:
                 late_y = self.y.pop(t - 1, None)  # y(t-1) that arrived after G(t-1) closed
                 y_prev = late_y if late_y is not None else (self._y_prev if self.last_t == t - 1 else None)
-                g.C_hat = smooth(self.last_C_hat, y_prev, self.dtp.alpha)
-            g.K_hat = self.dtp.U * g.C_hat * self.dtp.T3 / self.dtp.Ts
-            g.b = grant_limit(g.C_hat, self.dtp.U, self.dtp.T3, self.dtp.Ts, g.m)
+                g.C_hat = smooth(self.last_C_hat, y_prev, self.dtp.alpha, self.dtp.c_y)
+            g.K_hat = self.dtp.K_hat(g.C_hat)
+            g.b = grant_limit(g.C_hat, self.dtp.U, self.dtp.T3, self.dtp.Ts, g.m, Q=g.Q, T_m=self.dtp.T_m)
         self.last_C_hat, self.last_t, self._y_prev = g.C_hat, t, g.y
         for k in [k for k in self.y if k < t - 1]:
             del self.y[k]

@@ -79,10 +79,11 @@ class FleetSim:
             for l, dl in enumerate(row, start=1):
                 g.edge(i, l).d = dl
         # phase 2: AS
-        self.C_hat = smooth(self.C_hat, self.y_prev, dtp.alpha) if t > 0 else dtp.C0
+        self.C_hat = smooth(self.C_hat, self.y_prev, dtp.alpha, dtp.c_y) if t > 0 else dtp.C0
         g.C_hat = self.C_hat
-        g.K_hat = dtp.U * self.C_hat * dtp.T3 / dtp.Ts
-        g.b = grant_limit(self.C_hat, dtp.U, dtp.T3, dtp.Ts, g.m)
+        g.K_hat = dtp.K_hat(self.C_hat)
+        g.Q = 0.0                     # the synthetic channel delivers within the step: no backlog
+        g.b = grant_limit(self.C_hat, dtp.U, dtp.T3, dtp.Ts, g.m, Q=g.Q, T_m=dtp.T_m)
         p = admission(D, g.order, g.needed, g.b) if g.m else [0] * dtp.L
         for e in g.edges:
             e.p = p[e.l - 1] if e.i in D else None

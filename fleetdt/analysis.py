@@ -26,7 +26,8 @@ full-delivery fraction 1 - DMR):
              persistence y(t - 1) (alt); H3 tests log RelMSE (rel_mse for other alternatives)
   fleet      fleet consistency: for each topic l, the fraction of the steps (with a positive demand of l)
              in which l arrives complete from every vessel of M(t)
-  unused     share of K_hat(t) granted to vessels of M(t) with a zero demand table: sum_t z(t) b(t) / sum_t K_hat(t)
+  unused     share of the cap m(t) b(t) = max(0, U K_hat(t) - Q(t)) granted to vessels of M(t) with a zero demand
+             table: sum_t z(t) b(t) / sum_t m(t) b(t)
   fill       fill ratio f(t) = max_{i in M(t)} a_i(t) / b(t) (a_i of Algorithm 1); a run is valid for E3 and
              E4 when mean f >= 0.85 (FILL_MIN)
 
@@ -576,11 +577,10 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
                 fl[l] = all(comp[i][pos] for i in Mlist)
         out["fleet"].append(fl)
         # unused share and fill ratio (Algorithm 1: a_i = sum of d_il over the admitted topics)
-        b, K = g.get("b"), g.get("K_hat")
+        b = g.get("b")
         if Mlist and b is not None and b > 0:
             D0 = [i for i in Mlist if sum((by.get((i, l)) or {}).get("d", 0) for l in range(1, L + 1)) == 0]
-            Kt = K if K is not None else b * len(Mlist)
-            out["unused"].append((len(D0) * b, Kt))
+            out["unused"].append((len(D0) * b, b * len(Mlist)))   # of the cap m b = max(0, U K_hat - Q)
             a = [sum(e.get("d", 0) for e in inM if e["i"] == i and (e.get("p") or 0) > 0) for i in Mlist]
             out["fill"].append(max(a) / b)
         else:

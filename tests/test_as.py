@@ -35,8 +35,68 @@ def test_algorithm1_example_through_the_as():
     assert a.on_demand(2, 0, D2, at=0.02)
     dec = a.close_phase1(0)
     assert dec["M"] == [1, 2] and dec["m"] == 2
-    assert dec["C_hat"] == 4000.0 and dec["K_hat"] == 2000.0 and dec["b"] == 1000.0
+    assert dec["C_hat"] == 4000.0 and dec["K_hat"] == 2000.0 and dec["b"] == 1000.0 and dec["cap"] == 2000.0
     assert dec["p"] == [2, 2, 0, 1]
+
+
+def test_grant_limit_subtracts_the_backlog():
+    """Revised eq. (3): b(t) = max(0, U K_hat(t) - Q(t)) / m(t), K_hat(t) = C_hat(t) (T3 - T_m) / Ts, Q(t) the sum
+    of the Q_i(t) of the demand tables of M(t) (a late table does not count)."""
+    dtp = small_dtp(U=0.8)
+    a = AS(dtp, epoch=0.0)
+    assert a.on_demand(1, 0, D1, at=0.01, Q=300)
+    assert a.on_demand(2, 0, D2, at=0.02, Q=100)
+    assert not a.on_demand(3, 0, D2, at=0.3, Q=10_000)       # after phase 1: neither in M(0) nor in Q(0)
+    dec = a.close_phase1(0)
+    assert dec["K_hat"] == pytest.approx(4000.0 * 0.5)       # C_hat (T3 - T_m) / Ts, T_m = 0
+    assert dec["Q"] == 400 and dec["Qi"] == {"1": 300, "2": 100}
+    assert dec["cap"] == pytest.approx(0.8 * 2000.0 - 400.0)
+    assert dec["b"] == pytest.approx((0.8 * 2000.0 - 400.0) / 2)
+    assert dec["b"] == pytest.approx(grant_limit(4000.0, 0.8, dtp.T3, dtp.Ts, 2, Q=400))
+    assert dec["p"] == admission({1: D1, 2: D2}, [1, 2, 3, 4], [1, 2], dec["b"])
+    assert dec["A"] <= dec["cap"]
+    # the (x)^+ clamp: a backlog above U K_hat gives b = 0, and only zero demands fit
+    a = AS(dtp, epoch=0.0)
+    a.on_demand(1, 0, D1, at=0.01, Q=1500)
+    a.on_demand(2, 0, [0, 0, 0, 0], at=0.02, Q=200)
+    dec = a.close_phase1(0)
+    assert dec["Q"] == 1700 and dec["cap"] == 0.0 and dec["b"] == 0.0
+    assert dec["p"] == [0, 0, 0, 0] and dec["A"] == 0
+    assert grant_limit(4000.0, 0.8, dtp.T3, dtp.Ts, 2, Q=1e9) == 0.0
+    # T_m shortens the part of phase 3 that the grant counts on
+    dm = small_dtp(U=0.8, T_m=0.1)
+    a = AS(dm, epoch=0.0)
+    a.on_demand(1, 0, D1, at=0.01)
+    dec = a.close_phase1(0)
+    assert dec["K_hat"] == pytest.approx(4000.0 * (0.5 - 0.1) / 1.0) and dec["T_m"] == 0.1
+    assert dec["b"] == pytest.approx(0.8 * 4000.0 * 0.4)
+
+
+def test_smoothing_with_c_y():
+    """Revised eq. (2): C_hat(t) = (1 - alpha) C_hat(t-1) + alpha c_y y(t-1); a missing y(t-1) keeps C_hat(t-1)."""
+    assert smooth(100.0, 200.0, 0.25, c_y=0.9) == pytest.approx(0.75 * 100 + 0.25 * 0.9 * 200)
+    assert smooth(100.0, None, 0.25, c_y=0.9) == 100.0
+    dtp = small_dtp(c_y=0.9)
+    a = AS(dtp, epoch=0.0)
+    a.on_demand(1, 0, D1, at=0.01)
+    assert a.close_phase1(0)["C_hat"] == 4000.0                 # C0
+    a.on_throughput(0, 6000.0, at=1.1)                          # y(0) within phase 1 of step 1
+    a.on_demand(1, 1, D1, at=1.01)
+    dec = a.close_phase1(1)
+    assert dec["C_hat"] == pytest.approx(0.5 * 4000.0 + 0.5 * 0.9 * 6000.0) and dec["c_y"] == 0.9
+    a.on_demand(1, 2, D1, at=2.01)                               # y(1) missing
+    assert a.close_phase1(2)["C_hat"] == pytest.approx(dec["C_hat"])
+    a.on_throughput(2, 1000.0, at=3.3)                           # y(2) after phase 1 of step 3: not used
+    a.on_demand(1, 3, D1, at=3.01)
+    assert a.close_phase1(3)["C_hat"] == pytest.approx(dec["C_hat"])
+    from fleetdt.as_model import DTP as _D
+    with pytest.raises(ValueError):
+        _D.from_dict({"topics": ["a"], "c_y": 1.2})
+    with pytest.raises(ValueError):
+        _D.from_dict({"topics": ["a"], "T_m": 0.2})              # T_m >= T3
+    d = _D.from_dict({"topics": ["a"], "c_y": 0.9, "T_m": 0.003, "B_ctl_bar": 500})
+    assert (d.c_y, d.T_m, d.B_ctl_bar) == (0.9, 0.003, 500)
+    assert _D.from_dict({"topics": ["a"]}).c_y == 1.0 and _D.from_dict({"topics": ["a"]}).T_m == 0.0
 
 
 def test_membership_by_deadline():

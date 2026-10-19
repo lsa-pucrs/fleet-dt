@@ -94,9 +94,18 @@ def admitted_bytes(r: Dict) -> float:
     return float("nan")
 
 
+def backlog_of(r: Dict) -> float:
+    """Q(t) of one record: "Q" of the AS or of G(t), else the sum of Q_i(t) of the vertices in M(t), else 0."""
+    if r.get("Q") is not None:
+        return float(r["Q"])
+    M = set(r.get("vessels") or [])
+    return float(sum(float(v.get("Q") or 0) for v in r.get("vertices") or [] if v.get("i") in M))
+
+
 def fill_series(records: Iterable[Dict], T3_Ts: float) -> np.ndarray:
-    """f(t) = A(t) / (U(t) C_hat(t) T3/Ts) per step sorted by t (series order): the share of the cap of
-    step t that Algorithm 1 filled; NaN without A(t), U(t) or C_hat(t) (the predictor then takes f = 1)."""
+    """f(t) = A(t) / cap(t) per step sorted by t (series order), cap(t) = max(0, U(t) K_hat(t) - Q(t)) with
+    K_hat(t) = C_hat(t) T3_Ts (T3_Ts = (T3 - T_m) / Ts): the share of the cap of step t that Algorithm 1 filled;
+    NaN without A(t), U(t) or C_hat(t) or with a zero cap (the predictor then takes f = 1)."""
     by_t = {}
     for r in records:
         by_t[int(r["t"])] = r
@@ -104,7 +113,8 @@ def fill_series(records: Iterable[Dict], T3_Ts: float) -> np.ndarray:
     for t in sorted(by_t):
         r = by_t[t]
         A, U, C = admitted_bytes(r), r.get("U"), r.get("C_hat")
-        cap = float(U) * float(C) * T3_Ts if U is not None and C is not None else float("nan")
+        cap = max(0.0, float(U) * float(C) * T3_Ts - backlog_of(r)) if U is not None and C is not None \
+            else float("nan")
         out.append(A / cap if cap > 0 and A == A else float("nan"))
     return np.asarray(out, dtype=float)
 
@@ -380,9 +390,8 @@ def gamma_bounds(runs: Sequence[Tuple[np.ndarray, np.ndarray]], U_grid=U_GRID, c
 
 
 def _T3_Ts(records: Sequence[Dict]) -> float:
-    """T3/Ts from the recorded K_hat = U C_hat T3/Ts (median), or the paper value."""
-    v = [float(r["K_hat"]) / (float(r["U"]) * float(r["C_hat"])) for r in records
-         if r.get("K_hat") is not None and r.get("U") and r.get("C_hat")]
+    """(T3 - T_m)/Ts from the recorded K_hat = C_hat (T3 - T_m)/Ts (median), or the paper value T3/Ts."""
+    v = [float(r["K_hat"]) / float(r["C_hat"]) for r in records if r.get("K_hat") is not None and r.get("C_hat")]
     return float(np.median(v)) if v else T3_TS_DEFAULT
 
 

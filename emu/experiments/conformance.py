@@ -6,10 +6,11 @@
 The script checks the run against the model of the paper from the logs that emu/fleet.py collects:
 
   alg1        offline replay of the AS: eq. (2) from the C_hat of the previous step and the y(t - 1) that
-              the AS used (equal to the y(t - 1) that the channel monitor published), the grant limit b(t),
-              Algorithm 1 (B7: the per-vessel grants) from the logged D_i(t), sigma_t and N(t) gives the
-              published p(t) in every step; the tables equal the D_i(t) that each regulator policed and the
-              p(t) that it received; sigma_t and N(t) equal the mode of the JMCS stub of step t
+              the AS used (equal to the y(t - 1) that the channel monitor published), the grant limit
+              b(t) = max(0, U K_hat(t) - Q(t)) / m(t) with the logged Q(t), Algorithm 1 (B7: the per-vessel
+              grants) from the logged D_i(t), sigma_t and N(t) gives the published p(t) in every step; the
+              tables equal the D_i(t) that each regulator policed and the p(t) that it received; sigma_t and
+              N(t) equal the mode of the JMCS stub of step t
   bytes       forwarded channel bytes per edge <= d_il(t): the cost of the messages that each regulator
               forwarded (step log) and the r_il(t) that the GS received (G(t) of the DTA)
   qos         every forwarded message of a topic of level 1 or 2 crosses with MQTT QoS 1 (the revised
@@ -239,7 +240,7 @@ def check_alg1(run):
         # eq. (2) and the y(t - 1) of the monitor
         prev = run.as_log.get(t - 1)
         if prev is not None and prev.get("C_hat") is not None and not r.get("skipped"):
-            want = smooth(float(prev["C_hat"]), r.get("y_used"), float(r["alpha"]))
+            want = smooth(float(prev["C_hat"]), r.get("y_used"), float(r["alpha"]), float(r.get("c_y", d.c_y)))
             if not _rel(want, float(r["C_hat"])):
                 eq2_bad += 1
                 c.ok(False, {"t": t, "why": "eq. (2)", "C_hat": r["C_hat"], "replay": want})
@@ -249,7 +250,9 @@ def check_alg1(run):
             c.ok(False, {"t": t, "why": "y_used differs from y(t-1) of the monitor", "y_used": r["y_used"],
                          "y": run.y[t - 1]})
             continue
-        b = grant_limit(float(r["C_hat"]), float(r["U"]), d.T3, d.Ts, len(M))
+        # b(t) = max(0, U K_hat(t) - Q(t)) / m(t), Q(t) of the logged demand tables (0 for an older AS)
+        b = grant_limit(float(r["C_hat"]), float(r["U"]), d.T3, d.Ts, len(M), Q=float(r.get("Q") or 0),
+                        T_m=float(r.get("T_m", d.T_m)))
         if r.get("b") is None or not _rel(b, float(r["b"])):
             c.ok(False, {"t": t, "why": "grant limit", "b": r.get("b"), "replay": b})
             continue

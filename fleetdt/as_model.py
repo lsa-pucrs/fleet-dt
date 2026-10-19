@@ -1,6 +1,8 @@
 """Computations of the AS that the VE reproduces when the AS does not publish them:
-exponential smoothing (eq. 2), grant limit (eq. 3), Algorithm 1 (admission control), the per-vessel
-grants of baseline B7, and the cost bound of the channel bytes of the forwarded messages."""
+exponential smoothing (eq. 2, C_hat(t) = (1 - alpha) C_hat(t-1) + alpha c_y y(t-1)), predicted capacity of phase 3
+K_hat(t) = C_hat(t) (T3 - T_m) / Ts, grant limit (eq. 3, b(t) = max(0, U K_hat(t) - Q(t)) / m(t)), Algorithm 1
+(admission control), the per-vessel grants of baseline B7, and the cost bound of the channel bytes of the
+forwarded messages."""
 from __future__ import annotations
 
 import math
@@ -90,6 +92,9 @@ class DTP:
     h_W: float = 0.0                # bytes that the PHY sends at R_PHY in the fixed time of one frame
     T_DIFS: float = 0.0             # DIFS (AIFS of AC_BE under EDCA) inside h_W, s (channel monitor, C7)
     T_bo: float = 0.0               # mean backoff inside h_W, CWmin/2 slots, s (channel monitor, C7)
+    T_m: float = 0.0                # margin of phase 3: clock offset bound eps + GS delivery time delta_GS, s
+    c_y: float = 1.0                # smallest C(t) / y(t) of the saturation test, in (0, 1] (eq. 2)
+    B_ctl_bar: float = 0.0          # bytes of control traffic outside the data bridges in phase 3 (fidelity)
     order: List[str] = field(default_factory=list)    # initial order sigma of the AS
     needed: List[str] = field(default_factory=list)   # initial needed topics of the AS
     vessels: List[int] = field(default_factory=list)
@@ -103,6 +108,19 @@ class DTP:
     @property
     def T3(self) -> float:
         return self.Ts - self.T1 - self.T2
+
+    @property
+    def T3m(self) -> float:
+        """T3 - T_m: the part of phase 3 that the grant counts on (K_hat(t) = C_hat(t) (T3 - T_m) / Ts)."""
+        return self.T3 - self.T_m
+
+    def K_hat(self, C_hat: float) -> float:
+        """Predicted capacity of phase 3, K_hat(t) = C_hat(t) (T3 - T_m) / Ts."""
+        return C_hat * self.T3m / self.Ts
+
+    def K_y(self, y: float) -> float:
+        """Measured capacity of phase 3 for the fidelity metrics, K_y(t) = c_y y(t) (T3 - T_m) / Ts - B_ctl_bar."""
+        return self.c_y * y * self.T3m / self.Ts - self.B_ctl_bar
 
     @property
     def L(self) -> int:
@@ -167,7 +185,14 @@ class DTP:
             for t in specs:
                 t.c_m = float(d["c_b"]) * publish_header(V, t.name, int(t.bound)) + float(d["c_k"])
         keys = {k: v for k, v in d.items() if k in DTP.__dataclass_fields__ and k != "specs"}
+        for k in ("T_m", "c_y", "B_ctl_bar"):          # null in the file: the default
+            if k in keys and keys[k] is None:
+                del keys[k]
         dtp = DTP(**keys)
+        if not 0.0 < float(dtp.c_y) <= 1.0:
+            raise ValueError("DTP: c_y must lie in (0, 1]")
+        if dtp.T_m < 0 or dtp.T_m >= dtp.T3 or dtp.B_ctl_bar < 0:
+            raise ValueError("DTP: 0 <= T_m < T3 and B_ctl_bar >= 0")
         dtp.specs = specs or [TopicSpec(name=n) for n in dtp.topics]
         return dtp
 
@@ -178,31 +203,39 @@ class DTP:
             return DTP.from_dict(json.load(f))
 
 
-def smooth(C_prev: float, y_prev: Optional[float], alpha: float) -> float:
-    """Eq. (2); keeps the previous prediction when the measurement is missing."""
+def smooth(C_prev: float, y_prev: Optional[float], alpha: float, c_y: float = 1.0) -> float:
+    """Eq. (2): C_hat(t) = (1 - alpha) C_hat(t-1) + alpha c_y y(t-1); keeps the previous prediction when y(t-1)
+    is missing (did not arrive in phase 1)."""
     if y_prev is None:
         return C_prev
-    return (1.0 - alpha) * C_prev + alpha * y_prev
+    return (1.0 - alpha) * C_prev + alpha * c_y * y_prev
 
 
-def grant_limit(C_hat: float, U: float, T3: float, Ts: float, m: int) -> Optional[float]:
-    """Eq. (3): K_hat = U C_hat T3 / Ts and b = K_hat / m. Returns None for m = 0."""
+def grant_cap(C_hat: float, U: float, T3: float, Ts: float, Q: float = 0.0, T_m: float = 0.0) -> float:
+    """Bytes that the fleet may admit in step t: max(0, U K_hat(t) - Q(t)), K_hat(t) = C_hat(t) (T3 - T_m) / Ts."""
+    return max(0.0, U * (C_hat * (T3 - T_m) / Ts) - Q)
+
+
+def grant_limit(C_hat: float, U: float, T3: float, Ts: float, m: int, Q: float = 0.0,
+                T_m: float = 0.0) -> Optional[float]:
+    """Eq. (3): b(t) = max(0, U K_hat(t) - Q(t)) / m(t) with K_hat(t) = C_hat(t) (T3 - T_m) / Ts and Q(t) the sum
+    of the backlogs Q_i(t) of the vessels of M(t). Returns None for m = 0."""
     if m == 0:
         return None
-    return U * C_hat * T3 / Ts / m
+    return grant_cap(C_hat, U, T3, Ts, Q, T_m) / m
 
 
 def admission_b7(D: Dict[int, Sequence[int]], order: Sequence[int], needed: Sequence[int],
                  b: float) -> Tuple[Dict[int, List[int]], Dict[int, float]]:
     """Baseline B7: per-vessel grants with redistribution of the unused grant (IPACT limited service with
-    excess distribution) under the grant limit b = K_hat / m.
+    excess distribution) under the grant limit b = max(0, U K_hat - Q) / m.
 
     Each vessel of D starts with the grant g_i = b and gets its own table p_i = Algorithm 1 over its own
     demand table with the limit g_i. A vessel whose table admits every topic keeps g_i = a_i (its
     admitted demand) and gives the excess g_i - a_i to the pool; the pool is divided equally among the
     vessels with a topic at level 0, whose tables are computed again with the larger grant; the passes
-    repeat until no vessel becomes fully admitted (at most m passes). The grants sum to m b = K_hat, so
-    the admitted demand of the fleet stays within K_hat. Returns (p_i per vessel, g_i per vessel)."""
+    repeat until no vessel becomes fully admitted (at most m passes). The grants sum to m b = max(0, U K_hat - Q),
+    so the admitted demand of the fleet stays within it. Returns (p_i per vessel, g_i per vessel)."""
     vs = sorted(D)
     g = {i: float(b) for i in vs}
     p_by: Dict[int, List[int]] = {}

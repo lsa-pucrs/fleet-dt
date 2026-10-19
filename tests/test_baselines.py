@@ -134,7 +134,7 @@ def test_b7_redistributes_the_unused_grant():
     excess = b - sum(D[1])
     assert g[2] == pytest.approx(b + excess / 2) and g[3] == pytest.approx(b + excess / 2)
     assert p_by[2] == p_by[3] == [2, 1, 1, 0]
-    assert sum(g.values()) == pytest.approx(3 * b)                  # the grants sum to K_hat
+    assert sum(g.values()) == pytest.approx(3 * b)                  # the grants sum to m b = max(0, U K_hat - Q)
     # Algorithm 1 with the same b gives one table for the fleet
     assert admission(D, order, needed, b) == [2, 1, 1, 0]
     # every vessel fully admitted or none: nothing moves
@@ -151,7 +151,7 @@ def test_as_policy_b7_publishes_one_table_per_vessel():
     dec = a.close_phase1(0)
     assert dec["b"] == pytest.approx(30400.0) and dec["p"] is None
     assert dec["p_by"][1] == [2, 1, 1, 1] and dec["p_by"][2] == [2, 1, 1, 0]
-    assert sum(dec["grants"].values()) == pytest.approx(dec["K_hat"])
+    assert sum(dec["grants"].values()) == pytest.approx(dec["cap"]) == pytest.approx(dec["K_hat"])   # U = 1, Q = 0
     with pytest.raises(ValueError):
         AS(dtp, epoch=0.0, policy="x")
 
@@ -548,7 +548,7 @@ def test_b7_tables_per_vessel(tmp_path):
         if gs.levels.get((1, t)) is None or t >= max(tx or [0]) - 1 or t not in gs.reg:
             continue
         assert gs.levels[(1, t)] == p1 and gs.levels.get((2, t)) == p2
-        assert sum(o["grants"].values()) == pytest.approx(o["K_hat"], rel=1e-9)
+        assert sum(o["grants"].values()) == pytest.approx(o["cap"], rel=1e-9)
         reg = gs.reg[t]
         if min(reg["d"]) == 0:
             continue
