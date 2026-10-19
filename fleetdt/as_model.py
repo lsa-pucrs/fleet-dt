@@ -249,6 +249,11 @@ class BacklogBook:
         qbar = {i: self.qbar(i) for i in sorted(self.last) if i not in inM}
         return int(sum(int(Qi.get(i, 0)) for i in inM)), int(sum(qbar.values())), qbar
 
+    def reset(self, i: int) -> bool:
+        """The data bridge of vessel i disconnected or reconnected: the new TCP connection (clean session) starts
+        with an empty send queue, so Qbar_i = 0 until the next table of i. Returns True when i had an entry."""
+        return self.last.pop(int(i), None) is not None
+
     def record(self, t: int, M: Sequence[int], Qi: Dict[int, int], a: Dict[int, int]) -> None:
         """After the decision of step t: s_i = t, Q_i(t) and a_i(t) for every vessel of M(t)."""
         for i in M:

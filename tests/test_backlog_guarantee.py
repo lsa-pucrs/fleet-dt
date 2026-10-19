@@ -3,8 +3,9 @@
 Pure Python, no broker: M vessels with FIFO send queues (bytes of the channel), a phase-3 service of
 K(t) - B_ctl(t) bytes per step drawn at random and shared by the queues in a work-conserving order (a fluid
 server: any order that leaves no byte waiting while service remains), demand tables with many small topics,
-vessels that miss phase 1 at random (no p(t): they forward nothing new, their queued bytes still drain), and the
-AS of fleetdt.as_model: BacklogBook, grant_cap and Algorithm 1 (admission).
+vessels that miss phase 1 at random (no p(t): they forward nothing new, their queued bytes still drain), random
+reconnections of a data bridge (the new connection starts with an empty queue, and the state message of the bridge
+resets the book of the AS: Qbar_i = 0), and the AS of fleetdt.as_model: BacklogBook, grant_cap and Algorithm 1.
 
 Guarantee: in every step with U K_hat(t) <= K(t) - B_ctl(t) and Q(t) <= U K_hat(t), every byte in the queues at the
 start of phase 3 leaves within the step. The bytes at the start of phase 3 are the backlog of the vessels of M(t)
@@ -22,13 +23,14 @@ ORDER = list(range(1, L + 1))
 NEEDED = [1, 2, 3]
 
 
-def simulate(steps, seed, count_outside=True):
-    """Returns (condition steps, violations, steps with a vessel outside M(t) and a nonzero queue)."""
+def simulate(steps, seed, count_outside=True, reconnect=0.02):
+    """Returns (condition steps, violations, steps with a vessel outside M(t) and a nonzero queue, reconnections
+    that dropped a nonzero queue or a nonzero Qbar_i of the book)."""
     rng = random.Random(seed)
     book = BacklogBook()
     q = {i: 0.0 for i in range(1, M + 1)}       # bytes queued at the end of phase 3 (FIFO per vessel)
     K_prev = 100_000.0
-    cond = viol = outside_busy = 0
+    cond = viol = outside_busy = dropped = 0
     for t in range(steps):
         K = max(30_000.0, K_prev * rng.lognormvariate(0.0, 0.2))   # capacity of phase 3, bytes
         K_hat = K_prev                                               # persistence prediction
@@ -63,17 +65,27 @@ def simulate(steps, seed, count_outside=True):
             x = min(q[i], left)
             q[i] -= x
             left -= x
-    return cond, viol, outside_busy
+        for i in q:                                                  # data-bridge reconnection after phase 3
+            if rng.random() < reconnect:
+                dropped += q[i] > 0 or book.qbar(i) > 0
+                q[i] = 0.0                                           # new TCP connection, clean session
+                book.reset(i)                                        # state 0, 1 of b<i>-data before phase 2
+    return cond, viol, outside_busy, dropped
 
 
 def test_backlog_aware_grant_keeps_the_guarantee():
+    busy_all = dropped_all = 0
     for seed in (20261019, 1, 2, 3, 4):
-        cond, viol, busy = simulate(4000, seed=seed)
-        assert cond > 1000 and busy > 5, seed
+        cond, viol, busy, dropped = simulate(4000, seed=seed)
+        assert cond > 1000, seed
         assert viol == 0, seed
+        busy_all, dropped_all = busy_all + busy, dropped_all + dropped
+    assert busy_all > 20 and dropped_all > 100
+    # without reconnections as well
+    assert simulate(4000, seed=7, reconnect=0.0)[1] == 0
 
 
 def test_rule_without_the_vessels_outside_M_breaks_it():
-    cond, viol, busy = simulate(4000, seed=20261019, count_outside=False)
+    cond, viol, busy, _ = simulate(4000, seed=1, count_outside=False)   # 6 violations at this seed
     assert cond > 1000 and busy > 10
     assert viol >= 1

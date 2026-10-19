@@ -80,7 +80,7 @@ Algorithm 1 to vessel i in s_i (Qbar_i = 0 for a vessel that never reported): a 
 and forwards nothing new, so its bytes still queued stay within Qbar_i(t); b(t) = max(0, U K̂(t) - Q(t)) / m(t);
 Algorithm 1 over sigma_t: level 2 for a needed topic that fits, 1 for another topic that fits, 0 otherwise. The
 decision log and `fleet/as` hold `K_hat` (without U), `cap` = max(0, U K̂(t) - Q(t)) = m(t) b(t), `Q`, `Q_M`,
-`Q_out`, `Qi` and `Qbar`.
+`Q_out`, `Qi`, `Qbar` and, after a state message of a data bridge (Section 4), `bridge_reset`.
 
 A raw message belongs to step t when it reaches the vessel regulator in the interval
 `[start(t-1) + T1 + T2, start(t) + T1 + T2)`, so the vessel regulator forwards no message between
@@ -121,6 +121,13 @@ bridge sockets, and patch `0001-plugin_tick-keep-pending-deadline.patch` keeps t
 plugin tick when another event wakes the broker, so phase 3 starts within 1 ms (R8). Patch
 `0004-plugin-client-out-queued-bytes.patch` adds the plugin accessor `mosquitto_client_out_queued_bytes`
 (bytes of the output queue of a client not yet written to its socket) for o_i of the backlog (Section 5).
+
+The AS subscribes to the state of the data bridges (`fleet/bridge/b<i>-data/state` of gsconf, the default
+`$SYS/broker/connection/b<i>-data/state` as well; payload 0 or 1). A live state message (not the retained one
+of the subscription) means a disconnection or a reconnection: the new TCP connection (clean session) starts
+with an empty send queue, so the AS clears the book entry of vessel i (Qbar_i = 0 until the next demand table of
+i) and logs `bridge_reset` in the next decision. Only `b<i>-data` counts: the methods with several data bridges
+per vessel (B2, B10) run without the AS.
 
 Every MQTT client of Fleet-DT sets TCP_NODELAY on its socket (paho-mqtt leaves Nagle's algorithm
 on): without it, a small PUBLISH that follows a PUBACK of the same client waits for the delayed ACK of

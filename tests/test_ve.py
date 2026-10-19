@@ -124,6 +124,9 @@ def test_assembler_puts_qbar_on_vessels_outside_M():
     assert g1.vessels == [1] and v2.member is False and v2.Qbar == 20 + 64       # a_2(0) = d_state
     assert g1.Q == 0 + 84 and g1.backlog() == 84
     assert g1.b == pytest.approx(max(0.0, 0.8 * g1.C_hat * 0.095 / 0.125 - 84))
+    # a reconnection of the data bridge of vessel 2 clears its bound in the book of the VE
+    asm.on_message("fleet/bridge/b2-data/state", b"0", at=0.24)
+    assert asm.book.qbar(2) == 0
     # the values of the AS win
     asm.on_message("boat/b1/demand", encode_demand(2, [64, 5000]), at=0.255)
     asm.on_message("fleet/as", json.dumps({"t": 2, "C_hat": 1000.0, "K_hat": 760.0, "b": 100.0, "U": 0.8,

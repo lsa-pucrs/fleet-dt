@@ -102,6 +102,47 @@ def test_backlog_of_vessels_outside_M():
     assert a1 > 0
 
 
+def test_bridge_reconnection_clears_qbar():
+    """A disconnection or reconnection of the data bridge b<i>-data drops its send queue (new TCP connection,
+    clean session): the AS sets Qbar_i = 0 until the next table of i; without a state message Qbar_i stays."""
+    import types
+    from fleetdt.as_service import BRIDGE_STATE_RE
+    dtp = small_dtp(U=1.0)
+
+    def two_steps():
+        a = AS(dtp, epoch=0.0)
+        a.on_demand(1, 0, D1, at=0.01, Q=50)
+        a.on_demand(2, 0, D2, at=0.02, Q=70)
+        d0 = a.close_phase1(0)
+        a.on_demand(1, 1, D1, at=1.01)
+        return a, d0
+    a, d0 = two_steps()                                  # no state message: vessel 2 keeps its bound
+    d1 = a.close_phase1(1)
+    assert d1["Qbar"] == {"2": 70 + d0["a"]["2"]} and "bridge_reset" not in d1
+    a, d0 = two_steps()
+    a.on_bridge_state(2, "0")
+    a.on_bridge_state(2, "1")
+    d1 = a.close_phase1(1)
+    assert d1["Qbar"] == {} and d1["Q_out"] == 0 and d1["bridge_reset"] == [[2, "0"], [2, "1"]]
+    assert d1["b"] == pytest.approx(2000.0 - d1["Q_M"])
+    # the table of the next step brings vessel 2 back with its own Q_2
+    a.on_demand(2, 2, D2, at=2.01, Q=5)
+    d2 = a.close_phase1(2)
+    assert d2["Q_M"] == 5 and "bridge_reset" not in d2
+    # topic names: fleet/bridge/<name>/state of fleetdt.gsconf and the default $SYS topic; data bridges only
+    assert BRIDGE_STATE_RE.match("fleet/bridge/b12-data/state").group(1) == "12"
+    assert BRIDGE_STATE_RE.match("$SYS/broker/connection/b3-data/state").group(1) == "3"
+    for t in ("fleet/bridge/b1-ctl/state", "fleet/bridge/b1-data-ef/state", "fleet/bridge/b1-data/x"):
+        assert not BRIDGE_STATE_RE.match(t)
+    # the MQTT handler: a retained state (the subscription) changes nothing, a live state resets
+    svc = types.SimpleNamespace(core=two_steps()[0])
+    msg = lambda topic, payload, retain: types.SimpleNamespace(topic=topic, payload=payload, retain=retain)
+    Service._on_message(svc, None, None, msg("fleet/bridge/b2-data/state", b"1", True))
+    assert svc.core.book.qbar(2) == 70 + d0["a"]["2"]
+    Service._on_message(svc, None, None, msg("fleet/bridge/b2-data/state", b"0", False))
+    assert svc.core.book.qbar(2) == 0 and svc.core._bridge_resets == [(2, "0")]
+
+
 def test_smoothing_with_c_y():
     """Revised eq. (2): C_hat(t) = (1 - alpha) C_hat(t-1) + alpha c_y y(t-1); a missing y(t-1) keeps C_hat(t-1)."""
     assert smooth(100.0, 200.0, 0.25, c_y=0.9) == pytest.approx(0.75 * 100 + 0.25 * 0.9 * 200)

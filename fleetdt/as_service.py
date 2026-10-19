@@ -49,8 +49,12 @@ from .model import decode_demand, encode_levels, tcp_nodelay
 log = logging.getLogger("fleetdt.as")
 
 DEMAND_RE = re.compile(r"^boat/b(\d+)/demand$")
+# state of the data bridge b<i>-data of fleetdt.gsconf: its notification topic (fleet/bridge/<name>/state, local
+# to the GS broker) or the default one of Mosquitto ($SYS/broker/connection/<name>/state); payload "0" or "1"
+BRIDGE_STATE_RE = re.compile(r"^(?:fleet/bridge|\$SYS/broker/connection)/b(\d+)-data/state$")
 POLICIES = ("alg1", "b7")
-SUBSCRIPTIONS = [("boat/+/demand", 1), ("fleet/throughput", 0), ("fleet/order", 1)]
+SUBSCRIPTIONS = [("boat/+/demand", 1), ("fleet/throughput", 0), ("fleet/order", 1), ("fleet/bridge/+/state", 1),
+                 ("$SYS/broker/connection/+/state", 1)]
 
 
 class AS:
@@ -82,6 +86,7 @@ class AS:
         self.sigma, self.N = sigma, needed
         self.C_hat: Optional[float] = None   # C_hat(last_t)
         self.book = BacklogBook()            # s_i, Q_i(s_i), a_i(s_i) of every vessel (Qbar outside M(t))
+        self._bridge_resets: List[Tuple[int, str]] = []   # (vessel, state) of the data bridges since the last step
         self.last_t: Optional[int] = None    # last step closed
         self.last: Optional[Dict] = None     # state of the last step closed (also for m = 0)
 
@@ -134,6 +139,14 @@ class AS:
                 return
             self._y[int(t)] = (float(y), at)
 
+    def on_bridge_state(self, i: int, state: str) -> None:
+        """State (0 or 1) of the data bridge of vessel i on the GS broker. A disconnection or a reconnection
+        drops the send queue of the old TCP connection (cleansession true), so the AS forgets the book entry of i:
+        Qbar_i = 0 until the next demand table of i reaches the AS in phase 1. The next decision logs the reset."""
+        with self.lock:
+            self.book.reset(i)
+            self._bridge_resets.append((int(i), str(state)))
+
     def on_order(self, order: Sequence, needed: Sequence, at: Optional[float] = None) -> bool:
         """fleet/order: sigma and N with topic names (or 1-based indices). The operation control software
         ranks the needed topics first; the AS keeps the order as received. Returns False when sigma is
@@ -181,6 +194,7 @@ class AS:
             M = sorted(D)
             # Q(t) = sum of Q_i(t) over M(t) + sum of Qbar_i(t) = Q_i(s_i) + a_i(s_i) over the vessels outside M(t)
             Q_M, Q_out, Qbar = self.book.split(M, Qi)
+            resets, self._bridge_resets = self._bridge_resets, []
             Q = Q_M + Q_out
             m = len(M)
             K_hat = self.dtp.K_hat(C)                          # C_hat(t) (T3 - T_m) / Ts
@@ -193,6 +207,8 @@ class AS:
                    "D": {str(i): list(D[i]) for i in M}, "y_used": y_used,
                    "Qi": {str(i): int(Qi.get(i, 0)) for i in M}, "Q": Q, "Q_M": Q_M, "Q_out": Q_out,
                    "Qbar": {str(i): v for i, v in Qbar.items()}}
+            if resets:
+                dec["bridge_reset"] = [[i, s] for i, s in resets]
             self.last = dec
             if m == 0:
                 return None
@@ -317,6 +333,11 @@ class Service:
             elif msg.topic == "fleet/throughput":
                 t, y = decode_throughput(msg.payload)
                 self.core.on_throughput(t, y)
+            elif BRIDGE_STATE_RE.match(msg.topic):
+                if msg.retain:   # a retained state at subscription is an old state, not a reconnection
+                    return
+                self.core.on_bridge_state(int(BRIDGE_STATE_RE.match(msg.topic).group(1)),
+                                          msg.payload.decode("ascii", "replace").strip())
             elif msg.topic == "fleet/order":
                 o = json.loads(msg.payload)
                 if not self.core.on_order(o.get("order", []), o.get("needed", [])):

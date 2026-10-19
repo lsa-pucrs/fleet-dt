@@ -31,6 +31,7 @@ from ..as_model import DTP, BacklogBook, grant_limit, smooth
 from ..model import Graph, decode_demand, decode_levels, decode_step_header, tcp_nodelay
 
 VESSEL_RE = re.compile(r"^boat/b(\d+)/(demand|levels|regulator|tx/(.+))$")
+BRIDGE_STATE_RE = re.compile(r"^(?:fleet/bridge|\$SYS/broker/connection)/b(\d+)-data/state$")
 
 
 class StepClock:
@@ -164,6 +165,8 @@ class Assembler:
             elif topic == "fleet/as":
                 o = json.loads(payload)
                 self.as_values[int(o["t"])] = o
+            elif BRIDGE_STATE_RE.match(topic):    # the data bridge of vessel i reconnected: Qbar_i = 0
+                self.book.reset(int(BRIDGE_STATE_RE.match(topic).group(1)))
 
     # ------------------------------------------------------------------ output
     def close_ready(self, grace: float) -> List[Graph]:
@@ -244,7 +247,7 @@ class MqttCollector:
     """Connects the Assembler to a broker with paho-mqtt and calls `emit(G)` at the end of each step."""
 
     TOPICS = ["boat/+/demand", "boat/+/levels", "boat/+/regulator", "boat/+/tx/#", "fleet/throughput", "fleet/order",
-              "fleet/as"]
+              "fleet/as", "fleet/bridge/+/state", "$SYS/broker/connection/+/state"]
 
     def __init__(self, assembler: Assembler, emit: Callable[[Graph], None], host: str = "localhost",
                  port: int = 1883, grace: float = 0.0625):
@@ -253,7 +256,9 @@ class MqttCollector:
         self.client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="fleetdt-ve-%d" % os.getpid(), clean_session=True)
         tcp_nodelay(self.client)
         self.client.on_connect = lambda c, u, f, rc, props=None: [c.subscribe(tp, qos=0) for tp in self.TOPICS]
-        self.client.on_message = lambda c, u, msg: self._safe(msg.topic, msg.payload)
+        # a retained bridge state is an old state, not a reconnection: it does not reset the book
+        self.client.on_message = lambda c, u, msg: None if (msg.retain and msg.topic.endswith("/state")) else \
+            self._safe(msg.topic, msg.payload)
         self.host, self.port = host, port
         self._stop = threading.Event()
 
