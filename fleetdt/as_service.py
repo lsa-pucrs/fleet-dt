@@ -69,6 +69,7 @@ class AS:
         self.lock = threading.RLock()
         self.index = {name: k + 1 for k, name in enumerate(dtp.topics)}
         self._demand: Dict[int, Dict[int, List[int]]] = {}   # t -> i -> D_i(t), tables that met the deadline
+        self._backlog: Dict[int, Dict[int, int]] = {}        # t -> i -> Q_i(t) of those tables
         self._y: Dict[int, Tuple[float, float]] = {}          # t -> (y(t), arrival time)
         self._orders: List[Tuple[float, List[int], List[int]]] = []  # pending fleet/order: (arrival, sigma, N)
         sigma = self._indices(dtp.order) if dtp.order else list(range(1, dtp.L + 1))
@@ -105,9 +106,10 @@ class AS:
         return sorted(sigma) == list(range(1, self.dtp.L + 1)) and all(l in sigma for l in needed) \
             and len(set(needed)) == len(needed)
 
-    def on_demand(self, i: int, t: int, d: Sequence[int], at: Optional[float] = None) -> bool:
-        """Demand table D_i(t). Returns False when the table cannot enter M(t): L differs from the DTP,
-        step t is already closed, or the table arrived at or after start(t) + T1."""
+    def on_demand(self, i: int, t: int, d: Sequence[int], at: Optional[float] = None, Q: int = 0) -> bool:
+        """Demand table D_i(t) with the backlog Q_i(t) of vessel i. Returns False when the table cannot enter
+        M(t): L differs from the DTP, step t is already closed, or the table arrived at or after
+        start(t) + T1."""
         with self.lock:
             at = self.now() if at is None else at
             if len(d) != self.dtp.L:
@@ -117,6 +119,7 @@ class AS:
             if at >= self.deadline(t) or t > self.step_of(at) + 1:
                 return False
             self._demand.setdefault(t, {})[int(i)] = [int(v) for v in d]
+            self._backlog.setdefault(t, {})[int(i)] = max(0, int(Q))
             return True
 
     def on_throughput(self, t: int, y: float, at: Optional[float] = None) -> None:
@@ -166,16 +169,21 @@ class AS:
                 _, self.sigma, self.N = before[-1]
                 self._orders = [o for o in self._orders if o[0] >= dl]
             D = self._demand.pop(t, {})
+            Qi = self._backlog.pop(t, {})
             for k in [k for k in self._demand if k < t]:
                 del self._demand[k]
+            for k in [k for k in self._backlog if k < t]:
+                del self._backlog[k]
             M = sorted(D)
+            Q = int(sum(Qi.get(i, 0) for i in M))          # Q(t): backlog of the vessels of M(t)
             m = len(M)
             K_hat = self.U * C * self.dtp.T3 / self.dtp.Ts     # eq. (3)
             # D (the demand tables of M(t)) and y_used (the y(t - 1) of eq. (2), None when missing or late)
             # make the decision reproducible offline (emu/experiments/conformance.py)
             dec = {"t": t, "C_hat": C, "K_hat": K_hat, "b": None, "U": self.U, "alpha": self.alpha,
                    "m": m, "p": None, "M": M, "order": list(self.sigma), "needed": list(self.N),
-                   "D": {str(i): list(D[i]) for i in M}, "y_used": y_used}
+                   "D": {str(i): list(D[i]) for i in M}, "y_used": y_used,
+                   "Qi": {str(i): int(Qi.get(i, 0)) for i in M}, "Q": Q}
             self.last = dec
             if m == 0:
                 return None
@@ -293,8 +301,8 @@ class Service:
         try:
             m = DEMAND_RE.match(msg.topic)
             if m:
-                t, d = decode_demand(msg.payload)
-                self.core.on_demand(int(m.group(1)), t, d)
+                t, Q, d = decode_demand(msg.payload)
+                self.core.on_demand(int(m.group(1)), t, d, Q=Q)
             elif msg.topic == "fleet/throughput":
                 t, y = decode_throughput(msg.payload)
                 self.core.on_throughput(t, y)
@@ -406,7 +414,8 @@ class Service:
             payload = encode_levels(dec["t"], dec["p"])
             for i in dec["M"]:
                 self.client.publish("boat/b%d/levels" % i, payload, qos=1)
-        keys = ("t", "C_hat", "K_hat", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants", "a", "A")
+        keys = ("t", "C_hat", "K_hat", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants", "a", "A",
+                "Q", "Qi")
         self.client.publish("fleet/as", json.dumps({k: dec[k] for k in keys if k in dec}, separators=(",", ":")),
                             qos=0)
 

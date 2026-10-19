@@ -182,7 +182,8 @@ def test_resolved_vessel_dtp_differs_only_in_layer_topics():
 def test_as_and_wire_formats_with_22_topics():
     dtp = DTP.load(ROOT / "dtp.json")
     d = [100] * 6 + [10_000] * 16
-    assert decode_demand(encode_demand(5, d)) == (5, d)
+    assert decode_demand(encode_demand(5, d)) == (5, 0, d)
+    assert decode_demand(encode_demand(5, d, Q=123456)) == (5, 123456, d)
     a = AS(dtp, epoch=0.0)
     assert a.sigma == list(range(1, 23))
     assert a.on_demand(1, 0, d, at=0.001)
@@ -498,7 +499,7 @@ def test_dti_running_stripe_source_never_gets_zero_demand(tmp_path):
                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="dti-test", clean_session=True)
         c.on_connect = lambda cl, u, f, rc, pr=None: cl.subscribe("boat/b1/demand", 1)
-        c.on_message = lambda cl, u, m: tables.__setitem__(*decode_demand(m.payload))
+        c.on_message = lambda cl, u, m: tables.__setitem__(*(lambda t, Q, dd: (t, dd))(*decode_demand(m.payload)))
         c.connect("127.0.0.1", port)
         c.loop_start()
         time.sleep(0.6)

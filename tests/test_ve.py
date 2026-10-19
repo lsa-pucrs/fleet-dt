@@ -15,7 +15,14 @@ from fleetdt.model import (Graph, decode_demand, decode_levels, decode_step_head
 
 
 def test_wire_formats_roundtrip():
-    assert decode_demand(encode_demand(7, [1, 2, 300000])) == (7, [1, 2, 300000])
+    assert decode_demand(encode_demand(7, [1, 2, 300000])) == (7, 0, [1, 2, 300000])
+    # demand table t:u32, L:u8, Q:u32, d_1..d_L:u32 (network byte order), the bytes of fdt_demand_encode
+    b = encode_demand(7, [1, 2, 300000], Q=0x01020304)
+    assert b == bytes([0, 0, 0, 7, 3, 1, 2, 3, 4]) + (1).to_bytes(4, "big") + (2).to_bytes(4, "big") + \
+        (300000).to_bytes(4, "big")
+    assert decode_demand(b) == (7, 0x01020304, [1, 2, 300000])
+    with pytest.raises(ValueError):
+        decode_demand(b[:8])
     assert decode_levels(encode_levels(9, [2, 1, 0])) == (9, [2, 1, 0])
     assert decode_step_header(encode_step_header(123456, 65535) + b"xyz") == (123456, 65535)
     with pytest.raises(ValueError):
@@ -77,6 +84,25 @@ def test_assembler_builds_graph():
     fc.now = (t2 + 1) * dtp.Ts + 0.1
     g2 = asm.close_ready(grace=0.05)[0]
     assert g2.C_hat == pytest.approx(0.5 * 1000 + 0.5 * 900)
+
+
+def test_assembler_keeps_backlog_and_membership():
+    """Vertex i of G(t) stores Q_i(t) of its demand table and its membership in M(t); Q(t) sums M(t)."""
+    dtp = DTP(topics=["state", "video"], Ts=0.125, T1=0.02, T2=0.01, alpha=0.5, U=0.8, C0=1000.0)
+    fc = FakeClock()
+    asm = Assembler(dtp, StepClock(dtp.Ts, 0.0, now=fc))
+    t = 4
+    start = t * dtp.Ts
+    asm.on_message("boat/b1/demand", encode_demand(t, [64, 5000], Q=1200), at=start + 0.005)
+    asm.on_message("boat/b3/demand", encode_demand(t, [64, 5000], Q=300), at=start + 0.006)
+    asm.on_message("boat/b2/demand", encode_demand(t, [64, 5000], Q=9999), at=start + 0.03)  # after phase 1
+    fc.now = start + 0.2
+    g = asm.close_ready(grace=0.05)[0]
+    assert g.vessels == [1, 3]
+    assert [(v.i, v.Q, v.member) for v in g.vertices] == [(1, 1200, True), (2, 9999, False), (3, 300, True)]
+    assert g.backlog() == 1500 and g.Q == 1500
+    h = Graph.from_dict(json.loads(json.dumps(g.to_dict())))
+    assert h.vertices == g.vertices and h.Q == 1500
 
 
 def test_graph_dict_roundtrip():

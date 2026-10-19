@@ -84,10 +84,14 @@ static inline uint16_t fdt_get_u16(const uint8_t *p)
 {
 	return (uint16_t)(p[0] << 8 | p[1]);
 }
-/* demand table t:u32, L:u8, d:u32*L; returns the length (5 + 4L) */
-size_t fdt_demand_encode(uint8_t *buf, uint32_t t, int L, const uint32_t *d);
-/* returns 0 when the table holds L entries */
-int fdt_demand_decode(const uint8_t *buf, size_t len, int L, uint32_t *t, uint32_t *d);
+/* demand table t:u32, L:u8, Q:u32, d:u32*L (Q = backlog Q_i(t) of the vessel, SPEC.md Section 3) */
+#define FDT_DEMAND_Q_OFF 5                       /* offset of Q */
+#define FDT_DEMAND_HDR 9                         /* bytes before d_1 */
+#define FDT_DEMAND_LEN(L) (FDT_DEMAND_HDR + 4 * (size_t)(L))
+/* returns the length (9 + 4L) */
+size_t fdt_demand_encode(uint8_t *buf, uint32_t t, uint32_t Q, int L, const uint32_t *d);
+/* returns 0 when the table holds L entries; Q may be NULL */
+int fdt_demand_decode(const uint8_t *buf, size_t len, int L, uint32_t *t, uint32_t *Q, uint32_t *d);
 /* priority table t:u32, L:u8, p:u8*L; returns 0 when it holds L levels in {0,1,2} */
 int fdt_levels_decode(const uint8_t *buf, size_t len, int L, uint32_t *t, uint8_t *p);
 

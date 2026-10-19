@@ -1,7 +1,8 @@
 """Assembles G(t) from the topics of the GS MQTT broker and emits G(t) at the end of each step.
 
 Topics (prefixes configurable):
-  boat/b<i>/demand      demand table D_i(t) (binary, Section V-C)
+  boat/b<i>/demand      demand table D_i(t) with the backlog Q_i(t) (binary, Section V-C); vertex i of G(t)
+                        keeps Q_i(t) and its membership in M(t)
   boat/b<i>/levels      priority table p(t) (binary)
   boat/b<i>/tx/<topic>  forwarded uplink messages, 6-byte step header
   fleet/throughput      y(t): JSON {"t": t, "y": bytes} or binary !Id
@@ -92,7 +93,7 @@ class Assembler:
                 i = int(m.group(1))
                 kind = m.group(2)
                 if kind == "demand":
-                    t, d = decode_demand(payload)
+                    t, Q, d = decode_demand(payload)
                     if self.clock.auto:
                         # a demand table can only arrive after the start of its step, so the smallest
                         # estimate of the epoch over the received tables converges to the start of step 0
@@ -106,6 +107,9 @@ class Assembler:
                     if in_phase1 and i not in g.vessels:
                         g.vessels.append(i)
                         g.vessels.sort()
+                    v = g.vertex(i)
+                    v.Q = int(Q)
+                    v.member = i in g.vessels
                     for l, dl in enumerate(d, start=1):
                         g.edge(i, l).d = dl
                 elif kind == "levels":
@@ -184,8 +188,11 @@ class Assembler:
                 e.p = by.get(e.i, p)[e.l - 1]
             del g._levels, g._levels_by
         g.edges.sort(key=lambda e: (e.i, e.l))
+        for v in g.vertices:
+            v.member = v.i in g.vessels
         g.y = self.y.pop(t, None)
         a = self.as_values.pop(t, None)
+        g.Q = float(a["Q"]) if a and a.get("Q") is not None else float(g.backlog())
         if a and a.get("order"):          # sigma_t and N(t) that the AS used
             g.order, g.needed = [int(v) for v in a["order"]], [int(v) for v in a.get("needed", [])]
         elif self.order:                  # last fleet/order

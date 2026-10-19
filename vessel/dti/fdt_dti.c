@@ -1,8 +1,15 @@
 /*
  * Fleet-DT DTI program of a vessel (Definition 9, R3): at start(t) + offset of each
- * step t it publishes the demand table D_i(t) = (t, L, d_{i,1}(t) .. d_{i,L}(t)) on
+ * step t it publishes the demand table D_i(t) = (t, L, Q_i(t), d_{i,1}(t) .. d_{i,L}(t)) on
  * boat/b<i>/demand (QoS 1) of the vessel broker; the control bridge carries it to
  * the GS before the end of phase 1.
+ *
+ * Q_i(t) = ceil(c_b o_i(t) + c_k k_i(t)) is the backlog of the vessel at the start of phase 1:
+ * o_i = SIOCOUTQ of the TCP socket of the data bridge and k_i = forwarded QoS 1 messages still
+ * waiting for their PUBACK. That socket belongs to the vessel broker, and this program, another
+ * process, can neither ioctl it nor see the PUBACKs, so it writes Q_i = 0 and the regulator plugin
+ * (plugin_opt_demand external) overwrites the field in place when the table enters the broker
+ * (fdt_regulator_plugin.c, fdt_preg_stamp_demand; SPEC.md Section 5).
  *
  * d_{i,l}(t) = ceil(c_b (x_l + 6 n_l) + c_m,l n_l), n_l = ceil(r_l (Ts + J_l)), x_l = n_l s_l
  * (SPEC.md Section 5) for each topic l that published a raw message in the last
@@ -211,8 +218,9 @@ int main(int argc, char **argv)
 			pthread_mutex_unlock(&raw_lock);
 			d[l] = (idle <= 0 || t - seen <= idle) ? dmax[l] : 0;
 		}
-		uint8_t buf[5 + 4 * FDT_L_MAX];
-		size_t n = fdt_demand_encode(buf, (uint32_t)t, dtp.L, d);
+		uint8_t buf[FDT_DEMAND_HDR + 4 * FDT_L_MAX];
+		/* Q_i = 0: the regulator plugin writes the backlog when the table enters the vessel broker */
+		size_t n = fdt_demand_encode(buf, (uint32_t)t, 0, dtp.L, d);
 		rc = mosquitto_publish(m, NULL, topic, (int)n, buf, 1, false);
 		if (rc == MOSQ_ERR_SUCCESS)
 			published++;

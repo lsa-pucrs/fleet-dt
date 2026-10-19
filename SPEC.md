@@ -80,14 +80,14 @@ Prefix `boat/b<i>/` with the vessel index i (1..M). All binary fields in network
 | Topic | Broker where published | Publisher | QoS | Payload |
 |---|---|---|---|---|
 | `boat/b<i>/raw/<topic>` | vessel | publishers | 0 | content of the message (≤ `bound` bytes); no bridge forwards `raw/#` |
-| `boat/b<i>/demand` | vessel (control bridge → GS) | DTI program | 1 | `t:u32, L:u8, d_1..d_L:u32` |
+| `boat/b<i>/demand` | vessel (control bridge → GS) | DTI program (Q_i written by the vessel regulator) | 1 | `t:u32, L:u8, Q_i:u32, d_1..d_L:u32`; Q_i = backlog of vessel i at the start of phase 1 (Section 5) |
 | `boat/b<i>/levels` | GS (control bridge → vessel) | AS | 1 | `t:u32, L:u8, p_1..p_L:u8` (p ∈ {0,1,2}) |
 | `boat/b<i>/goals` | GS (control bridge → vessel) | operation control software | 1 | JSON `{"t":…, "lat":…, "lon":…, "speed":…}` |
 | `boat/b<i>/tx/<topic>` | vessel (data bridge → GS) | vessel regulator | 1 (levels 2 and 1; level 2 leaves first in phase 3) | `t:u32, s:u16` + content; s = sequence number of the message in its topic and step, from 0; the GS removes repeated copies by (t, s), so the applications receive each message once |
 | `fleet/order` | GS | operation control software | 1 | JSON `{"t":…, "order":[names], "needed":[names]}` |
 | `fleet/throughput` | GS (from the GS radio) | channel monitor | 0 | JSON `{"t":…, "y":bytes, "Tb":s, "To":s}` |
 | `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…]}` (topic indices from 1) |
-| `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown) |
+| `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "k", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `k` = Q_i(t) of the demand table and the o_i(t), k_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |
 
 The video publisher splits each JPEG frame into messages of at most `bound` bytes; the content of
 each message starts with an 8-byte header `frame:u32, k:u16, n:u16` (index of the frame, index of the
@@ -122,6 +122,22 @@ step t, so the messages of a topic leave in arrival order with no gap. Within a 
 in the order of the DTP field `order`. Without the demand table or the priority table of step t, the
 vessel regulator withholds every message of step t. A topic with no raw message in the last
 `--idle` steps (default 8) gets d_{i,l}(t) = 0 from the DTI program.
+
+Backlog. The demand table carries Q_i(t) = ceil(c_b o_i(t) + c_k k_i(t)), computed at the start of phase 1:
+o_i(t) = bytes in the send queue of the TCP socket of the data bridge not yet sent or not yet acknowledged
+(SIOCOUTQ) and k_i(t) = forwarded QoS 1 messages still waiting for their PUBACK; Q_i(t) = 0 when
+o_i = k_i = 0 and when the socket cannot be read (no data bridge, SIOCOUTQ unavailable). The socket belongs to
+the vessel broker, so the vessel regulator (the broker plugin, which finds the socket by its local port,
+`vessel/regulator/fdt_sock.c`) computes Q_i(t). With `plugin_opt_demand external` the DTI program writes
+Q_i = 0 and the plugin overwrites the 4 bytes in place when the table enters the vessel broker
+(MOSQ_EVT_MESSAGE_IN, before the broker routes it to the control bridge), at start(t) + offset; with
+`internal` the regulator writes Q_i(t) when it builds the table. k_i(t) = QoS 1 PUBLISH packets written to the
+data bridge (MOSQ_EVT_MESSAGE_OUT) minus the PUBACKs received: the plugin API reports no PUBACK, and after its
+SUBSCRIBE the bridge client sends only PUBACKs (4 bytes, MQTT 3.1.1) and the rare PINGREQ (2 bytes) on that
+socket, so the plugin counts floor((tcpi_bytes_received - rx0) / 4) PUBACKs since an anchor rx0 that it sets
+at the first PUBLISH of the connection and again whenever every written message has its PUBACK (which drops
+the bytes of a PINGREQ). The AS takes Q(t) = sum of Q_i(t) over M(t) (Section 6), and vertex i of G(t) keeps
+Q_i(t) and its membership in M(t) (`vertices` of the DTA).
 
 ## 6. Channel monitor (Section V-B)
 

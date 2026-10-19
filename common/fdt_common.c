@@ -197,22 +197,25 @@ int fdt_sleep_until(int64_t at_us)
 	return rc;
 }
 
-size_t fdt_demand_encode(uint8_t *buf, uint32_t t, int L, const uint32_t *d)
+size_t fdt_demand_encode(uint8_t *buf, uint32_t t, uint32_t Q, int L, const uint32_t *d)
 {
 	fdt_put_u32(buf, t);
 	buf[4] = (uint8_t)L;
+	fdt_put_u32(buf + FDT_DEMAND_Q_OFF, Q);
 	for (int l = 0; l < L; l++)
-		fdt_put_u32(buf + 5 + 4 * l, d[l]);
-	return 5 + 4 * (size_t)L;
+		fdt_put_u32(buf + FDT_DEMAND_HDR + 4 * l, d[l]);
+	return FDT_DEMAND_LEN(L);
 }
 
-int fdt_demand_decode(const uint8_t *buf, size_t len, int L, uint32_t *t, uint32_t *d)
+int fdt_demand_decode(const uint8_t *buf, size_t len, int L, uint32_t *t, uint32_t *Q, uint32_t *d)
 {
-	if (len < 5 || buf[4] != L || len != 5 + 4 * (size_t)L)
+	if (len < FDT_DEMAND_HDR || buf[4] != L || len != FDT_DEMAND_LEN(L))
 		return -1;
 	*t = fdt_get_u32(buf);
+	if (Q)
+		*Q = fdt_get_u32(buf + FDT_DEMAND_Q_OFF);
 	for (int l = 0; l < L; l++)
-		d[l] = fdt_get_u32(buf + 5 + 4 * l);
+		d[l] = fdt_get_u32(buf + FDT_DEMAND_HDR + 4 * l);
 	return 0;
 }
 

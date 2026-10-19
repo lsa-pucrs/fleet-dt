@@ -8,12 +8,18 @@
  * Step t (vessel clock): start(t) = epoch + t Ts, phase 3 at v(t) = start(t) + T1 + T2, end at start(t+1).
  * A raw message of topic l belongs to step t when it reaches the regulator in [v(t-1), v(t)).
  *
- *  start(t) + off  demand table D_i(t) = t:u32, L:u8, d_1..d_L:u32 on boat/b<i>/demand (QoS 1), with
- *                  d_l = ceil(c_b (x_l + 6 n_l) + c_m,l n_l), n_l = ceil(r_l (Ts + J_l)), x_l = n_l s_l
+ *  start(t) + off  demand table D_i(t) = t:u32, L:u8, Q_i:u32, d_1..d_L:u32 on boat/b<i>/demand (QoS 1),
+ *                  with d_l = ceil(c_b (x_l + 6 n_l) + c_m,l n_l), n_l = ceil(r_l (Ts + J_l)), x_l = n_l s_l
  *                  (the jitter allowance J_l is inside d_l), and d_l = 0 for a topic with no raw message
  *                  in the last `idle` steps. off = 0 by default (no phase-1 offset). With demand
  *                  "external" the regulator publishes nothing and takes D_i(t) from the DTI program
  *                  (vessel/dti/fdt_dti) as it passes through the vessel broker on boat/b<i>/demand.
+ *                  Backlog: Q_i(t) = ceil(c_b o_i(t) + c_k k_i(t)) (fdt_preg_backlog), o_i the SIOCOUTQ of
+ *                  the data-bridge socket and k_i the forwarded QoS 1 messages still waiting for their
+ *                  PUBACK, both read through io.sock at the start of phase 1; Q_i = 0 without a socket.
+ *                  The DTI program is another process and cannot read that socket, so it writes Q_i = 0
+ *                  and the plugin overwrites the field in place (fdt_preg_stamp_demand) when the table
+ *                  enters the vessel broker, before the control bridge carries it to the GS.
  *  p(t)            t:u32, L:u8, p_1..p_L:u8 on boat/b<i>/levels; stored when it arrives before v(t),
  *                  ignored (and counted) later.
  *  v(t)            without p(t), forwards nothing of step t. Otherwise, per topic l in arrival order:
@@ -127,6 +133,9 @@ struct fdt_pstep {
 	uint32_t d[FDT_L_MAX];
 	uint8_t p[FDT_L_MAX];
 	int64_t p_at, late_p1, late_v, outq, nsd;
+	int have_Q;                    /* Q_i(t) computed at the start of phase 1 */
+	uint32_t Q;                    /* backlog Q_i(t) of the demand table */
+	int64_t bo, bk;                /* its o_i(t) and k_i(t) (-1: no data-bridge socket) */
 	uint32_t seq[FDT_L_MAX];       /* next sequence number of the topic in the step */
 	uint32_t rx[FDT_L_MAX];        /* raw messages of the step */
 	uint32_t fwd[FDT_L_MAX];       /* messages of the step forwarded in the step */
@@ -212,6 +221,13 @@ int fdt_preg_on_levels(struct fdt_preg *r, const void *payload, size_t len, int6
 /* boat/b<i>/demand seen on the vessel broker; returns 0 stored (external) or own table (internal),
  * 1 late (external), 2 a table that the regulator did not publish (internal), -1 malformed */
 int fdt_preg_on_demand(struct fdt_preg *r, const void *payload, size_t len, int64_t now_us);
+/* backlog Q_i(t) = ceil(c_b o + c_k k) at this instant (o: SIOCOUTQ of the data-bridge sockets, k: QoS 1
+ * messages without PUBACK, both from io.sock; Q = 0 without a socket); kept in the record of step t when the
+ * ring holds it */
+uint32_t fdt_preg_backlog(struct fdt_preg *r, int64_t t, int64_t now_us);
+/* demand table of the DTI program entering the vessel broker (demand external): writes Q_i(t) of
+ * fdt_preg_backlog into its Q field in place (the table keeps its length); returns 0, or -1 malformed */
+int fdt_preg_stamp_demand(struct fdt_preg *r, void *payload, size_t len, int64_t now_us);
 /* fleet/feedback; returns 0 stored, 1 older than the last one (ignored), -1 malformed */
 int fdt_preg_on_feedback(struct fdt_preg *r, const void *payload, size_t len, int64_t now_us);
 /* runs the events due at now; returns the next instant at which a tick is needed */

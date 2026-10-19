@@ -1,7 +1,7 @@
 """Graph G(t) of the network (Definition 7 of the Fleet-DT paper) and the wire formats of Section V-C.
 
 Wire formats (network byte order):
-  demand table  : t (u32), L (u8), d_{i,1}(t) .. d_{i,L}(t) (u32 each)
+  demand table  : t (u32), L (u8), Q_i(t) (u32, backlog of vessel i), d_{i,1}(t) .. d_{i,L}(t) (u32 each)
   priority table: t (u32), L (u8), p_1(t) .. p_L(t) (u8 each)
   forwarded msg : the first 6 bytes of the payload hold t (u32) and the sequence number s (u16)
 """
@@ -28,15 +28,22 @@ def tcp_nodelay(client):
     return client
 
 
-def encode_demand(t: int, d: List[int]) -> bytes:
-    return struct.pack("!IB", t, len(d)) + struct.pack("!%dI" % len(d), *d)
+DEMAND_HEADER = struct.Struct("!IBI")  # t, L, Q
 
 
-def decode_demand(buf: bytes) -> Tuple[int, List[int]]:
-    t, n = struct.unpack_from("!IB", buf, 0)
-    if len(buf) != 5 + 4 * n:
+def encode_demand(t: int, d: List[int], Q: int = 0) -> bytes:
+    """Demand table D_i(t) with the backlog Q_i(t) of the vessel (fdt_demand_encode of common/fdt_common.c)."""
+    return DEMAND_HEADER.pack(t, len(d), Q) + struct.pack("!%dI" % len(d), *d)
+
+
+def decode_demand(buf: bytes) -> Tuple[int, int, List[int]]:
+    """(t, Q_i(t), [d_{i,1}(t), ..., d_{i,L}(t)]) of a demand table (fdt_demand_decode)."""
+    if len(buf) < DEMAND_HEADER.size:
+        raise ValueError("demand table of %d bytes" % len(buf))
+    t, n, Q = DEMAND_HEADER.unpack_from(buf, 0)
+    if len(buf) != DEMAND_HEADER.size + 4 * n:
         raise ValueError("demand table of %d bytes for L=%d" % (len(buf), n))
-    return t, list(struct.unpack_from("!%dI" % n, buf, 5))
+    return t, Q, list(struct.unpack_from("!%dI" % n, buf, DEMAND_HEADER.size))
 
 
 def encode_levels(t: int, p: List[int]) -> bytes:
@@ -81,6 +88,16 @@ class Edge:
 
 
 @dataclass
+class Vertex:
+    """Vertex i of G(t): a vessel whose demand table D_i(t) reached the GS for step t, with its backlog Q_i(t)
+    (bytes of earlier steps still to cross the channel at the start of phase 1) and its membership in M(t)
+    (the table arrived within phase 1)."""
+    i: int
+    Q: int = 0
+    member: bool = False
+
+
+@dataclass
 class Graph:
     """G(t) = (V(t), E(t)); vertex 0 is the GS, V(t) = {0} U M(t)."""
     t: int
@@ -88,6 +105,7 @@ class Graph:
     topics: List[str]
     vessels: List[int] = field(default_factory=list)       # M(t), sorted
     edges: List[Edge] = field(default_factory=list)
+    vertices: List[Vertex] = field(default_factory=list)   # vessels with a demand table of step t, sorted by i
     # attributes of vertex 0
     y: Optional[float] = None       # measured throughput of step t (bytes per T_s)
     C_hat: Optional[float] = None   # prediction of step t
@@ -96,6 +114,7 @@ class Graph:
     U: Optional[float] = None
     alpha: Optional[float] = None
     A: Optional[float] = None       # admitted bytes of the fleet, sum_i a_i(t) of the AS (fleet/as), C5
+    Q: Optional[float] = None       # backlog of the fleet Q(t) = sum of Q_i(t) over M(t)
     needed: List[int] = field(default_factory=list)  # N(t), 1-based topic indices
     order: List[int] = field(default_factory=list)   # sigma_t
 
@@ -111,6 +130,20 @@ class Graph:
         self.edges.append(e)
         return e
 
+    def vertex(self, i: int) -> Vertex:
+        for v in self.vertices:
+            if v.i == i:
+                return v
+        v = Vertex(i=i)
+        self.vertices.append(v)
+        self.vertices.sort(key=lambda x: x.i)
+        return v
+
+    def backlog(self) -> int:
+        """Q(t) = sum of Q_i(t) over the vertices in M(t)."""
+        M = set(self.vessels)
+        return int(sum(v.Q for v in self.vertices if v.i in M))
+
     def admitted(self, i: int) -> int:
         """Final value a_i of Algorithm 1: demand of vessel i over the admitted topics."""
         return sum(e.d for e in self.edges if e.i == i and (e.p or 0) > 0)
@@ -125,7 +158,9 @@ class Graph:
         g = Graph(t=d["t"], L=d["L"], topics=list(d["topics"]))
         g.vessels = list(d.get("vessels", []))
         g.edges = [Edge(**{k: v for k, v in e.items() if k in Edge.__dataclass_fields__}) for e in d.get("edges", [])]
-        for k in ("y", "C_hat", "K_hat", "b", "U", "alpha", "A"):
+        g.vertices = [Vertex(**{k: v for k, v in x.items() if k in Vertex.__dataclass_fields__})
+                      for x in d.get("vertices", [])]
+        for k in ("y", "C_hat", "K_hat", "b", "U", "alpha", "A", "Q"):
             setattr(g, k, d.get(k))
         g.needed = list(d.get("needed", []))
         g.order = list(d.get("order", []))

@@ -28,5 +28,9 @@ int fdt_sock_find(int local_port, const char *peer_addr, ino_t *ino);
 int fdt_sock_same(int fd, ino_t ino);
 /* reads the queue counters; 0 on success */
 int fdt_sock_read(int fd, struct fdt_sockinfo *si);
+/* tcpi_bytes_received of the socket (Linux >= 4.1); 0 on success. The plugin counts the PUBACKs of the data
+ * bridge from it: after its SUBSCRIBE the bridge client sends only PUBACKs (4 bytes in MQTT 3.1.1) and
+ * the rare PINGREQ (2 bytes) on that connection. */
+int fdt_sock_received(int fd, uint64_t *rx);
 
 #endif

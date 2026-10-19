@@ -94,6 +94,7 @@ static void step_reset(struct fdt_pstep *s, int64_t t)
 	s->t = t;
 	s->late_p1 = s->late_v = -1;
 	s->outq = s->nsd = -1;
+	s->bo = s->bk = -1;
 	s->budget = -1;
 	s->fb_t = -1;
 	s->gate_s = s->gate_e = -1;
@@ -409,12 +410,53 @@ int fdt_preg_on_levels(struct fdt_preg *r, const void *payload, size_t len, int6
 	return 0;
 }
 
+/* the ring may hold step t: not applied yet and at most two steps ahead */
+static int ring_holds(const struct fdt_preg *r, int64_t t, int64_t now_us)
+{
+	return t >= r->next_v && t <= fdt_p_step_at(r->d, now_us) + 2;
+}
+
+uint32_t fdt_preg_backlog(struct fdt_preg *r, int64_t t, int64_t now_us)
+{
+	int64_t o = -1, k = -1;
+	if (r->io.sock) {
+		struct fdt_sock sk;
+		memset(&sk, 0, sizeof sk);
+		r->io.sock(r->io.ctx, &sk);
+		if (sk.n > 0) {
+			o = k = 0;
+			for (int j = 0; j < sk.n && j < FDT_DATA_MAX; j++) {
+				o += sk.s[j].outq > 0 ? sk.s[j].outq : 0;
+				k += sk.s[j].pend > 0 ? sk.s[j].pend : 0;
+			}
+		}
+	}
+	uint32_t Q = fdt_p_backlog(r->d, o, k);   /* 0 without a socket (o = k = -1) */
+	if (ring_holds(r, t, now_us)) {
+		struct fdt_pstep *s = step_get(r, t);
+		s->have_Q = 1;
+		s->Q = Q;
+		s->bo = o;
+		s->bk = k;
+	}
+	return Q;
+}
+
+int fdt_preg_stamp_demand(struct fdt_preg *r, void *payload, size_t len, int64_t now_us)
+{
+	uint32_t t32, Q, dv[FDT_L_MAX];
+	if (fdt_demand_decode(payload, len, r->d->L, &t32, &Q, dv))
+		return -1;
+	fdt_put_u32((uint8_t *)payload + FDT_DEMAND_Q_OFF, fdt_preg_backlog(r, (int64_t)t32, now_us));
+	return 0;
+}
+
 int fdt_preg_on_demand(struct fdt_preg *r, const void *payload, size_t len, int64_t now_us)
 {
 	const struct fdt_pdtp *d = r->d;
-	uint32_t t32, dv[FDT_L_MAX];
+	uint32_t t32, Q, dv[FDT_L_MAX];
 	(void)now_us;
-	if (fdt_demand_decode(payload, len, d->L, &t32, dv)) {
+	if (fdt_demand_decode(payload, len, d->L, &t32, &Q, dv)) {
 		r->s.dem_bad++;
 		return -1;
 	}
@@ -428,13 +470,17 @@ int fdt_preg_on_demand(struct fdt_preg *r, const void *payload, size_t len, int6
 		r->s.dem_foreign++;
 		return 2;
 	}
-	if (t < r->next_v || t > fdt_p_step_at(d, now_us) + 2) {
+	if (!ring_holds(r, t, now_us)) {
 		r->s.dem_late++;
 		return 1;
 	}
 	struct fdt_pstep *s = step_get(r, t);
 	memcpy(s->d, dv, sizeof(uint32_t) * (size_t)d->L);
 	s->have_d = 1;
+	if (!s->have_Q) {   /* a table that the plugin did not stamp: the Q_i that it carries */
+		s->have_Q = 1;
+		s->Q = Q;
+	}
 	r->s.dem_ext++;
 	return 0;
 }
@@ -507,8 +553,9 @@ static void do_p1(struct fdt_preg *r, int64_t t, int64_t now_us)
 	for (int l = 0; l < d->L; l++)
 		s->d[l] = (r->idle <= 0 || t - r->last_raw[l] <= r->idle) ? r->dmax[l] : 0;
 	s->have_d = 1;
-	uint8_t buf[5 + 4 * FDT_L_MAX];
-	size_t n = fdt_demand_encode(buf, (uint32_t)t, d->L, s->d);
+	uint32_t Q = fdt_preg_backlog(r, t, now_us);   /* Q_i(t) at the start of phase 1 */
+	uint8_t buf[FDT_DEMAND_HDR + 4 * FDT_L_MAX];
+	size_t n = fdt_demand_encode(buf, (uint32_t)t, Q, d->L, s->d);
 	pub(r, r->demand_topic, 1, buf, n);
 	r->s.dem_pub++;
 }
@@ -753,6 +800,10 @@ static void summary_json(struct fdt_preg *r, struct jbuf *j, const struct fdt_ps
 	   ",\"late_p1_us\":%" PRId64 ",\"outq\":%" PRId64 ",\"nsd\":%" PRId64,
 	   s->t, r->vessel, fdt_pmode_name(r->mode), s->have_d ? "true" : "false", s->have_p ? "true" : "false",
 	   s->late_v, s->late_p1, s->outq, s->nsd);
+	if (s->have_Q)
+		jp(j, ",\"Q\":%u,\"o\":%" PRId64 ",\"k\":%" PRId64, s->Q, s->bo, s->bk);
+	else
+		jp(j, ",\"Q\":null");
 	if (s->have_p)
 		JARR(j, "p", d->L, "%u", (unsigned)s->p[l_]);
 	else

@@ -142,6 +142,7 @@ class GS(object):
         self.lock = threading.Lock()
         self.tx = []        # (arrival, name, qos, t, seq, payload length)
         self.demand = {}    # t -> (arrival, d)
+        self.backlog = {}   # t -> Q_1(t) of the table that reached the GS
         self.levels = {}    # t -> p
         self.reg = {}       # t -> summary
         self.bridges = {}
@@ -160,8 +161,9 @@ class GS(object):
                 t, s = decode_step_header(msg.payload)
                 self.tx.append((at, msg.topic[len("boat/b1/tx/"):], msg.qos, t, s, len(msg.payload)))
             elif msg.topic == "boat/b1/demand":
-                t, d = decode_demand(msg.payload)
+                t, Q, d = decode_demand(msg.payload)
                 self.demand[t] = (at, d)
+                self.backlog[t] = Q
             elif msg.topic == "boat/b1/levels":
                 t, p = decode_levels(msg.payload)
                 self.levels[t] = p
@@ -295,7 +297,7 @@ def test_paper_stack_end_to_end(stack):
             dec[o["t"]] = o
     assert len(dec) >= int(RUN_S / TS) - 8, "AS published %d tables" % len(dec)
 
-    # 1. demand tables: binary !IB format of model.py, step index of as_service.py, within phase 1
+    # 1. demand tables: binary !IBI format of model.py (t, L, Q_i), step index of as_service.py, within phase 1
     assert gs.demand
     for t, (at, d) in gs.demand.items():
         assert len(d) == L
@@ -308,6 +310,13 @@ def test_paper_stack_end_to_end(stack):
         assert o["M"] == [1]
         assert t in gs.demand
         assert gs.levels.get(t) == o["p"]
+        # backlog: the Q_1(t) of the table (written by the regulator, also into the table of fdt_dti) reaches
+        # the AS, and the regulator logs the same value with its o and k
+        assert o["Qi"] == {"1": gs.backlog[t]} and o["Q"] == gs.backlog[t], (t, o["Qi"], gs.backlog[t])
+        reg = gs.reg.get(t)
+        if reg is not None and reg.get("Q") is not None:
+            assert reg["Q"] == gs.backlog[t], (t, reg, gs.backlog[t])
+            assert reg["o"] >= 0 and reg["k"] >= 0
 
     tx = defaultdict(list)
     for at, name, qos, t, s, n in gs.tx:

@@ -248,11 +248,12 @@ static void test_demand(void)
 	CHECK(count_topic("boat/b1/demand", 0) == 0);
 	int64_t next = fdt_preg_tick(&r, S(10));
 	const struct sent *s = find_topic("boat/b1/demand", 0);
-	CHECK(s && s->qos == 1 && s->len == 5 + 4 * (size_t)D.L);
+	CHECK(s && s->qos == 1 && s->len == 9 + 4 * (size_t)D.L);
 	if (s) {
 		CHECK(fdt_get_u32(s->p) == 10 && s->p[4] == D.L);
-		uint32_t t, d[FDT_L_MAX];
-		CHECK(fdt_demand_decode(s->p, s->len, D.L, &t, d) == 0 && t == 10);
+		uint32_t t, Q = 7, d[FDT_L_MAX];
+		CHECK(fdt_demand_decode(s->p, s->len, D.L, &t, &Q, d) == 0 && t == 10);
+		CHECK(Q == 0 && fdt_get_u32(s->p + 5) == 0);   /* no data-bridge socket: Q_i = 0 */
 		CHECK(d[STATE] == 0 && d[VIDEO] == 0);
 		CHECK(d[IMU] == expect_d(32, 48, 0.002, 1.06, 180));       /* DTP jitter 2 ms: n = 5 */
 		CHECK(d[GPS] == expect_d(8, 80, 0.002, 1.06, 180));        /* plugin default 2 ms: n = 2 */
@@ -274,19 +275,101 @@ static void test_demand(void)
 	CHECK(last && fdt_get_u32(last->p) == 19);
 	if (last) {
 		uint32_t t, d[FDT_L_MAX];
-		fdt_demand_decode(last->p, last->len, D.L, &t, d);
+		fdt_demand_decode(last->p, last->len, D.L, &t, NULL, d);
 		CHECK(d[GPS] == 0 && d[IMU] == 0);
 	}
 	/* the own table seen on the broker is accepted, another one is reported */
-	uint8_t b[5 + 4 * FDT_L_MAX];
+	uint8_t b[9 + 4 * FDT_L_MAX];
 	if (last) {
 		CHECK(fdt_preg_on_demand(&r, last->p, last->len, S(19) + 100) == 0);
 		memcpy(b, last->p, last->len);
-		fdt_put_u32(b + 5, 999);
+		fdt_put_u32(b + 9, 999);   /* d_1 differs */
 		CHECK(fdt_preg_on_demand(&r, b, last->len, S(19) + 100) == 2 && r.s.dem_foreign == 1);
 	}
 	CHECK(fdt_preg_on_demand(&r, b, 7, S(19) + 100) == -1);
 	fdt_preg_free(&r);
+}
+
+/* revised model, item 3: the backlog Q_i(t) = ceil(c_b o_i + c_k k_i) in the demand table, read at the start of
+ * phase 1 from the data-bridge socket (o_i: SIOCOUTQ, k_i: QoS 1 messages without PUBACK); 0 without a socket */
+static void test_backlog(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	uint32_t t, Q, d[FDT_L_MAX];
+	fdt_preg_opts_default(&o);
+	start_at(&r, &o, 60);
+	raw(&r, IMU, 48, S(59) + 15000, 1);
+	fake.n = 1;
+	fake.s[0].outq = 3000;
+	fake.s[0].pend = 2;
+	fdt_preg_tick(&r, S(60));
+	uint32_t want = (uint32_t)ceil(D.c_b * 3000 + D.c_k * 2 - 1e-9);
+	CHECK(want == fdt_p_backlog(&D, 3000, 2) && want > 3000);
+	const struct sent *s = find_topic("boat/b1/demand", 0);
+	CHECK(s && s->len == 9 + 4 * (size_t)D.L);
+	if (s) {
+		CHECK(fdt_demand_decode(s->p, s->len, D.L, &t, &Q, d) == 0 && t == 60 && Q == want);
+		CHECK(d[IMU] == r.dmax[IMU]);
+	}
+	struct fdt_pstep *st = fdt_preg_step(&r, 60);
+	CHECK(st && st->have_Q && st->Q == want && st->bo == 3000 && st->bk == 2);
+	/* empty send queue and every PUBACK back: Q_i = 0; the summary of step 60 carries Q, o and k */
+	fake.s[0].outq = 0;
+	fake.s[0].pend = 0;
+	int from = nsent;
+	fdt_preg_tick(&r, S(61));
+	s = find_topic("boat/b1/demand", from);
+	CHECK(s && fdt_demand_decode(s->p, s->len, D.L, &t, &Q, d) == 0 && t == 61 && Q == 0);
+	const struct sent *sm = find_topic("boat/b1/regulator", from);
+	CHECK(sm != NULL);
+	if (sm) {
+		cJSON *j = cJSON_ParseWithLength((const char *)sm->p, sm->len);
+		CHECK(j && cJSON_GetObjectItem(j, "Q")->valuedouble == want && cJSON_GetObjectItem(j, "o")->valuedouble == 3000 &&
+		      cJSON_GetObjectItem(j, "k")->valuedouble == 2);
+		cJSON_Delete(j);
+	}
+	fdt_preg_free(&r);
+
+	/* external demand: the plugin writes Q_i(t) into the table of fdt_dti in place */
+	fdt_preg_opts_default(&o);
+	o.demand_ext = 1;
+	start_at(&r, &o, 70);
+	fake.n = 1;
+	fake.s[0].outq = 1448;
+	fake.s[0].pend = 1;
+	uint32_t dz[FDT_L_MAX] = {0};
+	dz[GPS] = 777;
+	uint8_t b[9 + 4 * FDT_L_MAX];
+	size_t n = fdt_demand_encode(b, 70, 0, D.L, dz);
+	CHECK(n == 9 + 4 * (size_t)D.L);
+	CHECK(fdt_preg_stamp_demand(&r, b, n, S(70) + 1000) == 0);
+	CHECK(fdt_demand_decode(b, n, D.L, &t, &Q, d) == 0 && t == 70 && Q == fdt_p_backlog(&D, 1448, 1));
+	CHECK(d[GPS] == 777 && d[IMU] == 0);
+	CHECK(fdt_preg_on_demand(&r, b, n, S(70) + 1000) == 0);
+	st = fdt_preg_step(&r, 70);
+	CHECK(st && st->have_d && st->have_Q && st->Q == Q && st->bo == 1448 && st->bk == 1);
+	/* no data-bridge socket (SIOCOUTQ unavailable): Q_i = 0 */
+	fake.n = 0;
+	n = fdt_demand_encode(b, 71, 5, D.L, dz);
+	CHECK(fdt_preg_stamp_demand(&r, b, n, S(71) + 1000) == 0);
+	CHECK(fdt_demand_decode(b, n, D.L, &t, &Q, d) == 0 && t == 71 && Q == 0);
+	CHECK(fdt_preg_stamp_demand(&r, b, 7, S(71) + 1000) == -1);
+	CHECK(fdt_preg_stamp_demand(&r, b, n - 4, S(71) + 1000) == -1);
+	fdt_preg_free(&r);
+}
+
+/* wire format of the demand table: t, L, Q, d_1..d_L in network byte order */
+static void test_demand_wire(void)
+{
+	uint8_t b[9 + 4 * FDT_L_MAX];
+	uint32_t d[3] = {1, 2, 300000}, t, Q, e[3];
+	size_t n = fdt_demand_encode(b, 7, 0x01020304u, 3, d);
+	CHECK(n == 21 && b[4] == 3);
+	CHECK(b[0] == 0 && b[3] == 7 && b[5] == 1 && b[6] == 2 && b[7] == 3 && b[8] == 4);
+	CHECK(fdt_get_u32(b + 9) == 1 && fdt_get_u32(b + 17) == 300000);
+	CHECK(fdt_demand_decode(b, n, 3, &t, &Q, e) == 0 && t == 7 && Q == 0x01020304u && e[2] == 300000);
+	CHECK(fdt_demand_decode(b, n - 1, 3, &t, &Q, e) == -1 && fdt_demand_decode(b, n, 2, &t, &Q, e) == -1);
 }
 
 /* items 1, 2 and 9: levels 2 then 1 (strict priority), QoS 1 for both levels, level 0 held, order of reception,
@@ -494,8 +577,8 @@ static void test_police(void)
 	CHECK(count_topic("boat/b1/demand", 0) == 0);
 	uint32_t d[FDT_L_MAX] = {0};
 	d[IMU] = (uint32_t)ceil(2 * fdt_p_cost(&D, IMU, 48));   /* two messages */
-	uint8_t b[5 + 4 * FDT_L_MAX];
-	size_t n = fdt_demand_encode(b, 50, D.L, d);
+	uint8_t b[9 + 4 * FDT_L_MAX];
+	size_t n = fdt_demand_encode(b, 50, 0, D.L, d);
 	CHECK(fdt_preg_on_demand(&r, b, n, S(50) + 1000) == 0);
 	for (int k = 0; k < 4; k++)
 		raw(&r, IMU, 48, V(49) + 1000 + 1000 * k, (uint8_t)k);
@@ -515,7 +598,7 @@ static void test_police(void)
 	CHECK(log_count(lb, 50, "imu", "police") == 2 && log_count(lb, 50, "state", "police") == 1);
 	CHECK(log_count(lb, 51, "imu", "no_demand") == 1);
 	/* a table of an applied step is late */
-	n = fdt_demand_encode(b, 51, D.L, d);
+	n = fdt_demand_encode(b, 51, 0, D.L, d);
 	CHECK(fdt_preg_on_demand(&r, b, n, S(52)) == 1);
 	fdt_preg_free(&r);
 	fclose(o.log);
@@ -938,6 +1021,8 @@ int main(void)
 	test_dtp();
 	test_clock();
 	test_demand();
+	test_backlog();
+	test_demand_wire();
 	test_forward();
 	test_no_table();
 	test_police();

@@ -47,6 +47,18 @@
  *   plugin_opt_demand internal                  internal: the regulator publishes D_i(t) on boat/b<i>/demand;
  *                                               external: the DTI program fdt_dti publishes it and the
  *                                               regulator polices to the table it sees on that topic
+ *                                               and writes the backlog Q_i(t) into it (below)
+ *
+ * Backlog Q_i(t) = ceil(c_b o_i + c_k k_i) of the demand table (mode paper, SPEC.md Section 5), read at the
+ * start of phase 1: o_i = SIOCOUTQ of the data-bridge socket (fdt_sock_read), k_i = the QoS 1 PUBLISH
+ * packets that the broker wrote to the data bridge (MOSQ_EVT_MESSAGE_OUT) minus the PUBACKs that came back.
+ * The plugin API reports no PUBACK, so the plugin counts them from tcpi_bytes_received of the same socket:
+ * after its SUBSCRIBE the bridge client sends only PUBACKs (4 bytes, MQTT 3.1.1) and the rare PINGREQ
+ * (2 bytes), so acks = floor((rx - rx0) / 4) since the anchor rx0, taken at the first PUBLISH of the
+ * connection and again whenever every written message has its PUBACK (k_i = 0), which also drops the
+ * bytes of a PINGREQ. With demand external the DTI program (another process, which cannot read the socket)
+ * writes Q_i = 0 and MOSQ_EVT_MESSAGE_IN overwrites the field in place before the broker routes the table
+ * to the control bridge; with demand internal the regulator writes it when it builds the table.
  *   plugin_opt_log /var/log/fleetdt/reg-b1.jsonl  vessel log: one JSON line per message not forwarded
  *                                               (step, topic, seq, bytes, reason); absent: no file
  *   plugin_opt_step_log /var/log/fleetdt/reg-steps-b1.jsonl  step summaries: the JSON of boat/b<i>/regulator,
@@ -89,6 +101,9 @@ struct dsock {
 	int port, fd, v5;
 	ino_t ino;
 	char addr[64];
+	/* mode paper: QoS 1 PUBLISH packets written since the anchor, and tcpi_bytes_received at the anchor */
+	int anchored;
+	uint64_t n_pub, rx0;
 };
 
 static struct {
@@ -123,6 +138,22 @@ static int ds_fd(struct dsock *ds)
 	return ds->fd;
 }
 
+/* mode paper: QoS 1 messages of the data bridge still without PUBACK (k_i of the backlog); re-anchors when
+ * every written message has its PUBACK */
+static int64_t ds_pending(struct dsock *ds, int fd)
+{
+	uint64_t rx;
+	if (!ds->anchored || fdt_sock_received(fd, &rx) || rx < ds->rx0)
+		return 0;
+	uint64_t acks = (rx - ds->rx0) / 4;
+	if (acks >= ds->n_pub) {
+		ds->rx0 = rx;
+		ds->n_pub = 0;
+		return 0;
+	}
+	return (int64_t)(ds->n_pub - acks);
+}
+
 static void io_sock(void *ctx, struct fdt_sock *s)
 {
 	(void)ctx;
@@ -142,6 +173,8 @@ static void io_sock(void *ctx, struct fdt_sock *s)
 		s->s[k].outq = si.outq;
 		s->s[k].acked = si.acked;
 		s->s[k].has_acked = si.has_acked;
+		if (g.paper)
+			s->s[k].pend = ds_pending(&g.ds[k], fd);
 	}
 	s->n = any ? g.n_ports : 0;
 }
@@ -175,6 +208,9 @@ static int on_message_in(int event, void *event_data, void *userdata)
 			if (fdt_preg_on_feedback(&g.preg, m->payload, m->payloadlen, now) < 0)
 				mosquitto_log_printf(MOSQ_LOG_WARNING, "fdt_regulator: malformed feedback on %s", g.feedback_topic);
 		} else if (!strcmp(m->topic, g.demand_topic)) {
+			/* the table of the DTI program: Q_i(t) of this instant (start of phase 1) into its Q field */
+			if (g.preg.demand_ext && m->payload)
+				fdt_preg_stamp_demand(&g.preg, m->payload, m->payloadlen, now);
 			int rc = fdt_preg_on_demand(&g.preg, m->payload, m->payloadlen, now);
 			if (rc == 2 && !g.warned_foreign) {
 				g.warned_foreign = 1;
@@ -204,8 +240,26 @@ static int on_message_out(int event, void *event_data, void *userdata)
 	struct mosquitto_evt_message *m = event_data;
 	(void)event;
 	(void)userdata;
-	if (g.paper)
+	if (g.paper) {
+		/* k_i of the backlog: count the QoS 1 PUBLISH packets written to a data bridge */
+		for (int k = 0; k < g.n_ports; k++) {
+			struct dsock *ds = &g.ds[k];
+			if (!ds->client || m->client != ds->client || m->qos == 0)
+				continue;
+			if (!ds->anchored) {
+				int fd = ds_fd(ds);
+				uint64_t rx;
+				if (fd < 0 || fdt_sock_received(fd, &rx))
+					break;
+				ds->rx0 = rx;
+				ds->n_pub = 0;
+				ds->anchored = 1;
+			}
+			ds->n_pub++;
+			break;
+		}
 		return MOSQ_ERR_SUCCESS;
+	}
 	for (int k = 0; k < g.n_ports; k++) {
 		struct dsock *ds = &g.ds[k];
 		if (!ds->client || m->client != ds->client || !m->topic)
@@ -302,6 +356,8 @@ static int on_connect(int event, void *event_data, void *userdata)
 		ds->v5 = mosquitto_client_protocol_version(c->client) == 5;
 		snprintf(ds->addr, sizeof ds->addr, "%s", a ? a : "");
 		ds->fd = fdt_sock_find(ds->port, ds->addr, &ds->ino);
+		ds->anchored = 0;
+		ds->n_pub = ds->rx0 = 0;
 		if (!g.paper)
 			fdt_reg_sock_reset(&g.reg, k);
 		mosquitto_log_printf(MOSQ_LOG_NOTICE, "fdt_regulator: data bridge %s on port %d connected, fd=%d%s",
@@ -319,6 +375,8 @@ static int on_disconnect(int event, void *event_data, void *userdata)
 		if (d->client == g.ds[k].client) {
 			g.ds[k].client = NULL;
 			g.ds[k].fd = -1;
+			g.ds[k].anchored = 0;
+			g.ds[k].n_pub = g.ds[k].rx0 = 0;
 			if (!g.paper)
 				fdt_reg_sock_reset(&g.reg, k);
 			mosquitto_log_printf(MOSQ_LOG_NOTICE, "fdt_regulator: data bridge on port %d disconnected", g.ds[k].port);
