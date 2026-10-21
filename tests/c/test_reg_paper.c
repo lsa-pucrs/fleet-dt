@@ -250,7 +250,7 @@ static void test_demand(void)
 	CHECK(count_topic("boat/b1/demand", 0) == 0);
 	int64_t next = fdt_preg_tick(&r, S(10));
 	const struct sent *s = find_topic("boat/b1/demand", 0);
-	CHECK(s && s->qos == 1 && s->len == 9 + 4 * (size_t)D.L);
+	CHECK(s && s->qos == 0 && s->len == 9 + 4 * (size_t)D.L);
 	if (s) {
 		CHECK(fdt_get_u32(s->p) == 10 && s->p[4] == D.L);
 		uint32_t t, Q = 7, d[FDT_L_MAX];

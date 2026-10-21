@@ -8,6 +8,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - fidelity: the mean absolute scaled error (MASE, Hyndman and Koehler 2006) replaces the MAPE; the scale is
   the error of the last-value predictor c_y y(t-1) over the same steps, so smoothing with alpha = 1 gives 1
+- control bridges: demand, levels, goals and fleet/feedback with QoS 0 (no MQTT retransmission; clean session),
+  the DTI program, the regulator, the AS, the stubs and the subscribers publish and subscribe with QoS 0
+- gs.conf and vessel-b1.conf: max_inflight_messages 0 (R9), as the generator already writes
 
 ## [2.0.0] - 2026-10-14
 

@@ -603,7 +603,7 @@ static void do_p1(struct fdt_preg *r, int64_t t, int64_t now_us)
 	uint32_t Q = fdt_preg_backlog(r, t, now_us);   /* Q_i(t) at the start of phase 1 */
 	uint8_t buf[FDT_DEMAND_HDR + 4 * FDT_L_MAX];
 	size_t n = fdt_demand_encode(buf, (uint32_t)t, Q, d->L, s->d);
-	pub(r, r->demand_topic, 1, buf, n);
+	pub(r, r->demand_topic, 0, buf, n);
 	r->s.dem_pub++;
 }
 

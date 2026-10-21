@@ -217,7 +217,7 @@ class MavPublisher:
         if reason_code.is_failure:
             log.warning("MQTT connection refused: %s", reason_code)
             return
-        client.subscribe("boat/b%d/goals" % self.vessel, qos=1)
+        client.subscribe("boat/b%d/goals" % self.vessel, qos=0)
         log.info("connected to the vessel MQTT broker %s:%d", self.a.host, self.a.port)
 
     def _publish(self, name: str, payload: bytes) -> None:

@@ -150,12 +150,12 @@ def publish(host: str = "localhost", port: int = 1883, M: int = 3, steps: int = 
                                              "needed": [dtp.topics[l - 1] for l in g.needed]}))
         for i in g.vessels:
             d = [g.edge(i, l).d for l in range(1, dtp.L + 1)]
-            c.publish("boat/b%d/demand" % i, encode_demand(t, d), qos=1)
+            c.publish("boat/b%d/demand" % i, encode_demand(t, d), qos=0)
         wait_until(start + dtp.T1 + 0.002)
         p = [g.edge(g.vessels[0], l).p or 0 for l in range(1, dtp.L + 1)] if g.vessels else None
         if p is not None:
             for i in g.vessels:
-                c.publish("boat/b%d/levels" % i, encode_levels(t, p), qos=1)
+                c.publish("boat/b%d/levels" % i, encode_levels(t, p), qos=0)
         if publish_as:
             c.publish("fleet/as", json.dumps({"t": t, "C_hat": g.C_hat, "K_hat": g.K_hat, "b": g.b,
                                               "U": g.U, "alpha": g.alpha}))

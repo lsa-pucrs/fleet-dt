@@ -5,7 +5,7 @@
          [--plugin /opt/fleet-dt/lib/fdt_regulator.so] [--port 1883 --data-port 1884] > vessel.conf
 
 The GS broker opens two bridges per vessel i: b<i>-ctl to vessel:1883 (demand and the step log of
-the vessel regulator in, priority table and goals out, QoS 1) and b<i>-data to vessel:1884, the
+the vessel regulator in, priority table and goals out, QoS 0) and b<i>-data to vessel:1884, the
 dedicated listener of the data bridge (boat/b<i>/tx/# in, QoS 0: the paper forwards both levels with
 QoS 0 and the GS removes repeated copies by the pair (t, s); --data-qos 2 keeps the QoS 2 subscription
 of the as2 stack, whose regulator forwards the required topics with QoS 2). Both brokers disable Nagle's
@@ -29,7 +29,7 @@ connections of a listener unless max_connections is given; each bridge needs one
 and one at the vessel, M (L + 1) + local clients at the GS, within the default limit of 1024 descriptors
 for M = 4, L = 22).
 
-Fleet feedback (--feedback): the control bridges also carry fleet/feedback out (QoS 1), the feedback of
+Fleet feedback (--feedback): the control bridges also carry fleet/feedback out (QoS 0), the feedback of
 fleetdt/feedback.py for the regulator modes paper_b3, b8 and paper_tdma.
 
 Paper stack (vessel --mode paper and its variants): --demand external makes the regulator police to the
@@ -117,12 +117,12 @@ def gs_conf(vessels: Dict[int, str], listen: str = "0.0.0.0:1883", ctl_port: int
                 "notifications true",
                 "notifications_local_only true",
                 "notification_topic fleet/bridge/b%d-ctl/state" % i,
-                "topic boat/b%d/demand in 1" % i,
+                "topic boat/b%d/demand in 0" % i,
                 "topic boat/b%d/regulator in 0" % i,
-                "topic boat/b%d/levels out 1" % i,
-                "topic boat/b%d/goals out 1" % i]
+                "topic boat/b%d/levels out 0" % i,
+                "topic boat/b%d/goals out 0" % i]
         if feedback:
-            out.append("topic fleet/feedback out 1")
+            out.append("topic fleet/feedback out 0")
         if per_topic:
             for name in per_topic:
                 out += _bridge("b%d-data-%s" % (i, name), addr, dp, keepalive, ["topic boat/b%d/tx/%s in %d" % (i, name, dq)])

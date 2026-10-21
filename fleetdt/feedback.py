@@ -114,7 +114,7 @@ class Service:
         p = self.core.payload(t, y)
         if p is None:
             return
-        self.client.publish(TOPIC, p, qos=1)
+        self.client.publish(TOPIC, p, qos=0)
         if self.log_file:
             with self._wlock:
                 self.log_file.write(json.dumps({"t": t, "y": y, "U": self.core.U, "m": self.core.m,

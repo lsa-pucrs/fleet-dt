@@ -1,7 +1,7 @@
 /*
  * Fleet-DT DTI program of a vessel (Definition 9, R3): at start(t) + offset of each
  * step t it publishes the demand table D_i(t) = (t, L, Q_i(t), d_{i,1}(t) .. d_{i,L}(t)) on
- * boat/b<i>/demand (QoS 1) of the vessel broker; the control bridge carries it to
+ * boat/b<i>/demand (QoS 0) of the vessel broker; the control bridge carries it to
  * the GS before the end of phase 1.
  *
  * Q_i(t) = ceil(c_b o_i(t) + c_k n_i(t)) is the backlog of the vessel at the start of phase 1:
@@ -221,7 +221,7 @@ int main(int argc, char **argv)
 		uint8_t buf[FDT_DEMAND_HDR + 4 * FDT_L_MAX];
 		/* Q_i = 0: the regulator plugin writes the backlog when the table enters the vessel broker */
 		size_t n = fdt_demand_encode(buf, (uint32_t)t, 0, dtp.L, d);
-		rc = mosquitto_publish(m, NULL, topic, (int)n, buf, 1, false);
+		rc = mosquitto_publish(m, NULL, topic, (int)n, buf, 0, false);
 		if (rc == MOSQ_ERR_SUCCESS)
 			published++;
 		if (verbose) {

@@ -111,11 +111,11 @@ message in the frame, number of messages of the frame).
 | Bridge | Address on the vessel | Topics | QoS |
 |---|---|---|---|
 | `b<i>-data` | vessel:1884 (dedicated listener) | `boat/b<i>/tx/# in 0` | 0 |
-| `b<i>-ctl` | vessel:1883 | `boat/b<i>/demand in 1`, `boat/b<i>/regulator in 0`, `boat/b<i>/levels out 1`, `boat/b<i>/goals out 1` | 1 |
+| `b<i>-ctl` | vessel:1883 | `boat/b<i>/demand in 0`, `boat/b<i>/regulator in 0`, `boat/b<i>/levels out 0`, `boat/b<i>/goals out 0` | 0 |
 
-Both bridges use `cleansession true`, `bridge_max_packet_size` unset, `max_inflight_messages 65534`
-(R9). `python -m fleetdt.gsconf` writes both configurations (the data bridges subscribe with QoS 0, the
-control bridges with QoS 1; `--data-qos 2` keeps the QoS 2 data bridge of the as2 stack of SPEC_v2.md). Patch
+Both bridges use `cleansession true`, `bridge_max_packet_size` unset, `max_inflight_messages 0`
+(R9). `python -m fleetdt.gsconf` writes both configurations (the data bridges and the
+control bridges subscribe with QoS 0; `--data-qos 2` keeps the QoS 2 data bridge of the as2 stack of SPEC_v2.md). Patch
 `mosquitto/patches/0002-bridge-apply-set_tcp_nodelay.patch` applies `set_tcp_nodelay true` to the
 bridge sockets, and patch `0001-plugin_tick-keep-pending-deadline.patch` keeps the deadline of a
 plugin tick when another event wakes the broker, so phase 3 starts within 1 ms (R8). Patch
@@ -130,8 +130,8 @@ i) and logs `bridge_reset` in the next decision. Only `b<i>-data` counts: the me
 per vessel (B2, B10) run without the AS.
 
 Every MQTT client of Fleet-DT sets TCP_NODELAY on its socket (paho-mqtt leaves Nagle's algorithm
-on): without it, a small PUBLISH that follows a PUBACK of the same client waits for the delayed ACK of
-the broker, about 40 ms on Linux, and the priority table misses the end of phase 2.
+on): without it, a small PUBLISH that follows another unacknowledged segment of the same client waits for the
+delayed ACK of the broker, about 40 ms on Linux, and the priority table misses the end of phase 2.
 
 ## 5. Demand and policing (eq. 5, Def. 13)
 

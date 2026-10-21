@@ -53,8 +53,8 @@ DEMAND_RE = re.compile(r"^boat/b(\d+)/demand$")
 # to the GS broker) or the default one of Mosquitto ($SYS/broker/connection/<name>/state); payload "0" or "1"
 BRIDGE_STATE_RE = re.compile(r"^(?:fleet/bridge|\$SYS/broker/connection)/b(\d+)-data/state$")
 POLICIES = ("alg1", "b7")
-SUBSCRIPTIONS = [("boat/+/demand", 1), ("fleet/throughput", 0), ("fleet/order", 1), ("fleet/bridge/+/state", 1),
-                 ("$SYS/broker/connection/+/state", 1)]
+SUBSCRIPTIONS = [("boat/+/demand", 0), ("fleet/throughput", 0), ("fleet/order", 0), ("fleet/bridge/+/state", 0),
+                 ("$SYS/broker/connection/+/state", 0)]
 
 
 class AS:
@@ -445,11 +445,11 @@ class Service:
     def _publish(self, dec: Dict) -> None:
         if dec.get("p_by") is not None:      # B7: one table per vessel
             for i in dec["M"]:
-                self.client.publish("boat/b%d/levels" % i, encode_levels(dec["t"], dec["p_by"][i]), qos=1)
+                self.client.publish("boat/b%d/levels" % i, encode_levels(dec["t"], dec["p_by"][i]), qos=0)
         else:
             payload = encode_levels(dec["t"], dec["p"])
             for i in dec["M"]:
-                self.client.publish("boat/b%d/levels" % i, payload, qos=1)
+                self.client.publish("boat/b%d/levels" % i, payload, qos=0)
         keys = ("t", "C_hat", "K_hat", "cap", "b", "U", "alpha", "m", "p", "M", "order", "needed", "p_by", "grants", "a",
                 "A", "Q", "Qi", "Q_M", "Q_out", "Qbar")
         self.client.publish("fleet/as", json.dumps({k: dec[k] for k in keys if k in dec}, separators=(",", ":")),

@@ -124,7 +124,7 @@ def main(argv=None):
             t = math.floor((now() - epoch - off) / Ts) + 1
             continue
         mode = mode_of(t, a.s0, P, a.first)
-        c.publish("fleet/order", payload(t, mode, modes), qos=1)
+        c.publish("fleet/order", payload(t, mode, modes), qos=0)
         if out:
             out.write(json.dumps({"t": t, "mode": mode, "pub": round(now(), 6)}) + "\n")
             out.flush()

@@ -194,7 +194,7 @@ def test_bridges_of_b2_and_b10():
         for n in names:
             blk = conf.split("connection b%d-data-%s\n" % (i, n))[1].split("\nconnection ")[0]
             assert "address 10.0.0.%d:1884" % i in blk and "topic boat/b%d/tx/%s in 0" % (i, n) in blk
-    assert conf.count("topic fleet/feedback out 1") == 2
+    assert conf.count("topic fleet/feedback out 0") == 2
     b2 = gs_conf({1: "10.0.0.1"}, b2=True)
     assert len(re.findall(r"^connection ", b2, re.M)) == bridge_count(1, b2=True) == 4
     v = vessel_conf(1, "/x.json", mode="paper_b2")
