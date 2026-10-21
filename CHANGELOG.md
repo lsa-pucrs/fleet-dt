@@ -11,6 +11,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - control bridges: demand, levels, goals and fleet/feedback with QoS 0 (no MQTT retransmission; clean session),
   the DTI program, the regulator, the AS, the stubs and the subscribers publish and subscribe with QoS 0
 - gs.conf and vessel-b1.conf: max_inflight_messages 0 (R9), as the generator already writes
+- radios: the wireless path is the PCIe AR9280 of the XM Bullet M2 (pci0000:00/0000:00:00.0), and the
+  channel monitor builds with the SDK of the firmware of the radios (ath79-tiny-22.03.7)
 
 ## [2.0.0] - 2026-10-14
 
