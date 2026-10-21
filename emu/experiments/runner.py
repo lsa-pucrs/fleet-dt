@@ -2,7 +2,11 @@
 """Executes a manifest of emu/experiments/matrix.py with up to K sessions at once (emu/run.py --slot k).
 
   python3 emu/experiments/runner.py DIR [--K 3] [--results EMU/results/<name>] [--max-runs N] [--keep-raw]
-                                     [--retry 1]
+                                     [--retry 1] [--no-pin]
+
+Blocks (manifests of emu/experiments/campaign.py): a run whose "block" holds a "slot" s runs only on slot
+s mod K (K the current number of slots), so the runs of a block share one session; --no-pin ignores it.
+An outer-loop variant whose "outer"."calibration_file" is relative reads it from the manifest directory.
 
 Each slot k (0 .. K-1) brings up its own session (GS + M vessel VMs, emulator, monitor bridge, clock
 probe) with the M of its next run, copies the repository into the VMs once, and then runs the pending runs
@@ -71,6 +75,15 @@ def mk(r):
     return int(r.get("max_K") or 99)
 
 
+def block_slot(r, K):
+    """slot of the block of a run with K slots: the "slot" of its "block" mod K (and below its max_K); None for a
+    run without a block slot"""
+    b = r.get("block")
+    if not isinstance(b, dict) or b.get("slot") is None:
+        return None
+    return int(b["slot"]) % max(1, min(int(K), mk(r)))
+
+
 class Manifest:
     def __init__(self, d):
         self.dir = d
@@ -88,17 +101,19 @@ class Manifest:
             json.dump(self.m, f, indent=1)
         os.replace(tmp, self.path)
 
-    def next(self, M=None, slot=0):
+    def next(self, M=None, slot=0, K=None):
         """(run, None) to start on slot `slot`, or (None, "wait") or (None, "exit").
 
         A run with "max_K": m starts only on a slot k < m and only while at most m sessions run a run,
-        counting itself, and no running run has a smaller max_K. The slot takes the first pending run of
+        counting itself, and no running run has a smaller max_K. With K (the number of slots), a run whose
+        "block" holds a "slot" s (emu/experiments/campaign.py: the session slot of the block) runs only on
+        slot s mod K, so the runs of a block share one session. The slot takes the first pending run of
         the manifest that it may take (the runs of the same max_K and of M first): a run that may not
         start yet makes the slot wait, so the restricted runs (at the end of the manifest) are not
         starved; a slot exits when no pending run may ever run on it."""
         with LOCK:
             pend = [r for r in self.m["runs"] if r["status"] == "pending"]
-            mine = [r for r in pend if slot < mk(r)]
+            mine = [r for r in pend if slot < mk(r) and (K is None or block_slot(r, K) in (None, slot))]
             if not mine:
                 return None, "exit"
             first = mine[0]
@@ -135,6 +150,10 @@ def run_spec(spec, rd, man_dir):
     ref = (spec.get("as") or {}).get("init_scores_file")
     if ref and not os.path.isabs(ref):
         spec["as"] = dict(spec["as"], init_scores_file=os.path.join(man_dir, ref))
+    cf = (spec.get("outer") or {}).get("calibration_file")
+    if cf and not os.path.isabs(cf):
+        # the calibration of an outer-loop variant (E5), relative to the manifest directory
+        spec["outer"] = dict(spec["outer"], calibration_file=os.path.join(man_dir, cf))
     return spec
 
 
@@ -238,7 +257,7 @@ class Runner:
                     break
                 if self.a.max_runs and self.done >= self.a.max_runs:
                     break
-                r, why = self.man.next(M_up, k)
+                r, why = self.man.next(M_up, k, None if self.a.no_pin else self.K)
                 if r is None:
                     if why == "exit":
                         break
@@ -329,6 +348,8 @@ def main():
     ap.add_argument("--retry", type=int, default=1)
     ap.add_argument("--lag-exempt", nargs="*", default=["S2"],
                     help="scenarios judged by the steps above 1 ms alone (not by the p99 of the lag)")
+    ap.add_argument("--no-pin", action="store_true",
+                    help="ignore the session slot of the blocks (block.slot of campaign.py manifests)")
     a = ap.parse_args()
     Runner(a).run()
 

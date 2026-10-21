@@ -20,8 +20,9 @@ raw events in n_eff = n / (2 tau_int) trials, tau_int of Madras and Sokal; one-s
 bounds (blocks of ceil(2 tau_int) steps inside each run); TOST; IUT; fixed sequence at alpha = 0.05.
 
 Calibration: for each evaluation scenario s and number of vessels M, alpha* in {0.01, ..., 1} minimizes the
-one-step MSE of eq. (2) on the calibration DTA (exp "Cal") of the same M without s, and U* is the largest U in
-{0.30, ..., 1} whose lower 95 % block-bootstrap bound of PICP(U) on this DTA reaches PICP_nom (fleetdt.outer).
+one-step MSE of eq. (2) on the calibration DTA (exp "Cal", Fleet-DT runs) of the same M without s, and U* is the
+largest U in {0.30, ..., 1} whose lower 95 % block-bootstrap bound of PICP(U) on this DTA reaches PICP_nom
+(fleetdt.outer).
 The other predictors of H5 are fitted on the same DTA (fleetdt.predictors). DMR-hat(U) of H3b replays the
 calibration runs of the same M and scenario (--dmr-hat-scenarios same, the default; loso: without s) with
 alpha*(M, s), U and Q(t) = q_hat(t - 1) (fleetdt.outer.dmr_hat_replay).
@@ -245,7 +246,9 @@ class Calibration:
 
     def __init__(self, runs: List[Run], picp_nom: float = 0.99, B: int = 2000, seed: int = 0, conf: float = 0.95,
                  arima_engine: str = "auto", C_ref: Optional[Dict] = None, dmr_hat_scenarios: str = "same"):
-        self.cal = [r for r in runs if r.exp == "Cal"]
+        # the Fleet-DT runs of Cal (the other methods of the E4 pilot load the channel differently), as
+        # fleetdt/calibration.py
+        self.cal = [r for r in runs if r.exp == "Cal" and r.method == FLEETDT]
         self.picp_nom, self.B, self.seed, self.conf = picp_nom, B, seed, conf
         self.arima_engine = arima_engine
         self.C_ref_tab = C_ref or {}

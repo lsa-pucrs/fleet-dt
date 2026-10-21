@@ -47,8 +47,26 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - analysis: `bb_diff_bounds` (block bootstrap of the difference of two independent samples, H3b),
   `logistic_fit` (Newton iterations, H3c), `fixed_sequence_verdicts`, `h3a_pool` and `condition_from_series`,
   per-vessel PDR_state, the per-step series of run_metrics (`series=True`); outer: `dmr_hat_replay`
+- campaign generator `emu/experiments/campaign.py` (emu/README.md, "Campaign"): `cal` writes the specs and
+  manifests of E0 (26 runs) and Cal (210), `eval --calibration calibration.json` those of E1 (80), E2 (290), E3
+  (190), E4 (676) and E5 (60 runs of 390 s, 156 run-equivalents) as Table S6 defines them, with the calibrated
+  DTP constants, rho from C_ref through the frame rate and the stripe-size scale, the pilot U of B4, B6 and B7 and
+  the outer-loop variants of E5; blocks of one seed and one session slot with the methods or within-block levels
+  in a seeded random order, disjoint seed ranges for the calibration and the evaluation, the manifest fields of
+  the hypothesis driver; `count` (1773 with Q and the reruns) and `merge` (one manifest for hypotheses.py); every
+  spec passes the checks of emu/fleet.py when it is written
+- `fleet.paper_check`: the static checks of a paper-stack experiment that `run_fleet_paper` applies before a run,
+  without a session (the run calls it)
+- calibration: the U of B4, B6 and B7 from the runs of the E4 pilot by the rule of U* with the prediction of each
+  baseline (`pilot` of calibration.json, `fleetdt.calibration.pilot`, `pilot_fit`, `lookup_pilot`)
+- runner: a run whose `block.slot` is s runs only on slot s mod K (`--no-pin` ignores it); a relative
+  `outer.calibration_file` resolves in the manifest directory
 
 ### Changed
+
+- calibration and hypothesis driver: the constants, alpha*, U*, C_ref and the predictors of H5 come from the
+  Fleet-DT runs of Cal (`calibrate_paper.py compute --fit-methods`); the runs of the other methods of the E4 pilot
+  stay out (before: every run under the arguments)
 
 - outer loop: alpha* stays on the grid 0.01..1 of Section VI-E; the golden-section refinement, which can leave
   the grid, runs only with `refine=True` (`--refine`)

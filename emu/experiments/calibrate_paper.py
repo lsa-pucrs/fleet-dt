@@ -7,14 +7,16 @@ directories of the calibration runs (emu/fleet.py --stack paper; the computation
           [--lag-ms 1] [--target 0.99] [--conf 0.95] [--B 1000] [--seed 0] [--data-ports 1884,1885,1886]
           [--no-gt] [--include-failed]
       every directory with a result.json of the paper stack under the arguments is a run; runs whose status is
-      not "ok" are left out (unless --include-failed)
+      not "ok" are left out (unless --include-failed); the Fleet-DT runs (--fit-methods) give the constants,
+      the runs of B4, B6 and B7 (the E4 pilot) give the U of these baselines by the rule of U* ("pilot";
+      fleetdt.calibration.pilot), and the runs of the other methods stay out ("ignored")
   python3 emu/experiments/calibrate_paper.py dtp --calibration calibration.json --dtp BASE.json --M 4
           --scenario S3 --out dtp.json
       the DTP of an evaluation run: T1, T2, T_m, B_ctl_bar of M, c_y, and the alpha* and U* of M without the
       scenario of the run (the fit on every calibration scenario when the calibration has no run of it)
 
 Files of a run (RUN/):
-  result.json            status, M, S0, steps
+  result.json            status, M, S0, steps, method
   dtp.json               epoch, Ts, T1, T2, h_W of the run
   scenario.json          scenario_id (else experiment.json "scenario_id", else "qualify"."profile")
   vms/gs/as.jsonl        decisions of the AS ("d_at", "M") and "demand_late" records: w1(t), M(t)
@@ -138,6 +140,7 @@ def load_run(rd, with_gt=True):
     ys = jsonl(os.path.join(rd, "throughput.jsonl")) or dta
     y = {int(r["t"]): float(r["y"]) for r in ys if r.get("t") is not None and r.get("y") is not None}
     return {"name": os.path.basename(rd), "dir": rd, "M": M, "scenario": scenario_of(rd, res),
+            "method": res.get("method") or "fleetdt",
             "status": res.get("status"), "S0": res.get("S0"), "steps": res.get("steps"), "dtp": dtp,
             "as": jsonl(os.path.join(host(0), "as.jsonl")),
             "regsteps": {i: jsonl(os.path.join(host(i), "regsteps.jsonl")) for i in range(1, M + 1)},
@@ -170,12 +173,14 @@ def cmd_compute(a):
     if not runs:
         raise SystemExit("no calibration run under %s" % a.runs)
     ports = tuple(int(p) for p in a.data_ports.split(",") if p)
-    cal = CAL.calibrate(runs, warm=a.warm, lag_s=a.lag_ms / 1e3, target=a.target, conf=a.conf, B=a.B, seed=a.seed,
-                        data_ports=ports)
+    fit_methods = tuple(m for m in a.fit_methods.split(",") if m)
+    try:
+        cal = CAL.calibrate(runs, warm=a.warm, lag_s=a.lag_ms / 1e3, target=a.target, conf=a.conf, B=a.B,
+                            seed=a.seed, data_ports=ports, fit_methods=fit_methods)
+    except ValueError as e:
+        raise SystemExit(str(e))
     cal["created"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     cal["skipped"] = skipped
-    for m, r in zip(cal["runs"], runs):
-        m["dir"] = r["dir"]
     cal = _clean(cal)
     with open(a.out, "w", encoding="utf-8") as f:
         json.dump(cal, f, indent=1)
@@ -185,6 +190,12 @@ def cmd_compute(a):
         for s, o in sorted(cal["outer"][M]["left_out"].items()):
             print("  %s: alpha* %s, U* %s (%d runs)" % ("every scenario" if s == CAL.ALL else "without " + s,
                                                          o["alpha"], o["U"], o["runs"]))
+    for M, by_s in sorted(cal["pilot"].items()):
+        for s, by_m in sorted(by_s.items()):
+            for m, f in sorted(by_m.items()):
+                print("  pilot M = %s, %s, %s: U %s (%d runs)" % (M, s, m, f.get("U"), f.get("runs", 0)))
+    if cal["ignored"]:
+        print("runs of other methods, not used: %d" % len(cal["ignored"]))
     print("c_y = %s (%d steps); %s" % (cal["c_y"], cal["c_y_n"], a.out))
     missing = sorted({x for m in cal["runs"] for x in m["missing"]})
     for x in missing:
@@ -228,6 +239,8 @@ def main(argv=None):
                    help="TCP ports of the data bridges (frames outside them count in B_ctl)")
     c.add_argument("--no-gt", action="store_true", help="skip the ground truth (no B_ctl_bar)")
     c.add_argument("--include-failed", action="store_true", help="also runs whose status is not ok")
+    c.add_argument("--fit-methods", default=",".join(CAL.FIT_METHODS),
+                   help="methods whose runs give the constants (the runs of B4, B6 and B7 give the pilot U)")
     d = sub.add_parser("dtp", help="DTP of an evaluation run from calibration.json")
     d.add_argument("--calibration", required=True)
     d.add_argument("--dtp", required=True, help="base DTP (dtp.json)")

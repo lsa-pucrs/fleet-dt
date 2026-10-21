@@ -1352,16 +1352,26 @@ def adapter_backend(logpath):
     return None
 
 
-def run_fleet_paper(R, spec, a):
-    st = R.load_state()
-    if not st:
-        raise SystemExit("not up")
-    M = st["M"]
-    if int(spec["M"]) != M:
-        raise SystemExit("experiment M=%d but session %d has M=%d" % (spec["M"], R.SLOT, M))
+class _NoSession:
+    """stand-in for the session of emu/run.py in the static checks of paper_check (the counter port of slot 0)"""
+    CNT_PORT = 9650
+
+
+def paper_check(spec, M=None, root=None, R=None):
+    """Static checks of a paper-stack experiment, the ones that run_fleet_paper applies before it starts a run,
+    without a session (emu/experiments/campaign.py validates every spec it writes with them): the DTP and the
+    scenario (objects, or repository paths: a DTP file gets the vessels 1..M), the DTP against M and Ts, the
+    per-vessel overrides, the scenario modifiers (outage, R7), "session", "brokers", "guest_tcp", "overload",
+    "monitor", the method, the jitter J, the source, the emulator options, "clock", the outer-loop variant with
+    its calibration file and the agreement of the video source with the DTP. M: the M of the session (default
+    the "M" of the experiment); root: the repository (default the parent of emu/). Returns (spec, checked):
+    the experiment with the DTP and scenario objects, the overrides of "vessels" in the DTP and the scenario
+    modifiers applied, and the checked settings. Raises SystemExit on an experiment that a run refuses."""
+    root = root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    M = int(spec["M"]) if M is None else int(M)
     for k in ("dtp", "scenario"):   # a path (relative to the repository) in place of the object
         if isinstance(spec.get(k), str):
-            with open(os.path.join(R.ROOT, spec[k])) as f:
+            with open(os.path.join(root, spec[k])) as f:
                 obj = json.load(f)
             if k == "dtp":            # a DTP file of the repository serves any M: its vessels become 1..M
                 obj["vessels"] = list(range(1, M + 1))
@@ -1370,22 +1380,43 @@ def run_fleet_paper(R, spec, a):
     # per-vessel overrides (E4 fairness) into the DTP, the modifiers of the scenario (E0 outage, R7)
     vessels = paper_vessels(spec, M)
     spec = dict(spec, dtp=paper_dtp_vessels(spec["dtp"], vessels), scenario=paper_scenario(spec))
-    session = check_session(spec, st)
-    brokers, guest_tcp, overload = paper_brokers(spec), paper_guest_tcp(spec), paper_overload(spec)
-    if overload and not 1 <= int(overload["vessel"]) <= M:
-        raise SystemExit("overload.vessel %s outside 1..M" % overload["vessel"])
-    dtp = spec["dtp"]
-    mon = paper_monitor(spec)
-    method, mcfg = paper_method(spec)
-    jit = paper_jitter_ms(spec)
+    if spec.get("session") is not None:
+        paper_session(spec)
+    out = {"vessels": vessels, "brokers": paper_brokers(spec), "guest_tcp": paper_guest_tcp(spec),
+           "overload": paper_overload(spec)}
+    if out["overload"] and not 1 <= int(out["overload"]["vessel"]) <= M:
+        raise SystemExit("overload.vessel %s outside 1..M" % out["overload"]["vessel"])
+    out["monitor"] = paper_monitor(spec)
+    out["method"], out["method_config"] = paper_method(spec)
+    out["jitter_ms"] = paper_jitter_ms(spec)
     paper_source_cmd(spec, 1, 0.0, 1.0)   # rejects an unknown source kind before the run starts
-    paper_emu_args(R, spec, mon)          # rejects emu_args that the stack sets itself
-    clock = paper_clock(spec)
-    ov = paper_outer(spec)                # rejects an outer-loop variant without its calibration entries
+    paper_emu_args(R or _NoSession, spec, out["monitor"])   # rejects emu_args that the stack sets itself
+    out["clock"] = paper_clock(spec)
+    out["outer"] = paper_outer(spec)      # rejects an outer-loop variant without its calibration entries
+    out["video"] = paper_video_check(spec, root)
+    return spec, out
+
+
+def run_fleet_paper(R, spec, a):
+    st = R.load_state()
+    if not st:
+        raise SystemExit("not up")
+    M = st["M"]
+    if int(spec["M"]) != M:
+        raise SystemExit("experiment M=%d but session %d has M=%d" % (spec["M"], R.SLOT, M))
+    spec, chk = paper_check(spec, M, R.ROOT, R)
+    session = check_session(spec, st)
+    vessels, brokers, guest_tcp, overload = chk["vessels"], chk["brokers"], chk["guest_tcp"], chk["overload"]
+    dtp = spec["dtp"]
+    mon = chk["monitor"]
+    method, mcfg = chk["method"], chk["method_config"]
+    jit = chk["jitter_ms"]
+    clock = chk["clock"]
+    ov = chk["outer"]
     if clock and not st.get("clock_inject"):
         raise SystemExit("clock.inject needs a session up with --clock-inject (emu/run.py up): fdt-clockinit "
                          "must leave the frequency error to the schedule")
-    video = paper_video_check(spec, R.ROOT)
+    video = chk["video"]
     rev = paper_revision(R.ROOT)
     pin = spec.get("stack_commit")
     if pin and (not rev.get("commit") or not rev["commit"].startswith(pin) or rev.get("dirty_stack")):

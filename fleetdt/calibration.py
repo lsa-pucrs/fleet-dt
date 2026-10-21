@@ -9,7 +9,9 @@ For each number of vessels M:
 over every calibration run: c_y = min{1, min_t C(t)/y(t)}; per (M, scenario): C_ref = mean of C(t); per (M, s)
 with s a scenario of the calibration (or "all", no scenario left out): alpha* in {0.01, ..., 1} minimizes the
 one-step MSE of eq. (2) on the calibration DTA without s, and U* is the largest U in {0.30, 0.31, ..., 1}
-whose lower 95 % block-bootstrap bound of PICP(U) on that DTA reaches PICP_nom = 0.99 (fleetdt.outer).
+whose lower 95 % block-bootstrap bound of PICP(U) on that DTA reaches PICP_nom = 0.99 (fleetdt.outer). The
+constants come from the Fleet-DT runs; the runs of B4, B6 and B7 of the E4 pilot give the U of these baselines
+by the same rule of U* with the prediction of each baseline in place of eq. (2) (pilot, pilot_fit).
 
 Measurements and their sources (Table tab:metrics of the paper):
   w1(t)       start of phase 1 until the last demand table d_i(t) reaches the AS, on the GS clock: the AS log
@@ -371,20 +373,151 @@ def outer_fit(dtas: Sequence[Sequence[Dict]], c_y: float, B_ctl_bar: float, T3_T
             "PICP_low": {("%.2f" % w["U"]): w["PICP_low"] for w in r["whatif"]}}
 
 
+def run_method(run: Dict) -> str:
+    """method label of a calibration run ("method" of its result.json; a run without one is Fleet-DT)"""
+    return str(run.get("method") or "fleetdt")
+
+
+def pilot_series(run: Dict, warm: int = WARM_STEPS) -> np.ndarray:
+    """y(t) of one run over the consecutive steps of its window after the warm-up (NaN where no y(t)): the "y"
+    of the run (throughput.jsonl), else the y of its DTA records."""
+    y = {int(t): float(v) for t, v in (run.get("y") or {}).items() if v is not None}
+    if not y:
+        y = {int(r["t"]): float(r["y"]) for r in run.get("dta") or []
+             if r.get("t") is not None and r.get("y") is not None}
+    S0, steps = run.get("S0"), run.get("steps")
+    keys = sorted(t for t in y if in_window(t, S0, steps, warm))
+    if not keys:
+        return np.zeros(0)
+    return np.asarray([y.get(t, np.nan) for t in range(keys[0], keys[-1] + 1)], dtype=float)
+
+
+def pilot_fit(ys: Sequence[np.ndarray], method: str, c_y: float, B_ctl_bar: float, T3_Ts: float,
+              C_ref: Optional[float] = None, alpha: Optional[float] = None, T3_ratio: Optional[float] = None,
+              target: float = PICP_NOM, conf: float = CONF, B: int = 1000, seed: int = 0,
+              U_grid: np.ndarray = O.U_GRID) -> Dict:
+    """U of a baseline from the runs of the E4 pilot by the rule of U* (Section VI-E): the largest U of the grid
+    0.30..1 whose lower `conf` circular block-bootstrap bound of PICP(U) reaches `target`, with the prediction
+    of the baseline in place of the C_hat(t) of eq. (2):
+      B4  C_hat(t) = C_ref (the constant prediction of the method), K_hat(t) = C_ref (T3 - T_m)/Ts
+      B6  C_hat(t) of eq. (2) replayed on c_y y with the alpha* of the scenario (the AS of B6 runs eq. (2) with
+          the alpha of the DTP), from the first c_y y(t) of the run
+      B7  the budget U y(t-1) T3/Ts of the fleet: C_hat(t) = y(t-1) T3_ratio with T3_ratio = T3/(T3 - T_m), so
+          that U K_hat(t) = U y(t-1) T3/Ts
+    PICP(U) is the share of the steps with K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar >= U K_hat(t), pooled over
+    the runs (fleetdt.outer.gamma_bounds, blocks of ceil(2 tau_int) steps inside each run). U is None when no U
+    of the grid reaches the target or the prediction lacks its constant."""
+    need = {"B4": C_ref, "B6": alpha, "B7": T3_ratio}.get(method, "unknown")
+    if need is None or need == "unknown":
+        return {"U": None, "U_point": None, "runs": 0, "n_y": 0,
+                "note": "no pilot rule for %s" % method if need == "unknown" else "prediction constant missing"}
+    rep = []
+    for y in ys:
+        y = np.asarray(y, dtype=float)
+        if not np.any(~np.isnan(y)):
+            continue
+        z = c_y * y
+        if method == "B4":
+            C = np.full(len(y), float(C_ref))
+        elif method == "B6":
+            C0 = float(z[~np.isnan(z)][0])
+            C = O.replay(z, [float(alpha)], C0)[:, 0]
+        else:
+            C = np.full(len(y), np.nan)
+            C[1:] = y[:-1] * float(T3_ratio)
+        rep.append((y, C))
+    if not rep:
+        return {"U": None, "U_point": None, "runs": 0, "n_y": 0, "note": "no y(t) in the pilot runs"}
+    gb = O.gamma_bounds(rep, U_grid, conf=conf, B=B, seed=seed, T3_Ts=T3_Ts, c_y=c_y, B_ctl_bar=B_ctl_bar)
+    return {"U": O.largest_U(gb["gamma_low"], U_grid, target), "U_point": O.largest_U(gb["gamma"], U_grid, target),
+            "block": gb["block"], "runs": len(rep), "n_y": gb["n"],
+            "PICP_low": {("%.2f" % u): float(g) for u, g in zip(U_grid, gb["gamma_low"])}}
+
+
+def pilot(runs: Sequence[Dict], cal: Dict, warm: int = WARM_STEPS, target: float = PICP_NOM, conf: float = CONF,
+          B: int = 1000, seed: int = 0) -> Dict:
+    """U of B4, B6 and B7 per (M, scenario) from their pilot runs (pilot_fit), with the constants of `cal` (the
+    output of calibrate without "pilot"): c_y, B_ctl_bar and (T3 - T_m)/Ts of M, C_ref of the (M, scenario) and
+    the alpha* of lookup_outer; a constant missing in `cal` falls back to the DTP of the runs (c_y 1, B_ctl_bar 0,
+    T1, T2, T_m; C_ref and alpha* have no fallback). Returns {"<M>": {"<scenario>": {"<method>": fit}}}."""
+    groups: Dict[Tuple[int, str, str], List[Dict]] = {}
+    for r in runs:
+        groups.setdefault((int(r["M"]), str(r.get("scenario")), run_method(r)), []).append(r)
+    out: Dict = {}
+    for (M, s, m), rr in sorted(groups.items()):
+        d = rr[0]["dtp"]
+        mg = (cal.get("M") or {}).get(str(M)) or {}
+        Ts = float(d["Ts"])
+        T1 = mg.get("T1") if mg.get("T1") is not None else float(d["T1"])
+        T2 = mg.get("T2") if mg.get("T2") is not None else float(d["T2"])
+        Tm = mg.get("T_m") if mg.get("T_m") is not None else float(d.get("T_m") or 0.0)
+        c_y = cal.get("c_y") if cal.get("c_y") is not None else float(d.get("c_y") or 1.0)
+        bctl = mg.get("B_ctl_bar") if mg.get("B_ctl_bar") is not None else float(d.get("B_ctl_bar") or 0.0)
+        T3 = Ts - T1 - T2
+        C_ref = ((cal.get("C_ref") or {}).get(str(M)) or {}).get(s)
+        try:
+            alpha = lookup_outer(cal, M, s)[0]
+        except KeyError:
+            alpha = None
+        fit = pilot_fit([pilot_series(r, warm) for r in rr], m, c_y, bctl, (T3 - Tm) / Ts, C_ref=C_ref, alpha=alpha,
+                        T3_ratio=T3 / (T3 - Tm) if T3 > Tm else None, target=target, conf=conf, B=B, seed=seed)
+        fit.update({"predictor": {"B4": "C_ref", "B6": "eq. (2) with alpha*", "B7": "y(t-1) T3/(T3 - T_m)"}.get(m),
+                    "C_ref": C_ref if m == "B4" else None, "alpha": alpha if m == "B6" else None,
+                    "c_y": c_y, "B_ctl_bar": bctl, "T3_Ts": (T3 - Tm) / Ts,
+                    "run_names": [r.get("name") for r in rr]})
+        out.setdefault(str(M), {}).setdefault(s, {})[m] = fit
+    return out
+
+
+def lookup_pilot(cal: Dict, method: str, M: int, scenario: str = "S3") -> Tuple[Optional[float], Optional[int]]:
+    """(U, M of the pilot entry) of a baseline (B4, B6, B7) from "pilot" of a calibration: the entry of the same M
+    and scenario, else the entry of the scenario at the largest other M (the E4 pilot runs at M = 4 only); (None,
+    None) without an entry."""
+    p = cal.get("pilot") or {}
+    order = [str(int(M))] + sorted((k for k in p if k != str(int(M))), key=lambda k: -int(k))
+    for k in order:
+        e = ((p.get(k) or {}).get(str(scenario)) or {}).get(method)
+        if e is not None:
+            return e.get("U"), int(k)
+    return None, None
+
+
+FIT_METHODS = ("fleetdt",)
+PILOT_METHODS = ("B4", "B6", "B7")
+
+
 def calibrate(runs: Sequence[Dict], warm: int = WARM_STEPS, lag_s: float = LAG_S, target: float = PICP_NOM,
               conf: float = CONF, B: int = 1000, seed: int = 0, data_ports: Sequence[int] = DATA_PORTS,
-              quantum_s: float = 1e-6, Ts: Optional[float] = None) -> Dict:
+              quantum_s: float = 1e-6, Ts: Optional[float] = None, fit_methods: Sequence[str] = FIT_METHODS,
+              pilot_methods: Sequence[str] = PILOT_METHODS) -> Dict:
     """calibration.json of the calibration runs (each run a dict of measure_run's input). alpha* and U* use the
     calibrated c_y, B_ctl_bar and (T3 - T_m)/Ts of M (T3 = Ts - T1 - T2 with the calibrated T1 and T2); a
     constant that cannot be computed falls back to the DTP of the runs (c_y 1, B_ctl_bar 0, T1, T2, T_m 0) for
-    alpha* and U* and stays null in the output."""
+    alpha* and U* and stays null in the output.
+
+    The constants come from the runs of the methods `fit_methods` (Fleet-DT; a run without "method" counts as
+    Fleet-DT): the other methods of the E4 pilot load the channel differently and B2 and B9 use other data
+    bridges. The runs of `pilot_methods` give the U of B4, B6 and B7 by the rule of U* ("pilot", function
+    pilot); runs of other methods are listed in "ignored"."""
+    main = [r for r in runs if run_method(r) in fit_methods]
+    pil = [r for r in runs if run_method(r) in pilot_methods and run_method(r) not in fit_methods]
+    ignored = [{"name": r.get("name"), "method": run_method(r)} for r in runs
+               if run_method(r) not in fit_methods and run_method(r) not in pilot_methods]
+    if not main:
+        raise ValueError("no calibration run of the methods %s" % (list(fit_methods),))
+    runs = main
     ms = [measure_run(r, warm, data_ports) for r in runs]
+    for m, r in zip(ms, runs):
+        m["method"] = run_method(r)
+        if r.get("dir") is not None:
+            m["dir"] = r["dir"]
     cy = c_y_global(ms)
     out = {"version": FORMAT_VERSION,
            "params": {"warm_steps": warm, "lag_s": lag_s, "PICP_nom": target, "conf": conf, "B": B, "seed": seed,
                       "alpha_grid": [0.01, 1.0, 0.01], "U_grid": [float(O.U_GRID[0]), float(O.U_GRID[-1]), 0.01],
-                      "data_ports": list(data_ports), "quantum_s": quantum_s},
-           "c_y": cy["c_y"], "c_y_n": cy["n"], "M": {}, "C_ref": {}, "outer": {}, "runs": ms}
+                      "data_ports": list(data_ports), "quantum_s": quantum_s, "fit_methods": list(fit_methods),
+                      "pilot_methods": list(pilot_methods)},
+           "c_y": cy["c_y"], "c_y_n": cy["n"], "M": {}, "C_ref": {}, "outer": {}, "runs": ms, "ignored": ignored}
     byM: Dict[int, List[int]] = {}
     for k, m in enumerate(ms):
         byM.setdefault(int(m["M"]), []).append(k)
@@ -410,6 +543,9 @@ def calibrate(runs: Sequence[Dict], warm: int = WARM_STEPS, lag_s: float = LAG_S
             fit["scenarios"] = sorted({sc for sc, recs in dtas if sc != s and recs})
             res["left_out"][s] = fit
         out["outer"][str(M)] = res
+    out["pilot"] = pilot(pil, out, warm, target, conf, B, seed)
+    out["pilot_runs"] = [{"name": r.get("name"), "dir": r.get("dir"), "M": int(r["M"]), "scenario": r.get("scenario"),
+                          "method": run_method(r)} for r in pil]
     return out
 
 

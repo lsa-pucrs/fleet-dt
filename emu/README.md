@@ -12,7 +12,8 @@ every PHY event.
 | `run.py` | orchestrator: `build`, `image`, `up`, `sync`, `ssh`, `run`, `status`, `down`; `--slot K` for parallel sessions |
 | `fleet.py` | one Fleet-DT run of the whole stack (`run.py run` of an experiment with `"kind": "fleet"`); `--stack paper` (default) or `--stack as2` |
 | `jmcs_stub.py` | operation control stub of the paper stack: `fleet/order` (sigma_t, N(t)) every step, survey/transit every 10 s |
-| `experiments/matrix.py`, `runner.py`, `calibrate.py`, `dtp_base.json` | experiment matrix of Section VI (E0 to E4, saturation and pilot), parallel runner with a resumable manifest, calibration (rho, lambda, gamma, scores, Z of B4) |
+| `experiments/campaign.py`, `qualify.py`, `calibrate_paper.py` | campaign of the paper (E0, Cal, E1 to E5 of Table S6; see "Campaign"), qualification Q, calibration Cal |
+| `experiments/matrix.py`, `runner.py`, `calibrate.py`, `dtp_base.json` | experiment matrix of the older design (E0 to E4, saturation and pilot), parallel runner with a resumable manifest (both campaigns), calibration of the older design (rho, lambda, gamma, scores, Z of B4) |
 | `analysis/gtstep.py`, `metrics.py`, `stats.py`, `report.py` | ground truth per step, metrics of a run, statistics, hypothesis tests, LaTeX tables and PDF figures (as2 stack) |
 | `analysis/paper_post.py`, `analysis/hypotheses.py` | metrics of a paper-stack run with its per-step series; hypothesis-level driver of the paper (H1a to H6b, IUT, fixed sequence) |
 | `scenarios/gen.py`, `scenarios/S<k>-m<M>.json` | channel scenarios S1 to S5 (seeded) and their seed-1 files for M = 2, 4, 8 |
@@ -826,6 +827,16 @@ run directory under the arguments (status ok; `--include-failed` keeps the other
 | C_ref (per M, scenario) | mean of C(t) | `csub/c_t.jsonl`; the scenario is `scenario_id` of `scenario.json` |
 | alpha*, U* (per M, left-out scenario) | alpha* in {0.01, ..., 1} minimizes the one-step MSE of eq. (2) on c_y y of the DTA without the scenario; U* = largest U in {0.30, ..., 1} whose lower 95 % circular block-bootstrap bound of PICP(U) reaches 0.99 (`--target`, `--conf`, `--B`; blocks of ceil(2 tau_int) steps inside each run; `fleetdt.outer._calibrate` without the golden-section refinement) | `vms/gs/dta.jsonl`; PICP(U) with K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar and T3 = Ts - T1 - T2 of the calibrated constants of M |
 
+The constants come from the Fleet-DT runs (`--fit-methods fleetdt`; a run without `method` in result.json counts
+as Fleet-DT): the other methods of the E4 pilot load the channel differently, and B2 and B9 send on other data
+bridges. The pilot runs of B4, B6 and B7 give the U of these baselines by the rule of U\* (`pilot.<M>.<scenario>.
+<method>`, `fleetdt.calibration.pilot`): the largest U of 0.30..1 whose lower 95 % block-bootstrap bound of PICP(U)
+on their y(t) (throughput.jsonl, else the DTA) reaches PICP_nom, with the prediction of the baseline in place of
+eq. (2): B4 the constant C_ref of the (M, scenario), B6 eq. (2) with the alpha\* of the scenario, B7 its budget
+U y(t-1) T3/Ts (C_hat(t) = y(t-1) T3/(T3 - T_m)). The runs of the other pilot methods are listed in `ignored`.
+`fleetdt.calibration.lookup_pilot(cal, method, M, scenario)` returns the entry of the M, else of the largest other
+M (the pilot runs at M = 4; the E4 cell at M = 2 takes its U).
+
 T1, T2 and T_m are rounded up to 1 us. A constant whose measurement is missing in every run of its M stays null
 (each run lists its missing logs in `runs[k].missing`), and alpha*, U* then take the DTP value of that constant.
 delta_GS comes from timestamps inside the GS broker, as the supplementary material specifies: the plugin
@@ -856,9 +867,14 @@ Format of `calibration.json` (`version` 1; times in seconds, bytes per step; abb
                                      "scenarios": ["S3"]},
                               "S3": {"alpha": 0.22, "U": 0.92, "...": "...", "scenarios": ["S1"]},
                               "all": {"alpha": 0.04, "U": 0.67, "...": "...", "scenarios": ["S1", "S3"]}}}},
- "runs": [{"name": "r1", "dir": "...", "M": 2, "scenario": "S1", "w1_max": 0.012, "w2_max": 0.005,
-           "e_max": 0.0004, "reg_delay_max": 0.0003, "delta_GS": 0.0008, "B_ctl_max": 770.25, "cy_min": 0.93,
-           "C_n": 290, "missing": [], "...": "..."}],
+ "pilot": {"4": {"S3": {"B4": {"U": 0.71, "U_point": 0.74, "runs": 3, "n_y": 2880, "predictor": "C_ref",
+                               "C_ref": 301200.5, "PICP_low": {"0.30": 1.0, "...": 0.0}, "...": "..."},
+                        "B6": {"U": 0.78, "predictor": "eq. (2) with alpha*", "alpha": 0.22, "...": "..."},
+                        "B7": {"U": 0.66, "predictor": "y(t-1) T3/(T3 - T_m)", "...": "..."}}}},
+ "runs": [{"name": "r1", "dir": "...", "M": 2, "scenario": "S1", "method": "fleetdt", "w1_max": 0.012,
+           "w2_max": 0.005, "e_max": 0.0004, "reg_delay_max": 0.0003, "delta_GS": 0.0008, "B_ctl_max": 770.25,
+           "cy_min": 0.93, "C_n": 290, "missing": [], "...": "..."}],
+ "pilot_runs": [{"name": "...", "M": 4, "scenario": "S3", "method": "B4"}], "ignored": [{"name": "...", "method": "B1"}],
  "skipped": [], "created": "2026-10-21T20:05:49Z"}
 ```
 
@@ -926,6 +942,93 @@ Tests: `tests/test_emu_paper_v2.py` (24 tests; the emulator tests run with `FDT_
 the factors of the experiments (outage, R7 to R9, E5 sequence, overload, vessels, session, catch-up and
 source jitter defaults): `tests/test_paper_factors.py`.
 
+## Campaign (`experiments/campaign.py`)
+
+The generator writes the run specs (paper stack) and the manifests of every experiment of the paper except Q,
+as Table S6 of the supplementary material and Table tab:exp define them. Order of the sessions (Section VI-E),
+on the emulation host (C = campaigns, R = results):
+
+```sh
+python3 emu/experiments/qualify.py manifest --out $C/Q             # Q, 60 runs (see "Platform qualification Q")
+python3 emu/experiments/runner.py $C/Q --K 3 --retry 0 --lag-exempt S1 S2 S3 S6 S7
+python3 emu/experiments/campaign.py cal --out $C/paper             # $C/paper/E0 (26 runs), $C/paper/Cal (210)
+python3 emu/experiments/runner.py $C/paper/E0 --K 3                # E0, then emu/experiments/conformance.py RUN
+python3 emu/experiments/runner.py $C/paper/Cal --K 3
+python3 emu/experiments/calibrate_paper.py compute $R/paper-Cal --out $C/paper/calibration.json
+python3 emu/experiments/campaign.py eval --calibration $C/paper/calibration.json --out $C/paper
+for e in E1 E2 E3 E4 E5; do python3 emu/experiments/runner.py $C/paper/$e --K 3; done
+python3 emu/experiments/campaign.py merge --out $R/paper/manifest.json $C/paper/{Cal,E1,E2,E3,E4,E5}/manifest.json
+python3 emu/analysis/hypotheses.py $R/paper --manifest $R/paper/manifest.json --out $R/paper/hyp
+python3 emu/experiments/campaign.py count                          # runs per experiment (Table S6)
+```
+
+| Subcommand | Output |
+|---|---|
+| `cal --out DIR` | `DIR/E0`, `DIR/Cal` (`manifest.json`, `specs/*.json`); no calibration needed |
+| `eval --calibration calibration.json --out DIR` | `DIR/E1` .. `DIR/E5`; `DIR/E5/calibration.json` (copy, for O2, O4, O5) |
+| `count` | runs and run-equivalents per experiment, the total with Q (60) and the reruns (85, a budget): 1773 |
+| `merge --out R/manifest.json M1 M2 ...` | one manifest for `hypotheses.py`: the runs of the manifests, `dir` = the `run_dir` of the runner, the `calibration` of the eval manifests |
+
+Options of `cal` and `eval`: `--only` (experiments of the phase), `--order-seed` (20261021), `--K` (3 slots),
+`--steps` (1200), `--seed-e0` (8000), `--seed-cal` (9000), `--seed-eval` (10000), `--dtp` (dtp.json), `--sat-fps`
+(8), `--s5-M` (4), `--single-M` (4), `--C-nominal` (C0 of the DTP), `--pilot-rho` (1.5), `--m2-methods` (fleetdt
+B1 B3 B6 B7), `--m2-rho` (1.5), `--low-methods` (fleetdt B1 B3 B6), `--no-fairness-overload`, `--e5-cref` (mean,
+first), `--rho-infeasible` (floor, refuse), `--allow-missing`, `--no-validate`.
+
+Cells and runs (M = 4, Fleet-DT, 1200 steps unless stated):
+
+| Exp | Part | Cells x runs per cell | Runs |
+|---|---|---|---|
+| E0 | main | M in {2, 4} x {S1, S3} x 5, saturated, `"pcap": true` | 20 |
+| E0 | outage | M in {2, 4} x outage of 1, 3, 5 s (S1, AP to vessel 1, `"outage"`) x 1 | 6 |
+| Cal | E1, E2 | S1 x M x {idle, saturated} x 10; saturated {S1, S2, S3, S6, S7} x M x 10 (the saturated S1 cells run in both sets) | 140 |
+| Cal | idle | idle {S2, S3, S6, S7} x M x 3 | 24 |
+| Cal | S5 | S5 saturated x 10, S5 idle x 3 | 13 |
+| Cal | pilot | 11 methods in S3 at rho 1.5 of the C0 of the DTP, overload of vessel 1, x 3 | 33 |
+| E1 | main | S1 x M x {idle, saturated} x 20 | 80 |
+| E2 | main | saturated {S1, S2, S3, S6, S7} x M x 20 | 200 |
+| E2 | descriptive, queue, alpha | saturated S4, S8, S9 x 10; {q1000, codel} x {S1, S3} x 10; S3 with alpha in {alpha\*, 1} x 10 | 90 |
+| E3 | U, ablation | U in {0.6 .. 1.2} x {S1, S3} x 10 at rho 1.5; R7, R8, R9 in S3 at U\* and rho 1.5 x 10 | 190 |
+| E4 | main, M2, low, fairness | S3: 11 methods x rho {1.5, 2} x 20; M = 2: 5 methods at rho 1.5 x 20; 4 methods x rho {0.5, 1} x 12; S5 at rho 1.5, `fleet.FAIRNESS_VESSELS`, Fleet-DT and B6 x 20 | 676 |
+| E5 | main | O1 to O5 over S1, S3, S1 (130 s each, `gen.make_paper_sequence`) at rho 1.5 x 12, 3120 steps | 60 (156) |
+
+Load and rho: `idle` = the six telemetry topics only (`"vessels"`: every vessel `"video": false`; 23000 bytes per
+vessel and step); `saturated` = the video at `--sat-fps` frames per second with the frame cap of the largest trace
+frame and the source scale 1 (demand tables of 707115 bytes per step at M = 2 and 1382593 at M = 4, 2.4 and 4.6
+times the C0 of dtp.json, more than K(t) in every step; E0 and Cal need no calibration); a cell with rho:
+`video_layers.plan_for_rho` with C = C_ref of the calibration for the M and scenario (the pilot: C0 of the DTP;
+E5: the mean C_ref of its regimes), the frame rate f_v and the common scale of the stripe sizes for which the
+demand tables of the fleet sum to rho C (`campaign.video` of each spec). A rho below the smallest demand of the
+DTP (the telemetry and one message per stripe topic and step: 89900 bytes per step at M = 2, 179800 at M = 4) gets
+that smallest demand (frame rate 8, frame cap 1 byte; `"floor": true`, `rho_infeasible` of the manifest, a
+warning); rho 0.5 at M = 4 needs C_ref >= 359600 bytes per step. `--rho-infeasible refuse` stops instead.
+
+Calibrated settings (eval): `calibrate_paper.py dtp` semantics (`fleetdt.calibration.apply_to_dtp`): T1, T2, T_m,
+B_ctl_bar of M, c_y, alpha\* and U\* of the scenario of the run (the fit without it; `all` for S4, S8, S9; E5: S1);
+the generator stops when the calibration lacks the alpha\* or U\* of a cell (`--allow-missing` keeps the DTP values,
+`calibration_kept` of the manifest), the C_ref of a cell with rho, or the pilot U. E3: `"as": {"U": level}`;
+E2 alpha 1: `"as": {"alpha": 1}`; B4: `"as": {"C_ref", "U"}`; B6: `"as": {"U"}`; B7: `"feedback": {"U"}`, U from
+`lookup_pilot`; E5: `"outer": {"variant", "N_w": 480, "target"}`, O1 and O3 with `alpha0` 0.125 and `U0` 0.8, O2,
+O4 and O5 with `"calibration_file": "calibration.json"` (the runner resolves it in the manifest directory). Other
+fields of every spec: `"session"` (fleet.paper_session), the monitor, DTI and JMCS settings of Q, `"abort_lag_us":
+1000`, `"replay_subsets": true` (Cal outside the pilot, E2), `"overload"` (E4 at rho >= 1.5, the fairness cells
+included, and the pilot), `"ablation"`, `"vessels"`, and `"campaign"` (exp, part, cell, block, factors, the video
+plan). `campaign.validate` applies `fleet.paper_check` (the checks of `run_fleet_paper` before a run), the DTP
+parser of the AS on the common and per-vessel DTPs, the AS and feedback commands and the data bridges to every
+spec it writes.
+
+Blocks and order: a block holds one seed and one session slot with the runs of its cell, or of the cells of a
+within-block factor (the U levels of E3 and its ablations, the MAC queues and the alpha levels of E2, the methods
+of an E4 cell, the variants of E5), in an order seeded by (order seed, experiment, block seed). Seeds: E0 8000..,
+Cal 9000.., E1 to E5 10000.. (one per block, ranges checked for overlap; Q uses 7000..7443). The manifest lists the
+blocks in a random order of the order seed, grouped by M, with the slots 0 .. K - 1 in turn; `runner.py` runs a
+run whose `block.slot` is s only on slot s mod K (`--no-pin` ignores it). Manifest run fields: `id`, `spec`, `exp`,
+`part`, `cell`, `block` {seed, slot}, `method` (paper labels; O1 to O5 in E5), `factors` (M, scenario, rho, U,
+load, alpha, queue, ablation, fairness, regimes, regime_changes), `descriptive` (S4, S8, S9, queues, ablations, E4
+at rho <= 1), `status` "pending", `M`, `scenario`, `seed`, `Ts`, `steps`, `run_equiv`; top level `order_seed`, `K`,
+`seeds`, `options`, `calibration` (eval: `eps_s`, `T2_s` per M, `PICP_nom`, `N_w`, `C_ref` per "M/scenario", `c_y`,
+`pilot_U`, `source`). Tests: `tests/test_campaign.py`.
+
 ## Hypothesis driver (`analysis/hypotheses.py`)
 
 `python3 emu/analysis/hypotheses.py CAMPAIGN [--manifest M] [--out DIR] [--B 2000] [--seed 0]
@@ -934,7 +1037,8 @@ source jitter defaults): `tests/test_paper_factors.py`.
 `metrics.json` of `paper_post.py` in each run directory, the IUT of each hypothesis over its tested components
 and cells, and the fixed sequence H1 to H6, and writes `DIR/hypotheses.json` (components, cells, calibration
 fits, hypotheses, sequence) and `DIR/hypotheses.md` (ID, estimate, bound or p, threshold, verdict). The module
-docstring lists the test of each component. Defaults: the stratum Q(t) = 0 of H3a is descriptive (the general
+docstring lists the test of each component. The fits on the calibration DTA (alpha\*, U\*, the predictors of H5,
+DMR-hat) use the Fleet-DT runs of Cal, as `calibrate_paper.py`. Defaults: the stratum Q(t) = 0 of H3a is descriptive (the general
 condition K_y >= U K_hat >= Q is tested, on steps and on groups of 8 steps); DMR-hat(U) of H3b replays the
 calibration runs of the same M and scenario with alpha*(M, s) of the leave-scenario-out fit; H1b takes
 tau_int from the per-step count of absent vessels; H6a pools the E3 runs outside the ablations and the E4
