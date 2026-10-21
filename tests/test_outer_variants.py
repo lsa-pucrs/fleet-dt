@@ -339,3 +339,18 @@ def test_fleet_refuses_a_variant_with_fixed_parameters_or_b4(tmp_path):
         fleet.paper_outer(spec_with({"variant": "O1"}, **{"as": {"U": 0.7}}))
     with pytest.raises(SystemExit, match="Algorithm 1"):
         fleet.paper_outer(spec_with({"variant": "O1"}, method="B4", **{"as": {"C_ref": 1e5}}))
+
+
+def test_calibration_file_of_calibrate_paper_is_accepted():
+    """calibration.json of emu/experiments/calibrate_paper.py: (alpha*, U*) from "outer".<M>."left_out", the
+    "all" entry for a scenario without its own fit, and no entry with a null U*."""
+    from fleetdt import outer_variants as OV
+    cal = {"version": 1, "params": {"PICP_nom": 0.99},
+           "outer": {"4": {"left_out": {"S1": {"alpha": 0.2, "U": 0.8}, "S3": {"alpha": 0.3, "U": None},
+                                        "all": {"alpha": 0.25, "U": 0.75}}}}}
+    c = OV.validate_calibration(cal)
+    assert OV.calibration_values(c, 4, "S1") == (0.2, 0.8)
+    assert OV.calibration_values(c, 4, "S8") == (0.25, 0.75)
+    assert "S3" not in c["by_M"]["4"]
+    with pytest.raises(KeyError):
+        OV.calibration_values(c, 4, "S3")

@@ -210,7 +210,9 @@ Calibration file (another program writes it; `fleetdt.outer_variants.load_calibr
 entry holds `alpha_star` in (0, 1] (alpha\* of the scenario: the value of the grid 0.01..1 that minimizes the
 one-step MSE of eq. (2) on the calibration DTA without that scenario) and `U_star` in [0.30, 1] (U\*: the largest
 U of 0.30, 0.31, ..., 1 whose lower 95 % block-bootstrap bound of PICP(U) on that DTA reaches PICP_nom); null
-is refused. `PICP_nom` and other keys of an entry are informative and ignored.
+is refused. `PICP_nom` and other keys of an entry are informative and ignored. The file can also be the `calibration.json` of
+`emu/experiments/calibrate_paper.py compute`: its entries `outer.<M>.left_out.<scenario>` give alpha\* and U\*, a
+scenario without its own entry (S4, S8, S9) takes the entry `all`, and a scenario whose U\* is null refuses the run.
 
 Log: every record of `as.jsonl` (and the `alpha`, `U` of `fleet/as` and G(t)) holds the alpha and U of the step;
 with a variant, also `variant`, `cover` (the coverage event `[t − 1, 0 or 1]` of the previous step, null without

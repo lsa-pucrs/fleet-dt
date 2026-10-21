@@ -51,8 +51,27 @@ O3_LAG = 2                # steps between the end of a window and the start of i
 # --------------------------------------------------------------------------- calibration file
 
 
+def from_paper_calibration(cal: Dict) -> Dict:
+    """The (alpha*, U*) entries of a calibration.json of emu/experiments/calibrate_paper.py ("outer".<M>.
+    "left_out".<scenario or "all">.{"alpha", "U"}) in the format of this module; an entry with a null alpha*
+    or U* (no U of the grid reaches PICP_nom) stays out, so a variant that needs it refuses the run."""
+    by: Dict[str, Dict] = {}
+    missing: Dict[str, List[str]] = {}
+    for M, o in (cal.get("outer") or {}).items():
+        for s, e in ((o or {}).get("left_out") or {}).items():
+            if isinstance(e, dict) and e.get("alpha") is not None and e.get("U") is not None:
+                by.setdefault(str(M), {})[str(s)] = {"alpha_star": float(e["alpha"]), "U_star": float(e["U"])}
+            else:
+                missing.setdefault(str(M), []).append(str(s))
+    return {"format": CALIBRATION_FORMAT, "PICP_nom": (cal.get("params") or {}).get("PICP_nom", PICP_NOM),
+            "by_M": by, "missing": missing}
+
+
 def validate_calibration(cal: Dict) -> Dict:
-    """Checks the format of a calibration file (module docstring); returns it."""
+    """Checks the format of a calibration file (module docstring); returns it. A calibration.json of
+    emu/experiments/calibrate_paper.py (key "outer") is converted first (from_paper_calibration)."""
+    if isinstance(cal, dict) and "outer" in cal and "format" not in cal:
+        cal = from_paper_calibration(cal)
     if not isinstance(cal, dict) or cal.get("format") != CALIBRATION_FORMAT:
         raise ValueError("calibration: \"format\" must be %r" % CALIBRATION_FORMAT)
     by = cal.get("by_M")
@@ -85,7 +104,12 @@ def calibration_values(cal: Dict, M: int, scenario: str) -> Tuple[float, float]:
     by = cal["by_M"].get(str(int(M)))
     if by is None:
         raise KeyError("calibration has no entry for M = %d (has %s)" % (int(M), sorted(cal["by_M"])))
+    if str(scenario) in (cal.get("missing") or {}).get(str(int(M)), []):
+        raise KeyError("calibration has no U* for M = %d, scenario %s (no U of the grid reaches PICP_nom)"
+                       % (int(M), scenario))
     e = by.get(str(scenario))
+    if e is None:
+        e = by.get("all")      # calibrate_paper.py: the fit on every calibration scenario (S4, S8, S9)
     if e is None:
         raise KeyError("calibration has no entry for M = %d, scenario %s (has %s)" % (int(M), scenario, sorted(by)))
     return float(e["alpha_star"]), float(e["U_star"])
