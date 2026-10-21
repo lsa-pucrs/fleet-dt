@@ -20,10 +20,21 @@ Policies (--policy):
         and fleet/as carries "p": null, "p_by" and "grants" (the grants add up to max(0, U K_hat(t) - Q(t)))
 Baseline B4 is this service with --alpha 0 --C0 C_ref (constant prediction) and no outer loop.
 
+Outer-loop variants of the experiments (--outer-variant O1..O5, fleetdt.outer_variants, Table S4): the variant
+sets alpha and U (O1 fixed alpha_0, U_0 of the DTP; O2 fixed alpha*, U* of --calibration; O3 alpha and U from the
+DTA of each window of --outer-Nw steps, in the child process; O4 U +/- 0.05 from the PICP of the coverage events
+K_y(t) >= U K_hat(t) of each window; O5 alpha*, U* of each --regime). Every decision record then holds
+"variant", its "alpha" and "U", "cover" (the coverage event [t - 1, 0 or 1] of the previous step, null without
+y(t - 1)), "regime" (O5) and "outer_update" in the step where alpha or U change (O4, O5); O3 writes an
+{"event": "outer", "window": [t_first, t_last], ...} record when a window result takes effect.
+
   python -m fleetdt.as_service --dtp dtp.json --broker host:port [--epoch T0] [--log decisions.jsonl]
                                [--U u] [--alpha a] [--C0 c] [--policy alg1|b6]
                                [--outer-dta file.jsonl --outer-every steps]
                                [--outer-window W] [--outer-target 0.99]
+                               [--outer-variant O1..O5 [--outer-Nw 480] [--outer-origin S0]
+                                [--calibration cal.json --calib-M M --calib-scenario S]
+                                [--regime T0:S ...] (other options: --help)]
 """
 from __future__ import annotations
 
@@ -44,6 +55,8 @@ import uuid
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from .as_model import DTP, BacklogBook, admission, admission_b6, grant_cap, smooth
+from .outer_variants import (N_W, O3_LAG, O4_STEP, O4_U_MAX, O4_U_MIN, VARIANTS, Variant, WindowRecompute,
+                             load_calibration, make_variant)
 from .model import decode_demand, encode_levels, tcp_nodelay
 
 log = logging.getLogger("fleetdt.as")
@@ -69,16 +82,24 @@ class AS:
     timing thread calls close_phase1."""
 
     def __init__(self, dtp: DTP, epoch: float, U: Optional[float] = None, alpha: Optional[float] = None,
-                 C0: Optional[float] = None, now: Callable[[], float] = time.time, policy: str = "alg1"):
+                 C0: Optional[float] = None, now: Callable[[], float] = time.time, policy: str = "alg1",
+                 outer: Optional[Variant] = None):
         if policy in RENAMED_POLICIES:
             raise ValueError("policy %s is now %s (baseline B6 of the paper)" % (policy, RENAMED_POLICIES[policy]))
         if policy not in POLICIES:
             raise ValueError("policy must be one of %s" % ", ".join(POLICIES))
+        if outer is not None and (U is not None or alpha is not None):
+            raise ValueError("an outer-loop variant sets U and alpha itself")
         self.policy = policy
         self.dtp = dtp
         self.epoch = float(epoch)
         self.U = dtp.U if U is None else float(U)
         self.alpha = dtp.alpha if alpha is None else float(alpha)
+        # outer-loop variant O1..O5 (fleetdt.outer_variants): sets alpha and U; None: the values above
+        self.outer = outer
+        if outer is not None:
+            self.alpha, self.U = outer.alpha, outer.U
+        self._cover_ctx: Optional[Tuple[int, float, float]] = None   # (t, U(t), K_hat(t)) of the last step closed
         self.C0 = dtp.C0 if C0 is None else float(C0)
         self.now = now
         self.lock = threading.RLock()
@@ -174,6 +195,16 @@ class AS:
         with self.lock:
             if self.last_t is not None and t <= self.last_t:
                 raise ValueError("step %d already closed" % t)
+            # coverage event of step t - 1 for the outer loop: K_y(t-1) >= U(t-1) K_hat(t-1), with the y(t-1) that
+            # reached the AS (on time or late, before this close)
+            cover = None
+            if self._cover_ctx is not None and self._cover_ctx[0] == t - 1 and self._y.get(t - 1) is not None:
+                k, Uk, Kk = self._cover_ctx
+                cover = (k, self.dtp.K_y(self._y[t - 1][0]) >= Uk * Kk)
+            # outer-loop variant: may change alpha and U before eq. (2) and eq. (3) of step t
+            upd = self.outer.step(t, cover) if self.outer is not None else None
+            if upd is not None:
+                self.alpha, self.U = float(upd["alpha"]), float(upd["U"])
             # eq. (2), once per step since the last step closed; a missing or late y(k-1) keeps C_hat(k-1)
             y_used = None
             if self.last_t is None:
@@ -217,6 +248,16 @@ class AS:
                    "Qbar": {str(i): v for i, v in Qbar.items()}}
             if resets:
                 dec["bridge_reset"] = [[i, s] for i, s in resets]
+            if self.outer is not None:
+                # per-step record of the variant: its (alpha, U) are "alpha" and "U" above; "cover" is the
+                # coverage event [t - 1, 0 or 1] of the previous step (null without y(t-1))
+                dec["variant"] = self.outer.name
+                dec["cover"] = None if cover is None else [cover[0], int(cover[1])]
+                if getattr(self.outer, "regime", None) is not None:
+                    dec["regime"] = self.outer.regime
+                if upd is not None:
+                    dec["outer_update"] = upd
+            self._cover_ctx = (t, self.U, K_hat)
             self.last = dec
             if m == 0:
                 return None
@@ -249,6 +290,14 @@ class AS:
             if alpha is not None:
                 self.alpha = float(alpha)
 
+    def apply_window_result(self, res: Dict) -> Dict:
+        """O3: the (alpha, U) of the result of fleetdt.outer.outer_loop over a window take effect from the next
+        step closed. Returns the update record of the variant."""
+        with self.lock:
+            upd = self.outer.apply(res)
+            self.alpha, self.U = upd["alpha"], upd["U"]
+            return upd
+
 
 def decode_throughput(payload: bytes) -> Tuple[int, float]:
     """fleet/throughput: JSON {"t", "y", ...} or binary !Id."""
@@ -268,12 +317,15 @@ class Service:
                  U: Optional[float] = None, alpha: Optional[float] = None, log_path: Optional[str] = None,
                  outer_dta: Optional[str] = None, outer_every: int = 0, outer_window: Optional[int] = None,
                  outer_target: float = 0.99, client_id: Optional[str] = None, spin: float = 0.001,
-                 C0: Optional[float] = None, policy: str = "alg1"):
+                 C0: Optional[float] = None, policy: str = "alg1", outer_variant: Optional[Variant] = None):
         import paho.mqtt.client as mqtt
         self.mono0, self.wall0 = time.monotonic(), time.time()
         epoch = dtp.t0 if epoch is None else epoch
         self.dtp = dtp
-        self.core = AS(dtp, epoch, U=U, alpha=alpha, C0=C0, now=self.now, policy=policy)
+        self.core = AS(dtp, epoch, U=U, alpha=alpha, C0=C0, now=self.now, policy=policy, outer=outer_variant)
+        if isinstance(outer_variant, WindowRecompute) and not outer_dta:
+            raise ValueError("variant O3 needs the DTA (outer_dta)")
+        self._job_window: Optional[Tuple[int, int]] = None   # O3: (t_first, t_last) of the running job
         self.host, self.port = host, port
         self.spin = spin
         self.log_file = open(log_path, "a", encoding="utf-8") if log_path else None
@@ -364,8 +416,9 @@ class Service:
             raise TimeoutError("no SUBACK from %s:%d" % (self.host, self.port))
 
     # ------------------------------------------------------------------ outer loop
-    def _outer_start(self) -> None:
-        """Starts fleetdt.outer.run_job in a child process that writes its result to a temporary file.
+    def _outer_start(self, t_first: Optional[int] = None, t_last: Optional[int] = None) -> None:
+        """Starts fleetdt.outer.run_job in a child process that writes its result to a temporary file: over the
+        last outer_window records of the DTA, or (O3) over the steps t_first..t_last of the DTA.
         posix_spawn sets SCHED_OTHER before the exec, so a child of an AS under SCHED_FIFO never runs at
         the real-time priority; the child lowers itself to nice 10 before its imports."""
         fd, out = tempfile.mkstemp(prefix="fleetdt-outer-", suffix=".json")
@@ -376,11 +429,15 @@ class Service:
         env["PYTHONPATH"] = pkg + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
         # c_y, B_ctl_bar and (T3 - T_m)/Ts of the DTP: the PICP(U) of the outer loop compares
         # K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar with U K_hat(t)
-        args = [sys.executable, "-c", "import os, sys; os.nice(10); from fleetdt.outer import run_job; "
-                "run_job(sys.argv[1], float(sys.argv[2]), int(sys.argv[3]) or None, sys.argv[4], "
-                "float(sys.argv[5]), float(sys.argv[6]), float(sys.argv[7]))",
-                str(self.outer_dta), repr(float(self.outer_target)), str(int(self.outer_window or 0)), out,
-                repr(float(self.dtp.c_y)), repr(float(self.dtp.B_ctl_bar)), repr(self.dtp.T3m / self.dtp.Ts)]
+        kw = {"dta": str(self.outer_dta), "target": float(self.outer_target), "out": out,
+              "window": int(self.outer_window) if self.outer_window and t_first is None else None,
+              "c_y": float(self.dtp.c_y), "B_ctl_bar": float(self.dtp.B_ctl_bar), "T3_Ts": self.dtp.T3m / self.dtp.Ts,
+              "t_first": t_first, "t_last": t_last}
+        v = self.core.outer
+        if isinstance(v, WindowRecompute):
+            kw.update(target=v.target, refine=v.refine, B=v.B)
+        args = [sys.executable, "-c", "import os, sys, json; os.nice(10); from fleetdt.outer import run_job; "
+                "run_job(**json.loads(sys.argv[1]))", json.dumps(kw)]
         try:
             try:
                 pid = os.posix_spawn(sys.executable, args, env,
@@ -391,6 +448,7 @@ class Service:
             log.warning("outer loop failed: %s", e)
             return
         self._outer_pid, self._outer_out, self._outer_busy = pid, out, True
+        self._job_window = None if t_first is None else (int(t_first), int(t_last))
 
     def _outer_poll(self) -> None:
         """Takes the result of a finished child (non-blocking)."""
@@ -434,8 +492,29 @@ class Service:
         self._outer_pid, self._outer_busy = None, False
 
     def _outer_tick(self, t: int) -> None:
+        """After the close of step t: applies a finished result of the outer loop and starts the next job (O3: the
+        job of the window that ended `lag` steps before t; without a variant: every outer_every steps)."""
         self._outer_poll()
         res, self._outer_result = self._outer_result, None
+        v = self.core.outer
+        if isinstance(v, WindowRecompute):
+            if res is not None:
+                upd = self.core.apply_window_result(res)
+                self._write({"event": "outer", "variant": v.name, "t": t, "window": list(self._job_window or []),
+                             "alpha_star": res.get("alpha_star"), "U_star": res.get("U_star"), "alpha": upd["alpha"],
+                             "U": upd["U"], "mse": res.get("mse"), "n": res.get("n_y"),
+                             "n_steps": res.get("n_steps")})
+                log.info("O3 at step %d: alpha=%.4f U=%.2f", t, upd["alpha"], upd["U"])
+            due = v.job_due(t)
+            if due is not None:
+                if self._outer_busy:
+                    log.warning("O3: the job of the previous window still runs at step %d; window %s skipped", t, due)
+                    self._write({"event": "outer_skip", "variant": v.name, "t": t, "window": list(due)})
+                else:
+                    self._outer_start(*due)
+            return
+        if v is not None:      # O1, O2, O4, O5: no DTA job
+            return
         if res is not None:
             self.core.set_params(U=res.get("U_star"), alpha=res.get("alpha_star"))
             self._write({"event": "outer", "t": t, "alpha_star": res.get("alpha_star"),
@@ -528,6 +607,28 @@ def _broker(s: str) -> Tuple[str, int]:
     return host or "localhost", int(port or 1883)
 
 
+def parse_regime(s: str) -> Dict:
+    """--regime T0:SCENARIO -> {"t0": T0, "scenario": SCENARIO}."""
+    t0, sep, scen = str(s).partition(":")
+    if not sep or not scen:
+        raise ValueError("regime %r: T0:SCENARIO" % s)
+    return {"t0": float(t0), "scenario": scen}
+
+
+def build_variant(a, dtp: DTP) -> Optional[Variant]:
+    """Controller of --outer-variant from the parsed options (None without a variant)."""
+    if a.outer_variant is None:
+        return None
+    cal = load_calibration(a.calibration) if a.calibration else None
+    M = a.calib_M if a.calib_M is not None else (len(dtp.vessels) or None)
+    return make_variant(a.outer_variant, alpha0=dtp.alpha if a.outer_alpha0 is None else a.outer_alpha0,
+                        U0=dtp.U if a.outer_U0 is None else a.outer_U0, cal=cal, M=M, scenario=a.calib_scenario,
+                        regimes=[parse_regime(r) for r in a.regime], Ts=dtp.Ts, N_w=a.outer_Nw,
+                        origin=a.outer_origin, target=a.outer_target, init=a.outer_init, lag=a.outer_lag,
+                        refine=a.outer_refine, no_U=a.outer_no_U, B=a.outer_B, step=a.outer_step,
+                        U_min=a.outer_U_min, U_max=a.outer_U_max)
+
+
 def main(argv: Optional[List[str]] = None) -> None:
     ap = argparse.ArgumentParser(prog="fleetdt.as_service", description="Allocation system (AS) of Fleet-DT")
     ap.add_argument("--dtp", required=True, help="DTP file (dtp.json)")
@@ -545,7 +646,32 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--outer-dta", default=None, help="DTA file written by the VE, input of the outer loop")
     ap.add_argument("--outer-every", type=int, default=0, help="steps between runs of the outer loop")
     ap.add_argument("--outer-window", type=int, default=None, help="last W steps of the DTA used by the outer loop")
-    ap.add_argument("--outer-target", type=float, default=0.99, help="coverage target gamma of the outer loop")
+    ap.add_argument("--outer-target", type=float, default=0.99, help="nominal coverage PICP_nom of the outer loop")
+    ov = ap.add_argument_group("outer-loop variants O1..O5 (fleetdt.outer_variants; Table S4)")
+    ov.add_argument("--outer-variant", choices=VARIANTS, default=None,
+                    help="O1 fixed (alpha_0, U_0); O2 fixed (alpha*, U*); O3 alpha and U from the DTA of each window; "
+                         "O4 U +/- step from the PICP of each window; O5 (alpha*, U*) of each regime")
+    ov.add_argument("--outer-Nw", type=int, default=N_W, help="steps per window N_w (480)")
+    ov.add_argument("--outer-origin", type=int, default=None,
+                    help="first step of window 0 and time 0 of the regimes (default: the first step closed)")
+    ov.add_argument("--calibration", default=None, help="calibration file (alpha*, U* per M and scenario)")
+    ov.add_argument("--calib-M", type=int, default=None, help="M of the calibration entry (default: the DTP vessels)")
+    ov.add_argument("--calib-scenario", default=None, help="scenario of the calibration entry (O2, O4, O3 init)")
+    ov.add_argument("--outer-alpha0", type=float, default=None, help="alpha_0 of O1 and O3 (default: the DTP)")
+    ov.add_argument("--outer-U0", type=float, default=None, help="U_0 of O1 and O3 (default: the DTP)")
+    ov.add_argument("--outer-init", choices=("dtp", "calibration"), default="dtp",
+                    help="O3: values before the first window result")
+    ov.add_argument("--outer-lag", type=int, default=O3_LAG, help="O3: steps after a window before its job starts")
+    ov.add_argument("--outer-refine", action="store_true",
+                    help="O3: golden-section refinement of alpha* off the grid (off in the paper)")
+    ov.add_argument("--outer-no-U", choices=("min", "keep"), default="min",
+                    help="O3: a window without U*: the smallest U of the grid (0.30) or the U in effect")
+    ov.add_argument("--outer-B", type=int, default=1000, help="O3: bootstrap resamples")
+    ov.add_argument("--outer-step", type=float, default=O4_STEP, help="O4: change of U per window")
+    ov.add_argument("--outer-U-min", type=float, default=O4_U_MIN, help="O4: smallest U")
+    ov.add_argument("--outer-U-max", type=float, default=O4_U_MAX, help="O4: largest U")
+    ov.add_argument("--regime", action="append", default=[], metavar="T0:SCENARIO",
+                    help="O5: regime change at T0 seconds after the origin (repeat for each regime)")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
     if a.policy in RENAMED_POLICIES:
@@ -558,9 +684,16 @@ def main(argv: Optional[List[str]] = None) -> None:
     epoch = a.epoch if a.epoch is not None else dtp.t0
     print("epoch = %.3f" % epoch, flush=True)
     host, port = _broker(a.broker)
+    variant = build_variant(a, dtp)
+    if variant is not None and (a.U is not None or a.alpha is not None):
+        ap.error("--U and --alpha conflict with --outer-variant (the variant sets them)")
+    if variant is not None and a.outer_every:
+        ap.error("--outer-every conflicts with --outer-variant (O3 recomputes every --outer-Nw steps)")
     svc = Service(dtp, host, port, epoch=epoch, U=a.U, alpha=a.alpha, log_path=a.log,
                   outer_dta=a.outer_dta, outer_every=a.outer_every, outer_window=a.outer_window,
-                  outer_target=a.outer_target, C0=a.C0, policy=a.policy)
+                  outer_target=a.outer_target, C0=a.C0, policy=a.policy, outer_variant=variant)
+    if variant is not None:
+        svc._write({"event": "outer_variant", **variant.describe(), "alpha": variant.alpha, "U": variant.U})
     svc.connect()
     try:
         svc.run()

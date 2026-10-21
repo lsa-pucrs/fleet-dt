@@ -117,7 +117,7 @@ repository paths, a DTP path gets `"vessels"` = 1..M):
 | `plugin_mode`, `plugin_opts` | the mode of the method (a different mode is refused); extra `plugin_opt_<k> <v>` lines of the vessel brokers; `plugin_opts.jitter_ms` (2) is J of the regulator and of `fdt_dti` |
 | `as` | `U`, `alpha`, `C0` (override the DTP), `C_ref` (B4), `extra` (arguments of `fleetdt.as_service`) |
 | `feedback` | `U` (B7; default `as.U`, else the DTP), `m` (a fixed m; default m(t) = &#124;M(t)&#124; of the demand tables at the GS) |
-| `outer` | `every`, `window`, `target` (0.99); `dta_file`: a DTA of earlier runs (host path) instead of the DTA of the run |
+| `outer` | without `variant`: `every`, `window`, `target` (0.99); `dta_file`: a DTA of earlier runs (host path) instead of the DTA of the run. With `variant` (`O1` to `O5`): the outer-loop variants of Table S4, fields in "Outer-loop variants" below |
 | `dti` | `enabled` (true; false: the plugin publishes D_i(t), `plugin_opt_demand internal`), `offset_ms` (1), `stagger_ms` (0, added per vessel index), `idle` (8), `jitter_ms` (the J of `plugin_opts`; both must agree) |
 | `jmcs` | `period_s` (10), `first` (survey), `offset_ms` (2), `video_prefix` (video), `modes` (explicit orders) |
 | `monitor` | `offset_us` (500), `jitter_us` (0), `quant` (harvest or cumulative), `harvest_ms` (0), `sigma` (0; 0.02, 0.05), `noise_seed` (seed), `backend` (auto, c, py) |
@@ -144,6 +144,63 @@ emission time `emitted`, for the conformance check.
 RUN/ also holds `throughput.jsonl` (each published y(t) with its publication time), `counters_rx.jsonl`
 (the counter reads that reached the adapter), `monitor_adapter.log`, `emu/counters.jsonl` (every read of
 the emulator) and `vms/<host>/` (`as.jsonl`, `dta.jsonl`, `order.jsonl`, `regulator.jsonl`, broker logs).
+
+### Outer-loop variants O1 to O5 (Table S4, E5; `fleetdt/outer_variants.py`)
+
+`"outer": {"variant": "O1" | "O2" | "O3" | "O4" | "O5", ...}` runs the AS with `--outer-variant`; the variant sets
+alpha and U, so `as.U` and `as.alpha` are refused with it, and so are `every`, `window` and `dta_file`. The
+methods with the AS of Algorithm 1 (fleetdt, B5a, B5b, B7) accept a variant; B4 does not. Windows of N_w steps
+start at S0 (window k: steps S0 + k N_w to S0 + (k + 1) N_w − 1), and the regime times count from start(S0),
+the scenario time 0 of the emulator.
+
+| Variant | AS behavior |
+|---|---|
+| `O1` | fixed (alpha_0, U_0): `alpha0`, `U0`, default the `alpha` and `U` of the DTP (1/8 and 0.8) |
+| `O2` | fixed (alpha\*, U\*) of the calibration entry (`calib_M`, `calib_scenario`) |
+| `O3` | `lag` steps after the end of each window, `fleetdt.outer.run_job` (child process) over the steps of the window in `RUN/dta.jsonl`: alpha\* on the grid 0.01..1 (golden-section refinement only with `refine`), U\* the largest U of 0.30..1 whose lower 95 % block-bootstrap bound of PICP(U) reaches `target`; the result applies from the step after it arrives. Before the first result: alpha_0, U_0 of the DTP (`init` "dtp", Section IV-F) or the calibration entry (`init` "calibration"). A window without U\*: U = 0.30 (`no_U` "min") or the U in effect (`no_U` "keep"). A job still running at the next window skips that window (`outer_skip` record) |
+| `O4` | alpha = alpha\*, U starts at U\*; at the end of each window U + `step` when the PICP of the window reaches `target`, else U − `step`, clamped to [`U_min`, `U_max`]; a window without a coverage event keeps U. The coverage event of step t is K_y(t) ≥ U(t) K_hat(t), K_y(t) = c_y y(t) (T3 − T_m)/Ts − B_ctl_bar, with the y(t) that reaches the AS before the close of step t + 1 and its own U(t), K_hat(t); no DTA |
+| `O5` | oracle: at the step of each regime change, origin + floor(t0/Ts), the (alpha\*, U\*) of the calibration entry of the new regime (`calib_M`); before the first change, the values of the first regime |
+
+| Field | Meaning (default) |
+|---|---|
+| `variant` | `O1` to `O5` (case-insensitive) |
+| `N_w` | steps per window (480 = 60 s at Ts = 125 ms) |
+| `target` | PICP_nom (0.99) |
+| `calibration_file` | host path of the calibration file (O2, O4, O5, O3 with `init` "calibration"; refused otherwise); copied to `RUN/calibration.json` on the GS. The run refuses a file without the entries that the variant uses |
+| `calib_M` | M of the calibration entry (the `M` of the experiment) |
+| `calib_scenario` | scenario of the calibration entry (the first regime of `regimes`, else `scenario_id` of the experiment, else of the scenario) |
+| `alpha0`, `U0` | O1 and O3 (`init` "dtp"): the DTP values |
+| `init` (O3) | `dtp` or `calibration` (`dtp`) |
+| `lag` (O3) | steps between the end of a window and the start of its job (2: the VE closes G(t) 62.5 ms after the end of step t) |
+| `refine` (O3) | golden-section refinement of alpha\* off the grid (false) |
+| `no_U` (O3) | `min` or `keep` (`min`) |
+| `B` (O3) | bootstrap resamples (1000) |
+| `step`, `U_min`, `U_max` (O4) | 0.05, 0.30, 1.2 |
+| `regimes` (O5) | `[{"t0": seconds from start(S0), "scenario": "S1"}, ...]` (default: `"regimes"` of the scenario JSON) |
+
+Calibration file (another program writes it; `fleetdt.outer_variants.load_calibration` reads and checks it):
+
+```json
+{"format": "fleetdt-calibration/1",
+ "PICP_nom": 0.99,
+ "by_M": {"4": {"S1": {"alpha_star": 0.23, "U_star": 0.84},
+                "S3": {"alpha_star": 0.41, "U_star": 0.62}}}}
+```
+
+`format` must be `fleetdt-calibration/1`; `by_M` maps M (a decimal string) to the evaluation scenarios, and each
+entry holds `alpha_star` in (0, 1] (alpha\* of the scenario: the value of the grid 0.01..1 that minimizes the
+one-step MSE of eq. (2) on the calibration DTA without that scenario) and `U_star` in [0.30, 1] (U\*: the largest
+U of 0.30, 0.31, ..., 1 whose lower 95 % block-bootstrap bound of PICP(U) on that DTA reaches PICP_nom); null
+is refused. `PICP_nom` and other keys of an entry are informative and ignored.
+
+Log: every record of `as.jsonl` (and the `alpha`, `U` of `fleet/as` and G(t)) holds the alpha and U of the step;
+with a variant, also `variant`, `cover` (the coverage event `[t − 1, 0 or 1]` of the previous step, null without
+y(t − 1)), `regime` (O5), `outer_update` in the steps where O4 or O5 change alpha or U (O4: `window`, `PICP`, `n`),
+and O3 writes `{"event": "outer", "variant": "O3", "window": [t_first, t_last], "alpha_star", "U_star", "alpha",
+"U", ...}` when a window result takes effect; the first record is `{"event": "outer_variant", ...}` with the
+parameters. `result.json` holds `outer_variant` (the checked fields, `origin` = S0 and `regime_steps`). The
+utilization u(t) of H6b comes from the DTA (`fleetdt.analysis.step_rows`, rows `nu`: sum r_il(t) and
+K_y(t) + B_ctl_bar = c_y y(t) (T3 − T_m)/Ts, for the steps with y(t)).
 
 ### y(t) of R6 from nl80211 counters
 

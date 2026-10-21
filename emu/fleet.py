@@ -415,7 +415,8 @@ def run_fleet_as2(R, spec, a):
 
 # files whose content defines the paper stack of a run (digest in RUN/result.json "stack_files")
 PAPER_FILES = ["fleetdt/__init__.py", "fleetdt/as_service.py", "fleetdt/as_model.py", "fleetdt/model.py",
-               "fleetdt/outer.py", "fleetdt/gsconf.py", "fleetdt/monitor_adapter.py", "fleetdt/ve/*.py",
+               "fleetdt/outer.py", "fleetdt/outer_variants.py", "fleetdt/gsconf.py", "fleetdt/monitor_adapter.py",
+               "fleetdt/ve/*.py",
                "vessel/dti/*.c", "vessel/regulator/*.[ch]", "vessel/publishers/*.py", "common/*.[ch]",
                "radio/channel_monitor/fdt_chmon.c", "radio/channel_monitor/build_host.sh", "emu/fleet.py",
                "emu/run.py", "emu/jmcs_stub.py", "emu/monitor_bridge.py", "emu/ns3/*", "Makefile",
@@ -633,9 +634,77 @@ def paper_plugin_mode(spec):
     return paper_method(spec)[1]["plugin"]
 
 
-def paper_as_cmd(spec):
+OUTER_VARIANT_KEYS = ("variant", "N_w", "target", "calibration_file", "calib_M", "calib_scenario", "alpha0", "U0",
+                      "init", "lag", "refine", "no_U", "B", "step", "U_min", "U_max", "regimes")
+CALIBRATION_GS = RUN + "/calibration.json"
+
+
+def _scenario_obj(spec):
+    sc = spec.get("scenario")
+    if isinstance(sc, str):    # a repository path (run_fleet_paper loads it before the run)
+        with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), sc)) as f:
+            sc = json.load(f)
+    return sc if isinstance(sc, dict) else {}
+
+
+def paper_outer(spec):
+    """Outer-loop variant of a paper-stack experiment ("outer"."variant", fleetdt.outer_variants), checked and
+    with its defaults; None without a variant (the "every"/"window" outer loop or none). The calibration file is
+    read on the host and must hold the entries that the variant uses (M and the scenario, or every regime)."""
+    o = spec.get("outer") or {}
+    if o.get("variant") is None:
+        return None
+    from fleetdt import outer_variants as OV
+    v = str(o["variant"]).upper()
+    if v not in OV.VARIANTS:
+        raise SystemExit("outer.variant %s: one of %s" % (o["variant"], ", ".join(OV.VARIANTS)))
+    bad = sorted(set(o) - set(OUTER_VARIANT_KEYS))
+    if bad:
+        raise SystemExit("outer: %s do not apply with a variant (fields: %s)" % (bad, ", ".join(OUTER_VARIANT_KEYS)))
+    key, cfg = paper_method(spec)
+    if cfg["as"] not in ("alg1", "b6"):
+        raise SystemExit("outer.variant needs a method with the AS of Algorithm 1 (fleetdt, B5a, B5b, B6), not %s" % key)
+    a = spec.get("as") or {}
+    if a.get("U") is not None or a.get("alpha") is not None:
+        raise SystemExit("as.U and as.alpha conflict with outer.variant (the variant sets alpha and U)")
+    sc = _scenario_obj(spec)
+    regimes = o.get("regimes", sc.get("regimes"))
+    c = {"variant": v, "N_w": int(o.get("N_w", OV.N_W)), "target": float(o.get("target", OV.PICP_NOM)),
+         "calibration_file": o.get("calibration_file"), "calib_M": int(o.get("calib_M", spec["M"])),
+         "alpha0": o.get("alpha0"), "U0": o.get("U0"), "init": o.get("init", "dtp"),
+         "lag": int(o.get("lag", OV.O3_LAG)), "refine": bool(o.get("refine", False)), "no_U": o.get("no_U", "min"),
+         "B": int(o.get("B", 1000)), "step": float(o.get("step", OV.O4_STEP)),
+         "U_min": float(o.get("U_min", OV.O4_U_MIN)), "U_max": float(o.get("U_max", OV.O4_U_MAX)),
+         "regimes": [{"t0": float(r["t0"]), "scenario": str(r["scenario"])} for r in regimes or []]}
+    first = sorted(c["regimes"], key=lambda r: r["t0"])[0]["scenario"] if c["regimes"] else None
+    c["calib_scenario"] = o.get("calib_scenario") or first or spec.get("scenario_id") or sc.get("scenario_id")
+    if c["init"] not in ("dtp", "calibration") or c["no_U"] not in ("min", "keep"):
+        raise SystemExit("outer.init: dtp or calibration; outer.no_U: min or keep")
+    if v == "O5" and not c["regimes"]:
+        raise SystemExit("outer.variant O5 needs the regimes of the run (scenario \"regimes\" or outer.regimes)")
+    needs_cal = v in ("O2", "O4", "O5") or (v == "O3" and c["init"] == "calibration")
+    if needs_cal:
+        if not c["calibration_file"]:
+            raise SystemExit("outer.variant %s needs outer.calibration_file" % v)
+        try:
+            cal = OV.load_calibration(c["calibration_file"])
+            scen = sorted({r["scenario"] for r in c["regimes"]}) if v == "O5" else [c["calib_scenario"]]
+            for s_ in scen:
+                if s_ is None:
+                    raise KeyError("no scenario for the calibration entry (outer.calib_scenario)")
+                OV.calibration_values(cal, c["calib_M"], s_)
+        except (OSError, ValueError, KeyError) as e:
+            raise SystemExit("outer.calibration_file %s: %s" % (c["calibration_file"], e))
+    elif c["calibration_file"]:
+        raise SystemExit("outer.variant %s does not read a calibration file" % v)
+    return c
+
+
+def paper_as_cmd(spec, S0=None):
     """AS of the paper (Algorithm 1) with the outer loop on the DTA (fleetdt.outer); B4: --alpha 0 and
-    --C0 C_ref without the outer loop; B6: --policy b6. None for a method without the AS."""
+    --C0 C_ref without the outer loop; B6: --policy b6. None for a method without the AS. With an outer-loop
+    variant ("outer"."variant"), the variant options of fleetdt.as_service; S0, the first step of the run, is
+    the origin of the windows and of the regimes."""
     key, cfg = paper_method(spec)
     if cfg["as"] is None:
         return None
@@ -654,8 +723,30 @@ def paper_as_cmd(spec):
         c += ["--C0", repr(float(a["C0"]))]
     if cfg["as"] == "b6":
         c += ["--policy", "b6"]
+    v = paper_outer(spec)
     o = spec.get("outer") or {}
-    if o.get("every"):
+    if v is not None:
+        c += ["--outer-variant", v["variant"], "--outer-Nw", str(v["N_w"]), "--outer-target", repr(v["target"])]
+        if S0 is not None:
+            c += ["--outer-origin", str(int(S0))]
+        if v["calibration_file"]:
+            c += ["--calibration", CALIBRATION_GS, "--calib-M", str(v["calib_M"])]
+            if v["calib_scenario"] is not None:
+                c += ["--calib-scenario", str(v["calib_scenario"])]
+        if v["variant"] in ("O1", "O3"):
+            if v["alpha0"] is not None:
+                c += ["--outer-alpha0", repr(float(v["alpha0"]))]
+            if v["U0"] is not None:
+                c += ["--outer-U0", repr(float(v["U0"]))]
+        if v["variant"] == "O3":
+            c += ["--outer-dta", RUN + "/dta.jsonl", "--outer-init", v["init"], "--outer-lag", str(v["lag"]),
+                  "--outer-no-U", v["no_U"], "--outer-B", str(v["B"])] + (["--outer-refine"] if v["refine"] else [])
+        if v["variant"] == "O4":
+            c += ["--outer-step", repr(v["step"]), "--outer-U-min", repr(v["U_min"]), "--outer-U-max", repr(v["U_max"])]
+        if v["variant"] == "O5":
+            for r in v["regimes"]:
+                c += ["--regime", "%r:%s" % (r["t0"], r["scenario"])]
+    elif o.get("every"):
         c += ["--outer-dta", RUN + ("/outer_dta.jsonl" if o.get("dta_file") else "/dta.jsonl"),
               "--outer-every", str(int(o["every"])), "--outer-target", repr(float(o.get("target", 0.99)))]
         if o.get("window"):
@@ -986,6 +1077,7 @@ def run_fleet_paper(R, spec, a):
     paper_source_cmd(spec, 1, 0.0, 1.0)   # rejects an unknown source kind before the run starts
     paper_emu_args(R, spec, mon)          # rejects emu_args that the stack sets itself
     clock = paper_clock(spec)
+    ov = paper_outer(spec)                # rejects an outer-loop variant without its calibration entries
     if clock and not st.get("clock_inject"):
         raise SystemExit("clock.inject needs a session up with --clock-inject (emu/run.py up): fdt-clockinit "
                          "must leave the frequency error to the schedule")
@@ -1051,9 +1143,12 @@ def run_fleet_paper(R, spec, a):
                                                                      else r.stdout[-2000:]))
         # files of the GS that do not fit a command line
         o = spec.get("outer") or {}
-        if o.get("dta_file"):
+        if o.get("dta_file") and ov is None:
             shutil.copy(o["dta_file"], os.path.join(rd, "outer_dta.jsonl"))
             R.rsync_to(0, os.path.join(rd, "outer_dta.jsonl"), RUN + "/outer_dta.jsonl")
+        if ov is not None and ov["calibration_file"]:   # the calibration of the outer-loop variant
+            shutil.copy(ov["calibration_file"], os.path.join(rd, "calibration.json"))
+            R.rsync_to(0, os.path.join(rd, "calibration.json"), CALIBRATION_GS)
         j = spec.get("jmcs") or {}
         if j.get("modes"):
             p = os.path.join(rd, "jmcs_modes.json")
@@ -1072,6 +1167,9 @@ def run_fleet_paper(R, spec, a):
         t0 = paper_start(dtp, S0)
         t_end = paper_start(dtp, S0 + steps) + float(dtp["T1"]) + 1.5
         res.update({"S0": S0, "t0": t0, "steps": steps, "t_end_plan": t_end})
+        if ov is not None:       # the outer-loop variant, its origin S0 and its regime change steps
+            res["outer_variant"] = dict(ov, origin=S0, regime_steps=[
+                [S0 + int(math.floor(r["t0"] / Ts + 1e-9)), r["scenario"]] for r in ov["regimes"]])
         save()
         if clock:
             # E1: the oscillator schedule of each vessel, origin start(S0); fdt-clockerr.py reloads it
@@ -1122,16 +1220,16 @@ def run_fleet_paper(R, spec, a):
         if paper_feedback_cmd(spec):
             bg(R, 0, paper_feedback_cmd(spec), "fb", rt=40)
         # the run fails when the AS (methods with tables) or the VE collector (the DTA) stops early
-        watch = ["as", "ve"] if paper_as_cmd(spec) else ["ve"]
-        if paper_as_cmd(spec):
-            bg(R, 0, paper_as_cmd(spec), "as", rt=40)
+        watch = ["as", "ve"] if paper_as_cmd(spec, S0) else ["ve"]
+        if paper_as_cmd(spec, S0):
+            bg(R, 0, paper_as_cmd(spec, S0), "as", rt=40)
         if (spec.get("dti") or {}).get("enabled", True):
             for h in range(1, M + 1):
                 bg(R, h, paper_dti_cmd(spec, h), "dti", rt=45)
         dur = t_end - time.time() + 3.0
         for h in range(1, M + 1):
             bg(R, h, paper_source_cmd(spec, h, t0, dur), "src")
-        res["commands"] = {"gs": {"as": paper_as_cmd(spec), "ve": paper_ve_cmd(spec),
+        res["commands"] = {"gs": {"as": paper_as_cmd(spec, S0), "ve": paper_ve_cmd(spec),
                                   "jmcs": paper_jmcs_cmd(spec, S0), "feedback": paper_feedback_cmd(spec)},
                            "vessel_1": {"dti": paper_dti_cmd(spec, 1), "src": paper_source_cmd(spec, 1, t0, dur),
                                         "outq": paper_outq_cmd(spec, S0, steps, bridges)
