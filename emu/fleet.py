@@ -28,7 +28,9 @@ Two stacks (emu/run.py run EXP.json --stack paper|as2; default: the "stack" of t
          fails the run) and --stepBytes, with --pcap for "pcap": true (E0); "clock": {"inject": true}
          installs the oscillator schedule of each vessel (E1); "replay_subsets": true runs the C(t)
          replays after the run (E2); result.json records the CPU profile of the VMs before and after the
-         run (emu/README.md, "Paper stack").
+         run (emu/README.md, "Paper stack"). For the calibration of Section VI-E, every host runs the chrony
+         sampler emu/tools/chrony_sampler.py (RUN/chrony.jsonl, "chrony") and the GS broker loads the
+         delivery-time plugin fdt_gsstamp.so (RUN/gsdelivery.jsonl, "gs_stamp"); both are on by default.
   as2    the older model of SPEC_v2.md (fleetdt.as2.service, fleetdt.as2.opctl), described below.
 
 Every run records the git commit and a digest of the files of the stack in RUN/result.json
@@ -418,7 +420,8 @@ PAPER_FILES = ["fleetdt/__init__.py", "fleetdt/as_service.py", "fleetdt/as_model
                "radio/channel_monitor/fdt_chmon.c", "radio/channel_monitor/build_host.sh", "emu/fleet.py",
                "emu/run.py", "emu/jmcs_stub.py", "emu/monitor_bridge.py", "emu/ns3/*", "Makefile",
                "mosquitto/patches/*.patch", "system/nftables-fdt.nft", "fleetdt/feedback.py", "emu/traces/*.txt",
-               "emu/traces/stripe-shares.json", "emu/tools/outq_sampler.c", "emu/vm/guest/fdt_clock_schedule.py"]
+               "emu/traces/stripe-shares.json", "emu/tools/outq_sampler.c", "emu/vm/guest/fdt_clock_schedule.py",
+               "emu/tools/chrony_sampler.py", "mosquitto/plugins/*.[ch]"]
 PAPER_MONITOR = {"offset_us": 500, "jitter_us": 0, "quant": "harvest", "harvest_ms": 0, "sigma": 0.0,
                  "noise_seed": None, "backend": "auto"}
 # plugin_opt_jitter_ms of the regulator when the experiment gives none (fdt_preg_opts_default)
@@ -587,6 +590,11 @@ def paper_prepare_cmd(R, spec, h, M):
         vs = " ".join("--vessel %d=%s" % (i, R.host_ip(i)) for i in range(1, M + 1))
         opt = {"single": "", "b2": " --b2", "per_topic": " --per-topic %s/dtp.json" % RUN}[cfg["bridges"]]
         opt += " --feedback" if cfg["feedback"] else ""
+        if paper_gs_stamp(spec):
+            # delta_GS of the calibration: the plugin of the GS broker writes the delivery time per step
+            lines += ["make -s build/fdt_gsstamp.so MOSQ=/opt/mosquitto-2.1 > %s/make.log 2>&1" % RUN,
+                      "sha256sum build/fdt_gsstamp.so > %s/build.sha256" % RUN]
+            opt += " --stamp %s/gsdelivery.jsonl --stamp-plugin $HOME/fleet-dt/build/fdt_gsstamp.so" % RUN
         lines += ["python3 -m fleetdt.gsconf gs %s%s > %s/m.conf" % (vs, opt, RUN),
                   "echo 'log_dest file %s/mosquitto.log' >> %s/m.conf" % (RUN, RUN)]
     else:
@@ -796,6 +804,32 @@ def paper_outq_cmd(spec, S0, steps, bridges="single"):
 
 def paper_outq_enabled(spec):
     return bool((spec.get("outq") or {}).get("enabled", True))
+
+
+def paper_gs_stamp(spec):
+    """the GS broker loads fdt_gsstamp.so ("gs_stamp": {"enabled": true}, the default): RUN/gsdelivery.jsonl"""
+    return bool((spec.get("gs_stamp") or {}).get("enabled", True))
+
+
+def paper_chrony_enabled(spec):
+    return bool((spec.get("chrony") or {}).get("enabled", True))
+
+
+def paper_chrony_cmd(spec, S0, steps):
+    """sampler of the error bound of chrony (emu/tools/chrony_sampler.py) on every host: one record per step
+    S0 .. S0 + steps - 1 at start(t) + "chrony"."offset_s" (default Ts / 2) on the clock of the host, nice 10,
+    RUN/chrony.jsonl"""
+    d = spec["dtp"]
+    c = spec.get("chrony") or {}
+    off = c.get("offset_s")
+    cmd = ["nice", "-n", "10", "python3", "emu/tools/chrony_sampler.py", "--epoch", repr(paper_epoch(d)),
+           "--ts", repr(float(d["Ts"])), "--start-step", str(int(S0)), "--steps", str(int(steps)),
+           "--out", RUN + "/chrony.jsonl"]
+    if off is not None:
+        cmd += ["--offset", repr(float(off))]
+    if c.get("oneshot"):
+        cmd.append("--oneshot")
+    return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in cmd)
 
 
 def _emu_module(*parts):
@@ -1103,6 +1137,10 @@ def run_fleet_paper(R, spec, a):
         if paper_outq_enabled(spec):
             for h in range(1, M + 1):
                 bg(R, h, paper_outq_cmd(spec, S0, steps, bridges), "outq")
+        # every host: the error bound e_i(t) of chrony once per step (calibration of eps)
+        if paper_chrony_enabled(spec):
+            for h in hosts:
+                bg(R, h, paper_chrony_cmd(spec, S0, steps), "chrony")
         # GS: VE (writes the DTA), JMCS stub, fleet feedback (B3, B8, B9), AS (methods with tables);
         # vessels: DTI program and sources
         bg(R, 0, paper_ve_cmd(spec), "ve")
@@ -1124,6 +1162,7 @@ def run_fleet_paper(R, spec, a):
                            "vessel_1": {"dti": paper_dti_cmd(spec, 1), "src": paper_source_cmd(spec, 1, t0, dur),
                                         "outq": paper_outq_cmd(spec, S0, steps, bridges)
                                         if paper_outq_enabled(spec) else None},
+                           "chrony": paper_chrony_cmd(spec, S0, steps) if paper_chrony_enabled(spec) else None,
                            "adapter": paper_adapter_cmd(R, rd, mon, chmon),
                            "emulator_extra": paper_emu_args(R, spec, mon)}
         res["t_started"] = time.time()
@@ -1149,7 +1188,7 @@ def run_fleet_paper(R, spec, a):
         if started and cpu0 is not None:
             res["cpu_cores"] = R.cpu_report(cpu0, R.cpu_snapshot(st))
         # sampler, sources, DTI, stub, feedback, AS, VE; then the brokers (the plugin writes its logs on exit)
-        for proc in ("outq", "src", "dti", "jmcs", "fb", "as", "ve"):
+        for proc in ("outq", "chrony", "src", "dti", "jmcs", "fb", "as", "ve"):
             R.parallel(lambda h: R.ssh(h, "[ -f {r}/{n}.pid ] && kill -TERM -- -$(cat {r}/{n}.pid) 2>/dev/null; true".format(
                 r=RUN, n=proc), timeout=20), hosts)
         time.sleep(0.5)

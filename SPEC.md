@@ -54,8 +54,8 @@ Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Ve
 | `Ts`, `T1`, `T2` | Step and phase durations in seconds; `T3 = Ts - T1 - T2` |
 | `alpha`, `U`, `C0` | Gain of eq. (2), target utilization, initial prediction (bytes per step) |
 | `c_y` | Optional (default 1): smallest ratio C(t)/y(t) of a saturation test, in (0, 1]; eq. (2) smooths c_y y(t-1) (`fleetdt.analysis.calibrate_c_y`) |
-| `T_m` | Optional (default 0 s): margin of phase 3, T_m = eps + delta_GS (eps = 2 max chrony max error + 1 ms, delta_GS = largest delivery time of the GS broker measured in Q); K_hat(t) = C_hat(t) (T3 - T_m) / Ts. TODO: no measurement of the two terms exists yet, so every DTP of the repository leaves it at 0 (`fleetdt.analysis.calibrate_margins`) |
-| `B_ctl_bar` | Optional (default 0 bytes): largest bytes of control traffic outside the data bridges in phase 3 of a calibration step; used by the fidelity metrics only (K_y(t)). TODO as for T_m |
+| `T_m` | Optional (default 0 s): margin of phase 3, T_m = eps + delta_GS (eps = 2 max chrony error bound + 1 ms + the largest delay of the vessel regulator at a phase boundary, delta_GS = largest delivery time of the GS broker); K_hat(t) = C_hat(t) (T3 - T_m) / Ts. The calibration (`emu/experiments/calibrate_paper.py`, emu/README.md) computes it per M with T1 and T2; the DTPs of the repository leave it at 0 until a calibration DTP replaces them |
+| `B_ctl_bar` | Optional (default 0 bytes): largest bytes of control traffic outside the data bridges in phase 3 of a calibration step; used by the fidelity metrics only (K_y(t)); calibrated as T_m |
 | `c_b`, `c_m` | Optional coefficients of the bound c(x, n) = c_b x + c_m n of eq. (5) (channel bytes of n messages with x content bytes). Without them, the readers of the paper stack (`common/fdt_paper.c`, `fleetdt/as_model.py`, `vessel/publishers/video_layers.py`) compute the cost bound of the paper (eq. cons) per topic: c_b = 1 + 2 (h_T + h_W) / MSS, c_k = 2 (h_T + h_W) (the last segment of the message and its TCP acknowledgment; QoS 0 has no MQTT acknowledgment), c_m,l = c_b h_P,l + c_k, h_P,l the PUBLISH header of boat/b\<V\>/tx/\<name\> (QoS 0, no packet identifier). An optional `c_k` overrides c_k. `dtp.json` gives none of them |
 | `tcp`, `mqtt` | MSS and h_T (largest TCP/IP header of a segment, options included; 1448, 80), h_A (bytes of one MQTT control packet; 4; outside the cost bound since the data bridges use QoS 0) |
 | `R_PHY`, `h_W` | Bit rate of the radios (bit/s) and fixed bytes per frame at R_PHY (DIFS or AIFS, mean backoff, PHY preamble and header, signal extension, MAC header, LLC, FCS, SERVICE and tail bits, mean OFDM padding, SIFS, MAC ACK); derivation in emu/README.md, "Fixed bytes per frame h_W" |
@@ -80,7 +80,10 @@ Algorithm 1 to vessel i in s_i (Qbar_i = 0 for a vessel that never reported): a 
 and forwards nothing new, so its bytes still queued stay within Qbar_i(t); b(t) = max(0, U K̂(t) - Q(t)) / m(t);
 Algorithm 1 over sigma_t: level 2 for a needed topic that fits, 1 for another topic that fits, 0 otherwise. The
 decision log and `fleet/as` hold `K_hat` (without U), `cap` = max(0, U K̂(t) - Q(t)) = m(t) b(t), `Q`, `Q_M`,
-`Q_out`, `Qi`, `Qbar` and, after a state message of a data bridge (Section 4), `bridge_reset`.
+`Q_out`, `Qi`, `Qbar` and, after a state message of a data bridge (Section 4), `bridge_reset`. The decision log also
+holds `d_at` (arrival of each demand table of M(t), seconds after start(t) on the GS clock) and one line
+`{"event": "demand_late", "t", "i", "w"}` per table that arrived at or after start(t) + T1 (w(t) of the calibration
+of T1).
 
 A raw message belongs to step t when it reaches the vessel regulator in the interval
 `[start(t-1) + T1 + T2, start(t) + T1 + T2)`, so the vessel regulator forwards no message between
@@ -100,7 +103,7 @@ Prefix `boat/b<i>/` with the vessel index i (1..M). All binary fields in network
 | `fleet/order` | GS | operation control software | 0 | JSON `{"t":…, "order":[names], "needed":[names]}` |
 | `fleet/throughput` | GS (from the GS radio) | channel monitor | 0 | JSON `{"t":…, "y":bytes, "Tb":s, "To":s}` |
 | `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "cap":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…], "a":{…}, "A":…, "Q":…, "Q_M":…, "Q_out":…, "Qi":{…}, "Qbar":{…}}` (topic indices from 1) |
-| `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "bq", "n", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `bq`, `n` = Q_i(t) of the demand table and the o_i(t), its part in the output queue of the broker (-1 unknown) and n_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |
+| `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "bq", "n", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `late_p1_us` = delay of phase 1 (demand internal; -1 otherwise); `p_rx_us` = arrival of p(t) before v(t), microseconds after start(t) on the vessel clock (null without a table), `p_late_us` = arrival of a table after v(t) within the step (withheld; null otherwise); `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `bq`, `n` = Q_i(t) of the demand table and the o_i(t), its part in the output queue of the broker (-1 unknown) and n_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |
 
 The video publisher splits each JPEG frame into messages of at most `bound` bytes; the content of
 each message starts with an 8-byte header `frame:u32, k:u16, n:u16` (index of the frame, index of the

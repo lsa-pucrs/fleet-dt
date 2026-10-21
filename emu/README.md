@@ -74,8 +74,8 @@ The paper stack runs the model of the paper (Sections III to V):
 
 | Host | Programs (per run) |
 |---|---|
-| GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel; B2 three data bridges, B10 one per topic), the AS `fleetdt.as_service` (methods with tables; Algorithm 1 or `--policy b7`, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA, in a child process), the fleet feedback `fleetdt.feedback` (B3, B8, B9; `feedback.jsonl`), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`) |
-| vessel VM i | `RUN/dtp_vessel.json` = `video_layers.py resolve` of the DTP for vessel i (rates and bounds of the layer topics from its `size_scale`); Mosquitto with `fdt_regulator.so` in the mode of the method, `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_step_log RUN/regsteps.jsonl` (step summaries: p, d, rx, fwd, held, cost per topic), `plugin_opt_demand external`, `plugin_opt_jitter_ms J`; the v1 DTI program `build/fdt_dti --jitter-ms J` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the stripe video source `vessel/publishers/fdt_source.py` (frame sizes of a trace times the stripe shares, `src.jsonl`), or `raw_load.py`, or `"source": {"cmd": ...}`; the sampler `build/fdt_outq` (SIOCOUTQ of the bridge sockets, `RUN/outq.jsonl`, built by the preparation from `emu/tools/outq_sampler.c`, started after the bridges connect, steps S0 .. S0 + steps) |
+| GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel; B2 three data bridges, B10 one per topic), the AS `fleetdt.as_service` (methods with tables; Algorithm 1 or `--policy b7`, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA, in a child process), the fleet feedback `fleetdt.feedback` (B3, B8, B9; `feedback.jsonl`), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`); the plugin `fdt_gsstamp.so` of the GS broker (built by the preparation from `mosquitto/plugins/`; per step the largest time from the reception of an uplink message of a data bridge to its delivery to a subscriber, `gsdelivery.jsonl`); the chrony sampler `emu/tools/chrony_sampler.py` (`chrony.jsonl`) |
+| vessel VM i | `RUN/dtp_vessel.json` = `video_layers.py resolve` of the DTP for vessel i (rates and bounds of the layer topics from its `size_scale`); Mosquitto with `fdt_regulator.so` in the mode of the method, `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_step_log RUN/regsteps.jsonl` (step summaries: p, d, rx, fwd, held, cost per topic), `plugin_opt_demand external`, `plugin_opt_jitter_ms J`; the v1 DTI program `build/fdt_dti --jitter-ms J` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the stripe video source `vessel/publishers/fdt_source.py` (frame sizes of a trace times the stripe shares, `src.jsonl`), or `raw_load.py`, or `"source": {"cmd": ...}`; the sampler `build/fdt_outq` (SIOCOUTQ of the bridge sockets, `RUN/outq.jsonl`, built by the preparation from `emu/tools/outq_sampler.c`, started after the bridges connect, steps S0 .. S0 + steps); the chrony sampler `emu/tools/chrony_sampler.py` (e_i(t) once per step, `chrony.jsonl`, nice 10) |
 | host | emulator with the ground truth and the nl80211 counter export (`--cnt`, `--cntDst` = 127.0.0.1:9650+K), `fleetdt.monitor_adapter` (y(t) on `fleet/throughput` through 127.0.0.1:2883+K), monitor bridge and capture (ground truth), clock probe |
 
 Steps are 0-based on every program of this stack: start(t) = epoch + t Ts (the DTP epoch; null =
@@ -122,6 +122,8 @@ repository paths, a DTP path gets `"vessels"` = 1..M):
 | `abort_lag_us` | lag at which the emulator stops the run (`--abortLagUs`, default 1000; 0 records only, as in Q); the emulator always runs with `--phaseLag` (Ts:T1:T2 of the DTP) and `--stepBytes`; an emulator that exits early (status 3: lag abort) or reports `phase_lag.aborted` fails the run; `emu_args` may not repeat these options |
 | `pcap` | true: `--pcap=1`, the emulator writes `RUN/emu/ap.pcap` (IPv4 packets between the AP node and the GS; E0 conformance) |
 | `outq` | `enabled` (true), `fifo` (SCHED_FIFO priority of the sampler) |
+| `chrony` | `enabled` (true): `emu/tools/chrony_sampler.py` on every host, one record per step S0 .. S0 + steps - 1 at start(t) + `offset_s` (Ts / 2) on the clock of the host; `oneshot` (false: one `chronyc -c -n` process answers every query) |
+| `gs_stamp` | `enabled` (true): the GS broker loads `fdt_gsstamp.so` (`fleetdt.gsconf gs --stamp RUN/gsdelivery.jsonl`) |
 | `clock` | E1: `{"inject": true, "ramp_ppm", "ramp_s", "hold_s", "loss_n", "loss_s", "loss_windows", "warm_s", "seed"}`: per vessel `fdt_clock_schedule.make(...)` with the origin at start(S0) and ppm0 = the frequency error of the vessel in the session, installed at `/etc/fleetdt/clock-schedule.json` before the emulator starts, `/var/log/fdt-clockerr.jsonl` copied to `RUN/clockerr.jsonl` after the run, the schedule removed; needs a session up with `--clock-inject` |
 | `replay_subsets`, `replay_jobs` | E2: after the run, `emu/replay_subsets.py RUN --jobs J` (default 4) on the auxiliary CPUs (`replay_subsets.log`, `result.json` "replay_subsets") |
 | `stack_commit` | refuse the run unless the checkout is this commit and the files of the stack are unchanged |
@@ -138,6 +140,12 @@ QEMU process before and after the run), `clock` (E1), `emu_exit` and `replay_sub
 `phase_lag`, `qdisc`, `conf`, `pcap` and `step_bytes` of `emu/summary.json`. The AS log `as.jsonl` holds
 `D` (the demand tables of M(t)) and `y_used` (the y(t - 1) of eq. (2)), and each G(t) of `dta.jsonl` its
 emission time `emitted`, for the conformance check.
+For the calibration (Section VI-E of the paper): each decision of `as.jsonl` holds `d_at` (arrival of each demand
+table of M(t), seconds after start(t) on the GS clock), and a table that arrives at or after start(t) + T1 gives
+a line `{"event": "demand_late", "t", "i", "w"}`; each step of `regsteps.jsonl` holds `p_rx_us` (arrival of p(t)
+before v(t), microseconds after start(t) on the vessel clock; null without a table) and `p_late_us` (arrival of a
+table after v(t) within the step, withheld; null otherwise); `chrony.jsonl` of every host holds e_i(t) per step
+and `vms/gs/gsdelivery.jsonl` the delivery time of the GS broker per step (format in the calibration section).
 RUN/ also holds `throughput.jsonl` (each published y(t) with its publication time), `counters_rx.jsonl`
 (the counter reads that reached the adapter), `monitor_adapter.log`, `emu/counters.jsonl` (every read of
 the emulator) and `vms/<host>/` (`as.jsonl`, `dta.jsonl`, `order.jsonl`, `regulator.jsonl`, broker logs).
@@ -688,18 +696,75 @@ bytes in its data bridge at every 1-ms sample of phase 3, with samples covering 
 phase 3). Cost: a short run of 80 steps at M = 4 (S3, spectrum) took 4-5 s per set offline on this
 2-core machine (37 s for the 15 sets with 2 jobs); 1200 steps take about 70 s per set.
 
-### Calibration of c_y, T_m and B_ctl_bar (DTP fields)
+### Calibration Cal (Section VI-E of the paper; `experiments/calibrate_paper.py`)
 
-`python -m fleetdt.analysis calibrate RUN [RUN ...]` sets c_y = smallest C(t)/y(t) of the saturation runs
-(C(t) of `RUN/csub/c_t.jsonl`, y(t) of `RUN/throughput.jsonl`, capped at 1); the AS smooths c_y y(t-1) in
-eq. (2). T_m = eps + delta_GS (eps = 2 max chrony max error + 1 ms, delta_GS = largest delivery time of the GS
-broker measured in Q) shortens phase 3 in K_hat(t) = C_hat(t) (T3 − T_m)/Ts, and B_ctl_bar = largest bytes
-outside the data bridges in phase 3 of a calibration step enters K_y(t) of the fidelity metrics. The tool
-reads these three measurements from `RUN/calib.json` (lists `chrony_max_error_s`, `gs_delivery_s`,
-`ctl_bytes_phase3`). TODO: no run logs them yet (the runs keep `chronyc tracking` before the run and the
-clock offsets of the probe, not the max error of chrony; the GS records no delivery time and no control
-bytes per phase), so `dtp.json` and `experiments/dtp_base.json` leave T_m = 0 and B_ctl_bar = 0 (the
-defaults, which give the grant of the model before the revision) and c_y = 1 until a calibration sets them.
+`python3 emu/experiments/calibrate_paper.py compute DIR [DIR ...] --out calibration.json` reads every paper-stack
+run directory under the arguments (status ok; `--include-failed` keeps the others) and computes, with
+`fleetdt/calibration.py`, after the warm-up (`--warm`, 240 steps after S0):
+
+| Constant | Rule | Measurement (file of the run) |
+|---|---|---|
+| T1 (per M) | max_t w1(t) + eps | w1(t): largest `d_at` of the decision and `w` of the `demand_late` lines of step t (`vms/gs/as.jsonl`), GS clock |
+| T2 (per M) | max_t w2(t) + eps | w2(t) = max over M(t) of `p_rx_us` (else `p_late_us`) / 1e6 - T1 - (theta_i(t) - theta_0(t)) (`vms/v<i>/regsteps.jsonl`, T1 of the run, probe offsets of `clock.csv` at start(t)) |
+| eps (per M) | 2 max_{i,t} e_i(t) + 1 ms (`--lag-ms`) + max regulator delay | e_i(t) = \|System time\| + root dispersion + root delay / 2 of `chronyc tracking` (`vms/<host>/chrony.jsonl`, GS and vessels); regulator delay = max(`late_us`, `late_p1_us`) of `regsteps.jsonl` |
+| delta_GS (per M) | largest delivery time | `max_us` of `vms/gs/gsdelivery.jsonl` |
+| T_m (per M) | eps + delta_GS | |
+| B_ctl_bar (per M) | max_t B_ctl(t) | `emu/gt.bin` (or `gt.bin.zst`, through `zstd -dc`): TX records of IPv4 data frames (kind 0, ip_len > 0) of the AP and the vessels (nodes 0..M) with no port in `--data-ports` (1884, 1885, 1886) whose start, host clock + theta_0, falls in phase 3 of step t; each frame counts ip_len + h_W bytes, the unit of C(t) of `replay_subsets.py` |
+| c_y (global) | min{1, min_t C(t)/y(t)} over every run | `csub/c_t.jsonl`, `throughput.jsonl` (else the DTA) |
+| C_ref (per M, scenario) | mean of C(t) | `csub/c_t.jsonl`; the scenario is `scenario_id` of `scenario.json` |
+| alpha*, U* (per M, left-out scenario) | alpha* in {0.01, ..., 1} minimizes the one-step MSE of eq. (2) on c_y y of the DTA without the scenario; U* = largest U in {0.30, ..., 1} whose lower 95 % circular block-bootstrap bound of PICP(U) reaches 0.99 (`--target`, `--conf`, `--B`; blocks of ceil(2 tau_int) steps inside each run; `fleetdt.outer._calibrate` without the golden-section refinement) | `vms/gs/dta.jsonl`; PICP(U) with K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar and T3 = Ts - T1 - T2 of the calibrated constants of M |
+
+T1, T2 and T_m are rounded up to 1 us. A constant whose measurement is missing in every run of its M stays null
+(each run lists its missing logs in `runs[k].missing`), and alpha*, U* then take the DTP value of that constant.
+delta_GS comes from timestamps inside the GS broker, as the supplementary material specifies: the plugin
+`mosquitto/plugins/fdt_gsstamp.c` takes CLOCK_MONOTONIC at MOSQ_EVT_MESSAGE_IN (the broker has read the whole
+PUBLISH of the data bridge) and at MOSQ_EVT_MESSAGE_OUT (the broker writes the PUBLISH to a subscriber) and
+matches them by topic and step header (t, s). The alternative from the ground truth (reception at the AP against
+the reception of the VE) would need the TCP payload of every frame to find the end of each message, which
+`gt.bin` does not hold. Line of `gsdelivery.jsonl` (one per step t of the step header):
+`{"t": 812, "n_in": 120, "n_out": 240, "unmatched": 0, "max_us": 412.3, "mean_us": 51.0}` (`max_us` null
+without a matched delivery). Line of `chrony.jsonl`: `{"t", "at", "sys", "last", "root_delay", "root_disp",
+"e", "stratum", "leap"}` (seconds; `{"t", "at", "error"}` when chronyd gave no report).
+
+Format of `calibration.json` (`version` 1; times in seconds, bytes per step; abbreviated):
+
+```json
+{"version": 1,
+ "params": {"warm_steps": 240, "lag_s": 0.001, "PICP_nom": 0.99, "conf": 0.95, "B": 1000, "seed": 0,
+            "alpha_grid": [0.01, 1.0, 0.01], "U_grid": [0.3, 1.0, 0.01], "data_ports": [1884, 1885, 1886],
+            "quantum_s": 1e-06},
+ "c_y": 0.93, "c_y_n": 580,
+ "M": {"2": {"T1": 0.0141, "T2": 0.0071, "eps": 0.0021, "delta_GS": 0.0008, "T_m": 0.0029, "B_ctl_bar": 970.25,
+             "w1_max": 0.012, "w2_max": 0.005, "e_max": 0.0004, "reg_delay_max": 0.0003, "lag_s": 0.001,
+             "runs": 2, "w2_missing": 0, "w1_incomplete": 0}},
+ "C_ref": {"2": {"S1": 305326.2, "S3": 303710.4}},
+ "outer": {"2": {"T3_Ts": 0.8072, "c_y": 0.93, "B_ctl_bar": 970.25,
+                 "left_out": {"S1": {"alpha": 0.03, "U": 0.65, "U_point": 0.67, "mse": 1.48e9, "block": 1,
+                                     "runs": 1, "n_y": 290, "PICP_low": {"0.30": 1.0, "...": 0.0},
+                                     "scenarios": ["S3"]},
+                              "S3": {"alpha": 0.22, "U": 0.92, "...": "...", "scenarios": ["S1"]},
+                              "all": {"alpha": 0.04, "U": 0.67, "...": "...", "scenarios": ["S1", "S3"]}}}},
+ "runs": [{"name": "r1", "dir": "...", "M": 2, "scenario": "S1", "w1_max": 0.012, "w2_max": 0.005,
+           "e_max": 0.0004, "reg_delay_max": 0.0003, "delta_GS": 0.0008, "B_ctl_max": 770.25, "cy_min": 0.93,
+           "C_n": 290, "missing": [], "...": "..."}],
+ "skipped": [], "created": "2026-10-21T20:05:49Z"}
+```
+
+`outer.<M>.left_out.<s>` holds alpha* (`alpha`) and U* (`U`, null when no U of the grid reaches PICP_nom) fitted
+on the calibration DTA of M without scenario s; `all` is the fit on every calibration scenario, for an evaluation
+scenario without calibration runs (S4, S8, S9). `PICP_low` gives the lower bound of PICP(U) per U of the grid,
+`scenarios` the scenarios of the fit. An AS variant that needs (alpha*, U*) of a run (O2; O5 at each change of
+regime) reads `fleetdt.calibration.lookup_outer(cal, M, scenario)`, which returns the `left_out` entry of the
+scenario when it exists, else `all`.
+
+`python3 emu/experiments/calibrate_paper.py dtp --calibration calibration.json --dtp dtp.json --M 4 --scenario S3
+--out dtp-m4-S3.json` writes the DTP of the evaluation runs: T1, T2, T_m and B_ctl_bar of M, c_y, and `alpha`
+and `U` of `lookup_outer`, plus `"calibration": {"M", "scenario", "left_out"}`; a null constant keeps the field of
+the base DTP (the tool lists it), and a DTP with T1 + T2 + T_m >= Ts is refused.
+
+`python -m fleetdt.analysis calibrate RUN [RUN ...]` (older) reads the measurements as lists from `RUN/calib.json`
+(`chrony_max_error_s`, `gs_delivery_s`, `ctl_bytes_phase3`, `reg_delay_s`) and c_y from `csub/`; `dtp.json` and
+`experiments/dtp_base.json` keep T_m = 0, B_ctl_bar = 0 and c_y = 1 until a calibration DTP replaces them.
 
 ## Vessel sampler of SIOCOUTQ (`emu/tools/outq_sampler.c`, `emu/tools/outq.py`)
 

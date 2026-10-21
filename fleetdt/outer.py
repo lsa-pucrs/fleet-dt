@@ -442,15 +442,16 @@ def backlog_series(records: Iterable[Dict]) -> np.ndarray:
 
 def _calibrate(runs: Sequence[Tuple], C0s: Sequence[float], target: float,
                alpha: Optional[float], U_grid, conf: float, B: int, block: Optional[int], seed: int,
-               T3_Ts: float, c_y: float = 1.0, B_ctl_bar: float = 0.0) -> Dict:
+               T3_Ts: float, c_y: float = 1.0, B_ctl_bar: float = 0.0, refine: bool = True) -> Dict:
     """runs: (y, C_hat recorded), (y, C_hat recorded, f) or (y, C_hat recorded, f, Q) per run, f = fill_series
-    and Q = backlog_series of the run. Eq. (2) smooths c_y y, so alpha* fits the replay to c_y y."""
+    and Q = backlog_series of the run. Eq. (2) smooths c_y y, so alpha* fits the replay to c_y y. refine False
+    keeps alpha* on the grid 0.01..1 (the calibration of Section VI-E; True adds the golden-section refinement)."""
     ys = [r[0] for r in runs]
     zs = [c_y * np.asarray(y, dtype=float) for y in ys]
     fills = [r[2] if len(r) > 2 else None for r in runs]
     Qs = [r[3] if len(r) > 3 else None for r in runs]
     if alpha is None:
-        a_star, m_star = fit_alpha_runs(zs, C0s)
+        a_star, m_star = fit_alpha_runs(zs, C0s, refine=refine)
     else:
         a_star, m_star = float(alpha), float(mse_runs(zs, C0s, [alpha])[0])
     rep = [(y, replay(z, [a_star], C0)[:, 0]) for y, z, C0 in zip(ys, zs, C0s)]

@@ -4,7 +4,24 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- calibration Cal of Section VI-E: `emu/experiments/calibrate_paper.py compute` writes calibration.json with T1,
+  T2, eps, delta_GS, T_m and B_ctl_bar per M, the global c_y, C_ref per (M, scenario) and alpha*, U* per (M,
+  left-out scenario) from the logs of the calibration runs (`fleetdt/calibration.py`); `calibrate_paper.py dtp`
+  writes these constants into the DTP of an evaluation run
+- AS log: `d_at` (arrival of each demand table, seconds after start(t)) in each decision and `demand_late` lines
+  for the tables after start(t) + T1 (w1(t))
+- regulator step log: `p_rx_us` and `p_late_us`, the arrival of p(t) on the vessel clock (w2(t))
+- `emu/tools/chrony_sampler.py`: the error bound of chrony (|System time| + root dispersion + root delay / 2)
+  once per step on every host of a run (`chrony.jsonl`)
+- GS broker plugin `fdt_gsstamp.so` (`mosquitto/plugins/`, `fleetdt.gsconf gs --stamp`): the delivery time of
+  each uplink message of the data bridges, per step (`gsdelivery.jsonl`), and its C unit test
+- `fleetdt.outer._calibrate(refine=False)`: alpha* on the grid 0.01..1 only
+
 ### Changed
+
+- eps of `fleetdt.analysis.calibrate_margins` adds the largest delay of the vessel regulator at a phase boundary
 
 - fidelity: the mean absolute scaled error (MASE, Hyndman and Koehler 2006) replaces the MAPE; the scale is
   the error of the last-value predictor c_y y(t-1) over the same steps, so smoothing with alpha = 1 gives 1

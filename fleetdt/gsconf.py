@@ -32,6 +32,11 @@ for M = 4, L = 22).
 Fleet feedback (--feedback): the control bridges also carry fleet/feedback out (QoS 0), the feedback of
 fleetdt/feedback.py for the regulator modes paper_b3, b8 and paper_tdma.
 
+Delivery time of the GS broker (gs --stamp LOG [--stamp-plugin PATH]): the GS broker loads the plugin
+fdt_gsstamp.so (mosquitto/plugins/fdt_gsstamp.c), which writes per step the largest time between the
+reception of an uplink message of a data bridge and its delivery to a subscriber (delta_GS of the
+calibration, Section VI-E of the paper) to LOG.
+
 Paper stack (vessel --mode paper and its variants): --demand external makes the regulator police to the
 D_i(t) of the DTI program fdt_dti, and --jitter-ms J writes plugin_opt_jitter_ms J; the DTI program must
 run with the same --jitter-ms J (paper_jitter_ms of emu/fleet.py passes the same value to both).
@@ -91,9 +96,11 @@ def bridge_count(M: int, b2: bool = False, per_topic: Optional[Sequence[str]] = 
 def gs_conf(vessels: Dict[int, str], listen: str = "0.0.0.0:1883", ctl_port: int = 1883, data_port: int = 1884,
             log: Optional[List[str]] = None, keepalive: int = 10,
             b2: bool = False, per_topic: Optional[Sequence[str]] = None, feedback: bool = False,
-            data_qos: int = 0) -> str:
+            data_qos: int = 0, stamp: Optional[str] = None,
+            stamp_plugin: str = "/opt/fleet-dt/lib/fdt_gsstamp.so") -> str:
     """Configuration of the GS broker. data_qos is the QoS of the subscriptions of the data bridges: 0 for the
-    paper stack (both levels with QoS 0, SPEC.md Section 4), 2 for the as2 stack; the control bridges use QoS 0."""
+    paper stack (both levels with QoS 0, SPEC.md Section 4), 2 for the as2 stack; the control bridges use QoS 0.
+    stamp: log file of the delivery-time plugin stamp_plugin (fdt_gsstamp.so; None: no plugin)."""
     if b2 and per_topic:
         raise ValueError("--b2 and --per-topic exclude each other")
     if data_qos not in (0, 1, 2):
@@ -104,6 +111,8 @@ def gs_conf(vessels: Dict[int, str], listen: str = "0.0.0.0:1883", ctl_port: int
            "listener %d %s" % (port, host), COMMON.rstrip()]
     for lt in log or ["error", "warning", "notice"]:
         out.append("log_type %s" % lt)
+    if stamp:
+        out += ["plugin %s" % stamp_plugin, "plugin_opt_log %s" % stamp]
     for i in sorted(vessels):
         addr, cp, dp = (vessels[i].split(",") + ["", ""])[:3]   # "ADDRESS" or "ADDRESS,CTL_PORT,DATA_PORT"
         cp, dp = int(cp or ctl_port), int(dp or data_port)
@@ -195,6 +204,9 @@ def main(argv: Optional[List[str]] = None) -> None:
                    help="the control bridges carry fleet/feedback (regulator modes paper_b3, b8, paper_tdma)")
     g.add_argument("--data-qos", type=int, choices=(0, 1, 2), default=0,
                    help="QoS of the data bridge subscriptions (0: paper stack, default; 2: as2 stack)")
+    g.add_argument("--stamp", default=None, metavar="LOG",
+                   help="load the delivery-time plugin fdt_gsstamp.so; LOG: its JSON lines per step")
+    g.add_argument("--stamp-plugin", default="/opt/fleet-dt/lib/fdt_gsstamp.so", help="path of fdt_gsstamp.so")
     v = sub.add_parser("vessel", help="configuration of a vessel broker")
     v.add_argument("--vessel", type=int, required=True)
     v.add_argument("--dtp", default="/etc/fleetdt/dtp.json")
@@ -225,7 +237,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             vessels[int(i.lstrip("b"))] = addr
         sys.stdout.write(gs_conf(vessels, a.listen, a.ctl_port, a.data_port, b2=a.b2,
                                  per_topic=dtp_topics(a.per_topic) if a.per_topic else None, feedback=a.feedback,
-                                 data_qos=a.data_qos))
+                                 data_qos=a.data_qos, stamp=a.stamp, stamp_plugin=a.stamp_plugin))
     else:
         sys.stdout.write(vessel_conf(a.vessel, a.dtp, a.plugin, a.port, a.data_port, a.bind,
                                      b2=a.b2 or a.mode in ("b2", "paper_b2"),

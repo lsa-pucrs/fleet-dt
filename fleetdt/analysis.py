@@ -60,10 +60,11 @@ H1 -> H2 -> H4 -> H5 -> H3 -> H6, TOST on the signed run-level differences, and 
 
 Calibration (calibrate_c_y, calibrate_margins, calibrate_run): c_y = smallest C(t)/y(t) of a saturation test
 (C(t) of emu/replay_subsets.py, RUN/csub/c_t.jsonl, y(t) of the channel monitor); T_m = eps + delta_GS with
-eps = 2 max (chrony max error) + 1 ms and delta_GS = largest delivery time of the GS broker measured in Q;
-B_ctl_bar = largest bytes outside the data bridges in phase 3 of a calibration step. TODO: the runs do not log
-the chrony max error, the delivery time of the GS broker nor the control bytes per phase, so calibrate_run
-reports T_m and B_ctl_bar as missing and the DTPs keep T_m = 0 and B_ctl_bar = 0 until those measurements exist.
+eps = 2 max (chrony error bound) + 1 ms + the largest delay of the vessel regulator at a phase boundary and
+delta_GS = largest delivery time of the GS broker; B_ctl_bar = largest bytes outside the data bridges in phase 3
+of a calibration step. calibrate_run takes these measurements as lists from RUN/calib.json; the calibration of
+the paper (every constant of Section VI-E from the logs of the runs, with T1, T2, C_ref and alpha*, U* per left-out
+scenario) is fleetdt/calibration.py with emu/experiments/calibrate_paper.py.
 """
 from __future__ import annotations
 
@@ -924,12 +925,19 @@ def calibrate_c_y(C_by_t: Dict[int, float], y_by_t: Dict[int, float]) -> Dict:
 
 def calibrate_margins(chrony_max_error_s: Optional[Sequence[float]] = None,
                       gs_delivery_s: Optional[Sequence[float]] = None,
-                      ctl_bytes_phase3: Optional[Sequence[float]] = None) -> Dict:
-    """T_m = eps + delta_GS with eps = 2 max (chrony max error) + 1 ms and delta_GS = largest delivery time of the
-    GS broker measured in Q, and B_ctl_bar = largest bytes outside the data bridges in phase 3 of a calibration
-    step. A term without measurements stays None and is listed in "todo" (the DTP then keeps its default 0)."""
+                      ctl_bytes_phase3: Optional[Sequence[float]] = None,
+                      reg_delay_s: Optional[Sequence[float]] = None, lag_s: float = 1e-3) -> Dict:
+    """T_m = eps + delta_GS with eps = 2 max (chrony error bound) + lag_s (1 ms, the largest lag of a valid run) +
+    max (delay of the vessel regulator at a phase boundary) and delta_GS = largest delivery time of the GS broker,
+    and B_ctl_bar = largest bytes outside the data bridges in phase 3 of a calibration step. A term without
+    measurements stays None and is listed in "todo" (the DTP then keeps its default 0); without the regulator
+    delay, eps leaves that term out and "todo" says so."""
     todo = []
-    eps = 2.0 * max(chrony_max_error_s) + 1e-3 if chrony_max_error_s else None
+    eps = 2.0 * max(chrony_max_error_s) + lag_s if chrony_max_error_s else None
+    if eps is not None and reg_delay_s:
+        eps += max(0.0, float(max(reg_delay_s)))
+    elif eps is not None:
+        todo.append("eps: no delay of the vessel regulator at a phase boundary in the calibration logs")
     dgs = float(max(gs_delivery_s)) if gs_delivery_s else None
     bctl = float(max(ctl_bytes_phase3)) if ctl_bytes_phase3 else None
     if eps is None:
@@ -962,7 +970,7 @@ def calibrate_run(run_dir: str) -> Dict:
     """Calibration from one saturation run of emu/fleet.py: c_y from RUN/csub/c_t.jsonl (C(t) of
     emu/replay_subsets.py) and y(t) of RUN/throughput.jsonl (else of the DTA RUN/vms/gs/dta.jsonl); T_m and
     B_ctl_bar from the measurements of calibrate_margins when the run holds them (RUN/calib.json with the lists
-    "chrony_max_error_s", "gs_delivery_s", "ctl_bytes_phase3"), else None with a TODO."""
+    "chrony_max_error_s", "gs_delivery_s", "ctl_bytes_phase3", "reg_delay_s"), else None with a TODO."""
     import os
     C = {int(r["t"]): float(r["C"]) for r in _jsonl(os.path.join(run_dir, "csub", "c_t.jsonl"))
          if r.get("C") is not None and r.get("t") is not None}
@@ -977,7 +985,7 @@ def calibrate_run(run_dir: str) -> Dict:
     except (OSError, ValueError):
         pass
     out.update(calibrate_margins(meas.get("chrony_max_error_s"), meas.get("gs_delivery_s"),
-                                 meas.get("ctl_bytes_phase3")))
+                                 meas.get("ctl_bytes_phase3"), meas.get("reg_delay_s")))
     if out["c_y"] is None:
         out["todo"].append("c_y: no C(t) of the subset replays (csub/c_t.jsonl) with y(t)")
     return out

@@ -7,7 +7,10 @@ plus, for each vessel outside M(t), Qbar_i(t) = Q_i(s_i) + a_i(s_i) of its last 
 c_y and T_m from the DTP), runs Algorithm 1 over sigma_t and N(t), publishes (t, p(t)) on boat/b<i>/levels
 (QoS 0) for every i in M(t) and the JSON summary on fleet/as. The decision (log line and fleet/as) holds D (the demand tables of M(t)),
 the table, and the admitted bytes a_i(t) of each vessel ("a") with their sum A(t) ("A"), which the backlog
-predictor of the outer loop replays (C5). The optional outer loop (fleetdt.outer, contribution (iv)) updates
+predictor of the outer loop replays (C5). For the calibration of T1 (Section VI-E of the paper), the decision
+also holds "d_at", the arrival time of each demand table of M(t) in seconds after start(t) on the GS clock, and
+the log holds one line {"event": "demand_late", "t", "i", "w"} per table that arrived at or after start(t) + T1
+(w: its arrival in seconds after start(t)), written with the next decision. The optional outer loop (fleetdt.outer, contribution (iv)) updates
 U and alpha from the DTA every `outer_every` steps; it runs in a child process (fleetdt.outer.run_job,
 SCHED_OTHER and nice 10), so its Python loops do not hold the GIL of the process that publishes p(t)
 and the real-time priority of the AS preempts it. Service.connect() returns after the SUBACK of the
@@ -77,6 +80,8 @@ class AS:
         self.index = {name: k + 1 for k, name in enumerate(dtp.topics)}
         self._demand: Dict[int, Dict[int, List[int]]] = {}   # t -> i -> D_i(t), tables that met the deadline
         self._backlog: Dict[int, Dict[int, int]] = {}        # t -> i -> Q_i(t) of those tables
+        self._arrival: Dict[int, Dict[int, float]] = {}       # t -> i -> arrival time of those tables
+        self.late_demand: List[Tuple[int, int, float]] = []    # (t, i, arrival) of the tables after start(t) + T1
         self._y: Dict[int, Tuple[float, float]] = {}          # t -> (y(t), arrival time)
         self._orders: List[Tuple[float, List[int], List[int]]] = []  # pending fleet/order: (arrival, sigma, N)
         sigma = self._indices(dtp.order) if dtp.order else list(range(1, dtp.L + 1))
@@ -123,12 +128,15 @@ class AS:
             at = self.now() if at is None else at
             if len(d) != self.dtp.L:
                 return False
-            if self.last_t is not None and t <= self.last_t:
+            if (self.last_t is not None and t <= self.last_t) or at >= self.deadline(t):
+                if at >= self.deadline(t) and len(self.late_demand) < 100000:
+                    self.late_demand.append((int(t), int(i), float(at)))
                 return False
-            if at >= self.deadline(t) or t > self.step_of(at) + 1:
+            if t > self.step_of(at) + 1:
                 return False
             self._demand.setdefault(t, {})[int(i)] = [int(v) for v in d]
             self._backlog.setdefault(t, {})[int(i)] = max(0, int(Q))
+            self._arrival.setdefault(t, {})[int(i)] = float(at)
             return True
 
     def on_throughput(self, t: int, y: float, at: Optional[float] = None) -> None:
@@ -187,10 +195,13 @@ class AS:
                 self._orders = [o for o in self._orders if o[0] >= dl]
             D = self._demand.pop(t, {})
             Qi = self._backlog.pop(t, {})
+            At = self._arrival.pop(t, {})
             for k in [k for k in self._demand if k < t]:
                 del self._demand[k]
             for k in [k for k in self._backlog if k < t]:
                 del self._backlog[k]
+            for k in [k for k in self._arrival if k < t]:
+                del self._arrival[k]
             M = sorted(D)
             # Q(t) = sum of Q_i(t) over M(t) + sum of Qbar_i(t) = Q_i(s_i) + a_i(s_i) over the vessels outside M(t)
             Q_M, Q_out, Qbar = self.book.split(M, Qi)
@@ -206,7 +217,9 @@ class AS:
                    "m": m, "p": None, "M": M, "order": list(self.sigma), "needed": list(self.N),
                    "D": {str(i): list(D[i]) for i in M}, "y_used": y_used,
                    "Qi": {str(i): int(Qi.get(i, 0)) for i in M}, "Q": Q, "Q_M": Q_M, "Q_out": Q_out,
-                   "Qbar": {str(i): v for i, v in Qbar.items()}}
+                   "Qbar": {str(i): v for i, v in Qbar.items()},
+                   # arrival of each demand table of M(t), seconds after start(t) on the GS clock (w_1(t))
+                   "d_at": {str(i): round(At[i] - self.start(t), 6) for i in M if i in At}}
             if resets:
                 dec["bridge_reset"] = [[i, s] for i, s in resets]
             self.last = dec
@@ -233,6 +246,13 @@ class AS:
         the outer loop (C5, fleetdt.outer.backlog) replays them."""
         a = {str(i): int(sum(v for v, lev in zip(D[i], p_by[i]) if lev > 0)) for i in p_by}
         dec["a"], dec["A"] = a, int(sum(a.values()))
+
+    def take_late_demand(self) -> List[Dict]:
+        """The demand tables that arrived at or after start(t) + T1 since the last call, as log records
+        {"event": "demand_late", "t", "i", "w"} (w: arrival in seconds after start(t), GS clock)."""
+        with self.lock:
+            late, self.late_demand = self.late_demand, []
+        return [{"event": "demand_late", "t": t, "i": i, "w": round(at - self.start(t), 6)} for t, i, at in late]
 
     def set_params(self, U: Optional[float] = None, alpha: Optional[float] = None) -> None:
         with self.lock:
@@ -484,6 +504,8 @@ class Service:
                 if pub > self.dtp.T2:
                     log.warning("step %d: p(t) published %.1f ms after start(t)+T1", t, pub * 1e3)
             self._write({**self.core.last, "published": dec is not None, "wake_delay": wake, "pub_delay": pub})
+            for rec in self.core.take_late_demand():
+                self._write(rec)
             self._outer_tick(t)
             t += 1
             done += 1
