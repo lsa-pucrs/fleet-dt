@@ -93,6 +93,7 @@ static void step_reset(struct fdt_pstep *s, int64_t t)
 	memset(s, 0, sizeof *s);
 	s->t = t;
 	s->late_p1 = s->late_v = -1;
+	s->p_late_at = -1;
 	s->outq = s->nsd = -1;
 	s->bo = s->bn = s->bq = -1;
 	s->budget = -1;
@@ -405,6 +406,10 @@ int fdt_preg_on_levels(struct fdt_preg *r, const void *payload, size_t len, int6
 	int64_t t = (int64_t)t32;
 	if (t < r->next_v || now_us >= fdt_p_v_us(d, t)) {   /* after v(t): phase 3 already started without it */
 		r->s.tab_late++;
+		/* its arrival goes into the step log while the ring holds step t (w_2(t) of the calibration) */
+		struct fdt_pstep *ls = fdt_preg_step(r, t);
+		if (ls && !ls->have_p && ls->p_late_at < 0)
+			ls->p_late_at = now_us;
 		return 1;
 	}
 	if (t > fdt_p_step_at(d, now_us) + 2) {   /* a table for a step that the ring cannot hold yet */
@@ -847,6 +852,16 @@ static void summary_json(struct fdt_preg *r, struct jbuf *j, const struct fdt_ps
 	   ",\"late_p1_us\":%" PRId64 ",\"outq\":%" PRId64 ",\"nsd\":%" PRId64,
 	   s->t, r->vessel, fdt_pmode_name(r->mode), s->have_d ? "true" : "false", s->have_p ? "true" : "false",
 	   s->late_v, s->late_p1, s->outq, s->nsd);
+	/* arrival of p(t) on the vessel clock, microseconds after start(t): before v(t) (p_rx_us) or after it,
+	 * withheld (p_late_us); null without a table in the step */
+	if (s->have_p)
+		jp(j, ",\"p_rx_us\":%" PRId64, s->p_at - fdt_p_start_us(d, s->t));
+	else
+		jp(j, ",\"p_rx_us\":null");
+	if (s->p_late_at >= 0)
+		jp(j, ",\"p_late_us\":%" PRId64, s->p_late_at - fdt_p_start_us(d, s->t));
+	else
+		jp(j, ",\"p_late_us\":null");
 	if (s->have_Q)
 		jp(j, ",\"Q\":%u,\"o\":%" PRId64 ",\"bq\":%" PRId64 ",\"n\":%" PRId64, s->Q, s->bo, s->bq, s->bn);
 	else

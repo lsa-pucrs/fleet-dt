@@ -2,7 +2,8 @@
 #
 #   make                 build everything into build/ (fdt_chmon_host: the channel monitor of the
 #                        emulation host without MQTT, backend c of fleetdt/monitor_adapter.py)
-#   make test-c          C unit tests of the v2 regulator and of mode paper (test-c-san: with ASan and UBSan)
+#   make test-c          C unit tests of the v2 regulator, of mode paper and of the GS delivery-time plugin
+#                        (test-c-san: with ASan and UBSan)
 #   make test-paper      integration test of the paper stack (tests/test_paper_stack.py, needs MOSQ)
 #   make test-vessel     integration test of the vessel side v2 (tests/vessel_v2, needs MOSQ)
 #   make test            test-c, test-vessel and the Python tests
@@ -31,8 +32,12 @@ REG_H = vessel/regulator/fdt_reg.h
 # mode paper of the regulator (fdt_reg_paper.c) and its DTP reader and 0-based clock (fdt_paper.c)
 PREG = vessel/regulator/fdt_reg_paper.c common/fdt_paper.c
 PREG_H = vessel/regulator/fdt_reg_paper.h common/fdt_paper.h
+# GS broker plugin of the delivery time delta_GS (calibration, Section VI-E of the paper)
+GSS = mosquitto/plugins/fdt_gsstamp_core.c
+GSS_H = mosquitto/plugins/fdt_gsstamp_core.h
 
-all: $(B)/fdt_regulator.so $(B)/fdt_dti $(B)/fdt_chmon $(B)/fdt_chmon_host $(B)/test_reg $(B)/test_reg_paper
+all: $(B)/fdt_regulator.so $(B)/fdt_gsstamp.so $(B)/fdt_dti $(B)/fdt_chmon $(B)/fdt_chmon_host $(B)/test_reg \
+     $(B)/test_reg_paper $(B)/test_gsstamp
 
 $(B):
 	mkdir -p $(B)
@@ -40,6 +45,10 @@ $(B):
 # v2: vessel regulator and DTI program in one plugin
 $(B)/fdt_regulator.so: vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_sock.c vessel/regulator/fdt_sock.h $(REG) $(REG_H) $(PREG) $(PREG_H) $(DTP2) $(DTP2_H) | $(B)
 	$(CC) $(CPPFLAGS) $(CFLAGS) -fPIC -shared -o $@ vessel/regulator/fdt_regulator_plugin.c vessel/regulator/fdt_sock.c $(REG) $(PREG) $(DTP2) $(LDFLAGS) -lcjson -lm
+
+# GS broker: reception and delivery time of each uplink message of the data bridges (gsdelivery.jsonl)
+$(B)/fdt_gsstamp.so: mosquitto/plugins/fdt_gsstamp.c $(GSS) $(GSS_H) | $(B)
+	$(CC) $(CPPFLAGS) -Imosquitto/plugins $(CFLAGS) -fPIC -shared -o $@ mosquitto/plugins/fdt_gsstamp.c $(GSS) $(LDFLAGS)
 
 # v1 programs (DTP v1, dtp.json); fdt_dti computes D_i(t) with the reader and the bound of mode paper
 $(B)/fdt_dti: vessel/dti/fdt_dti.c common/fdt_paper.c common/fdt_paper.h $(COMMON) $(COMMON_H) | $(B)
@@ -66,6 +75,12 @@ $(B)/test_reg_paper: tests/c/test_reg_paper.c $(PREG) $(PREG_H) $(REG_H) $(COMMO
 $(B)/test_reg_paper_san: tests/c/test_reg_paper.c $(PREG) $(PREG_H) $(REG_H) $(COMMON) $(COMMON_H) | $(B)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SANFLAGS) -o $@ tests/c/test_reg_paper.c $(PREG) $(COMMON) $(LDFLAGS) -lcjson -lm
 
+$(B)/test_gsstamp: tests/c/test_gsstamp.c $(GSS) $(GSS_H) | $(B)
+	$(CC) $(CPPFLAGS) -Imosquitto/plugins $(CFLAGS) -o $@ tests/c/test_gsstamp.c $(GSS) $(LDFLAGS) -lcjson -lm
+
+$(B)/test_gsstamp_san: tests/c/test_gsstamp.c $(GSS) $(GSS_H) | $(B)
+	$(CC) $(CPPFLAGS) -Imosquitto/plugins $(CFLAGS) $(SANFLAGS) -o $@ tests/c/test_gsstamp.c $(GSS) $(LDFLAGS) -lcjson -lm
+
 # user-space CPU cap of the vessel QEMUs (emu/vm/cpu_profile.py, mechanism "user"; no MOSQ needed)
 $(B)/fdt_cpucap: emu/vm/cpucap.c | $(B)
 	$(CC) -O2 -g -Wall -Wextra -o $@ emu/vm/cpucap.c
@@ -73,13 +88,15 @@ $(B)/fdt_cpucap: emu/vm/cpucap.c | $(B)
 $(B)/cpucap_probe: emu/vm/cpucap_probe.c | $(B)
 	$(CC) -O2 -g -Wall -o $@ emu/vm/cpucap_probe.c
 
-test-c: $(B)/test_reg $(B)/test_reg_paper
+test-c: $(B)/test_reg $(B)/test_reg_paper $(B)/test_gsstamp
 	$(B)/test_reg
 	$(B)/test_reg_paper
+	$(B)/test_gsstamp
 
-test-c-san: $(B)/test_reg_san $(B)/test_reg_paper_san
+test-c-san: $(B)/test_reg_san $(B)/test_reg_paper_san $(B)/test_gsstamp_san
 	$(B)/test_reg_san
 	$(B)/test_reg_paper_san
+	$(B)/test_gsstamp_san
 
 test-paper: $(B)/fdt_regulator.so $(B)/fdt_dti
 	FDT_BUILD=$(abspath $(B)) MOSQ=$(MOSQ) $(PYTHON) -m pytest -q tests/test_paper_stack.py
@@ -94,7 +111,7 @@ test: all test-c
 
 install: all
 	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/bin
-	install -m 0644 $(B)/fdt_regulator.so $(DESTDIR)$(PREFIX)/lib/
+	install -m 0644 $(B)/fdt_regulator.so $(B)/fdt_gsstamp.so $(DESTDIR)$(PREFIX)/lib/
 	install -m 0755 $(B)/fdt_dti $(B)/fdt_chmon $(DESTDIR)$(PREFIX)/bin/
 	install -m 0755 vessel/publishers/fdt_source.py $(DESTDIR)$(PREFIX)/bin/
 
