@@ -8,6 +8,8 @@
                                            systemd scope with CPUQuota = R of one CPU; off by default)
                [--clock-inject]            vessel clocks from a schedule (E1): emu-host.json names
                                            /etc/fleetdt/clock-schedule.json, which emu/fleet.py installs per run
+               [--probe-period S]          period of the clock probe (default 0.1 s; the paper campaign:
+                                           Ts, one read per step, emu/experiments/runner.py)
   emu/run.py sync                          copy this repository into every VM (~/fleet-dt)
   emu/run.py ssh HOST [CMD...]             HOST: gs, v1..vM (interactive without CMD)
   emu/run.py run EXP.json [--stack paper|as2]   one experiment; results in EMU/runs/<time>-<name>/ (or the
@@ -492,6 +494,8 @@ def cmd_up(a):
         raise SystemExit("already up (emu/run.py down first)")
     sc = json.load(open(a.scenario))
     M = int(sc["M"])
+    if not a.probe_period > 0:
+        raise SystemExit("--probe-period must be > 0")
     rng = random.Random(a.clock_seed)
     clocks = {0: {"offset_ms": 0, "ppm": 0}}
     for h in range(1, M + 1):
@@ -513,7 +517,8 @@ def cmd_up(a):
     st = {"M": M, "scenario": os.path.abspath(a.scenario), "clocks": clocks, "procs": [], "t_up": time.time(),
           "qemu": {"binary": QEMU, "data_netdev": data_netdev_mode(), "clock_channel": clock_channel()},
           "vm_pids": {}, "slot": SLOT, "clock_seed": a.clock_seed, "cpu_ratio": a.cpu_ratio,
-          "clock_inject": bool(a.clock_inject), "cpu_cap": {"mechanism": cap} if cap else None}
+          "clock_inject": bool(a.clock_inject), "cpu_cap": {"mechanism": cap} if cap else None,
+          "probe_period": float(a.probe_period)}
     log("starting %d VMs" % (M + 1))
     for h in range(M + 1):
         pid, name = start_vm(h, M, clocks[h], chrony, mem=a.mem, cpu_ratio=a.cpu_ratio, clock_inject=a.clock_inject,
@@ -535,7 +540,8 @@ def cmd_up(a):
         chan = ["--socks", ",".join(clock_sock(h) for h in range(M + 1))]
     ppid = start_daemon([sys.executable, os.path.join(ROOT, "emu", "clockprobe", "probe.py")] + chan +
                         ["--names", ",".join(host_name(h) for h in range(M + 1)),
-                         "--out", os.path.join(sess, "clock.csv")], os.path.join(sess, "probe.log"))
+                         "--out", os.path.join(sess, "clock.csv"), "--period", repr(float(a.probe_period))],
+                        os.path.join(sess, "probe.log"))
     st["probe_pid"] = ppid
     st["procs"].append([ppid, "probe.py"])
     save_state(st)
@@ -776,6 +782,8 @@ def main():
                    help="vessel VMs under the CPU profile (emu/vm/cpu_profile.py wrap; e.g. 0.25 of one CPU)")
     u.add_argument("--clock-inject", action="store_true",
                    help="vessel clocks from the schedule of each run (E1; emu-host.json names %s)" % CLOCK_SCHEDULE)
+    u.add_argument("--probe-period", type=float, default=0.1,
+                   help="period of the clock probe in seconds (the paper campaign: Ts, one read per step)")
     sub.add_parser("sync")
     s = sub.add_parser("ssh")
     s.add_argument("host")

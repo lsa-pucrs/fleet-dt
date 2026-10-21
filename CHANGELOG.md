@@ -13,12 +13,29 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `cover` and `regime` in the AS decision records; experiment field `outer.variant` and its parameters in
   `emu/fleet.py`, with the regimes of the scenario JSON
 - `fleetdt.outer.run_job` and `python -m fleetdt.outer --steps T1:T2`: the outer loop over a range of steps
+- emulation factors of the experiments of Section VI (emu/README.md, experiment fields): E0 outages
+  (`"outage"`, `gen.with_outage`: 200 dB between the AP and vessel 1 for 1, 3 or 5 s from a seeded start
+  after the warm-up; timed entries `[a, b, loss, t0, t1]` of `channel.loss` in fdt-emu), the E3 ablations
+  (`"ablation"`: R7 Minstrel over the OFDM rates of 802.11a, `gen.with_rate_adaptation`; R8
+  `set_tcp_nodelay false` and routes without quickack, `fleetdt.gsconf --nagle`, `fdt-netsetup.py
+  --tcp-only`; R9 `max_inflight_messages 20`, `fleetdt.gsconf --max-inflight`), the E4 overload of the
+  video source of vessel 1 (`"overload"`, `fdt_source.py --overload-*`, `video_layers.overload_steps`), the
+  E4 fairness cells (`"vessels"`: per-vessel size_scale, fps_scale, video on or off and topics; a vessel
+  without video has rate 0 on its layer topics, so its demand table declares none), and the regime
+  sequence S1, S3, S1 of E5 (`gen.make_paper_sequence`, `"regimes"` in the scenario)
+- `"session"` of a paper-stack experiment (CPU quota, clock injector, probe period), checked against the
+  session that is up; `run.py up --probe-period`; `qualify.py manifest --bare-session`
 
 ### Changed
 
 - outer loop: alpha* stays on the grid 0.01..1 of Section VI-E; the golden-section refinement, which can leave
   the grid, runs only with `refine=True` (`--refine`)
-
+- paper campaign defaults: `runner.py` brings the sessions of paper-stack runs up with the CPU quota of 0.25
+  of a core, the clock injector (+-20 ppm ramps, NTP loss episodes) and one probe read per step (Ts), and
+  the Q specs carry this session; the emulator flags catch-up at 0.1 ms (`--catchupUs=100`,
+  `"catchup_us"`); the sources release the telemetry topics with the jitter J = 2 ms of the regulator
+- paper scenarios on channel 6 (`"channel_number"`; the emulator ran on the ns-3 default channel 1), and the
+  two-ray models of S5 and S7 at 2.437 GHz; the files `emu/scenarios/P-*.json` regenerated
 - fidelity: the mean absolute scaled error (MASE, Hyndman and Koehler 2006) replaces the MAPE; the scale is
   the error of the last-value predictor c_y y(t-1) over the same steps, so smoothing with alpha = 1 gives 1
 - control bridges: demand, levels, goals and fleet/feedback with QoS 0 (no MQTT retransmission; clean session),

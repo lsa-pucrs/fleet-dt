@@ -68,6 +68,7 @@
  "scenario_set": "paper-v2",
  "queue_variant": "q1000",
  "phy": "spectrum",
+ "channel_number": 6,
  "cca_ed_dbm": -62.0,
  "basic_modes": [
   "ErpOfdmRate6Mbps",

@@ -42,6 +42,9 @@ Per-vessel settings (dtp.json, object "video_layers"):
               the per-vessel DTP of `video_layers.py resolve` holds the rate and bound of its layer
               topics, so the demand tables of the vessels differ (the DTI program computes d_il from
               the DTP file it reads)
+  video       false: the vessel has no video (E4 fairness cells, vessel 4): its layer topics get rate 0
+              in the per-vessel DTP, so the DTI program and the regulator declare d_il = 0 and the
+              source publishes none of them (default true)
 
 The AS, the VE and the GS read the common dtp.json (s_i = 1, fps_scale = 1): the list of topics is the
 same for every vessel (homogeneous fleet), and only the rates and bounds of the layer topics differ in
@@ -60,6 +63,7 @@ import copy
 import json
 import math
 import os
+import random
 import sys
 
 CONTENT_HEADER = 8   # frame:u32, k:u16, n:u16 in front of the JPEG bytes of each message
@@ -72,7 +76,7 @@ DEFAULT_SHARES = [0.038647, 0.042333, 0.04599, 0.049985, 0.05201, 0.050403, 0.04
                   0.109677, 0.112202, 0.10692, 0.100237, 0.099602, 0.095414, 0.09074, 0.085778]
 DEFAULTS = {"base": "video", "layers": 16, "fps": 16.0, "max_msg": 1400, "frame_cap": 98774,
             "profile": DEFAULT_PROFILE}
-VESSEL_DEFAULTS = {"quality": 50, "fps_scale": 1.0, "size_scale": 1.0}
+VESSEL_DEFAULTS = {"quality": 50, "fps_scale": 1.0, "size_scale": 1.0, "video": True}
 
 
 def _bits(layers):
@@ -257,6 +261,8 @@ def set_layers(d, c, vessel=None):
         j = layer_index(t["name"], c["base"], L)
         if j is not None:
             t.update(layer_topic(c, j, float(d["Ts"]), s, fs))
+            if not vc.get("video", True):
+                t["rate"] = 0.0
     return d
 
 
@@ -303,6 +309,19 @@ def resolve_vessel(dtp, vessel):
     set_layers(d, c, vessel)
     d["video_layers"]["resolved_for"] = int(vessel)
     return d
+
+
+def overload_steps(seed, steps, fraction=0.1, warm_steps=240):
+    """E4 overload: the seeded set of run steps (0-based relative to the first step S0 of the run) in
+    which the video source of the overloaded vessel exceeds its demand table: round(fraction n) distinct
+    steps drawn uniformly from the n = steps - warm_steps steps after the warm-up, sorted. fdt_source.py
+    and emu/fleet.py (result.json) call it with the same arguments."""
+    steps, warm_steps = int(steps), int(warm_steps)
+    if not 0.0 <= float(fraction) <= 1.0 or warm_steps < 0:
+        raise ValueError("overload: 0 <= fraction <= 1 and warm_steps >= 0")
+    pool = list(range(min(warm_steps, max(steps, 0)), max(steps, 0)))
+    k = int(round(float(fraction) * len(pool)))
+    return sorted(random.Random("overload:%s" % seed).sample(pool, k))
 
 
 def check_layers(dtp):

@@ -31,6 +31,15 @@ Two stacks (emu/run.py run EXP.json --stack paper|as2; default: the "stack" of t
          installs the oscillator schedule of each vessel (E1); "replay_subsets": true runs the C(t)
          replays after the run (E2); result.json records the CPU profile of the VMs before and after the
          run (emu/README.md, "Paper stack").
+
+         Factors of the experiments (emu/README.md, experiment fields): "outage" (E0, gen.with_outage
+         on the scenario), "ablation" R7 (gen.with_rate_adaptation), R8 (Nagle and delayed ACKs:
+         "brokers" nodelay false and "guest_tcp" quickack false) or R9 (max_inflight_messages 20),
+         "vessels" (per-vessel size_scale, fps_scale, video and topics; E4 fairness), "overload" (E4,
+         the video source of one vessel above its demand table in a seeded share of the steps),
+         "catchup_us" (--catchupUs, default 100), "session" (CPU quota, clock injector and probe period
+         of the session, checked against the session that is up; emu/experiments/runner.py fills it);
+         the sources release the telemetry with the jitter J of the regulator (2 ms) by default.
   as2    the older model of SPEC_v2.md (fleetdt.as2.service, fleetdt.as2.opctl), described below.
 
 Every run records the git commit and a digest of the files of the stack in RUN/result.json
@@ -433,6 +442,27 @@ PAPER_TRACE = "emu/traces/water-sbs-q90-s1.txt"
 PAPER_ABORT_LAG_US = 1000
 # options of the emulator that the paper stack sets itself (not through "emu_args")
 PAPER_EMU_OWN = ("--phaseLag=", "--abortLagUs=", "--stepBytes=", "--pcap=")
+# catch-up flag of steplag.csv (--catchupUs): a step whose lag changes by more than 0.1 ms in phase 3
+# (Section VI-B); "catchup_us" of the experiment, or --catchupUs in "emu_args"
+PAPER_CATCHUP_US = 100
+# session of the paper campaign ("session" of the experiment; emu/experiments/runner.py brings the session
+# up with these options): CPU quota of the vessel VMs (0.25 of a core), clock injector (+-20 ppm ramps and
+# NTP loss episodes of fdt_clock_schedule), period of the clock probe (None: Ts, one read per step)
+PAPER_SESSION = {"cpu_ratio": 0.25, "clock_inject": True, "probe_period_s": None}
+# the session of emu/run.py up without options (the probe period of probe.py)
+BARE_SESSION = {"cpu_ratio": None, "clock_inject": False, "probe_period_s": 0.1}
+# E3 ablations (Section VI-C): R7 rate adaptation (scenario), R8 Nagle and delayed ACKs (brokers and
+# guest routes), R9 max_inflight_messages 20 (brokers)
+ABLATIONS = ("R7", "R8", "R9")
+PAPER_BROKERS = {"nodelay": True, "max_inflight": 0}
+PAPER_GUEST_TCP = {"quickack": True, "rto_min_ms": 20.0, "slow_start_after_idle": 0}
+R9_MAX_INFLIGHT = 20
+# E4 overload of the video source of one vessel (fdt_source.py --overload-*)
+PAPER_OVERLOAD = {"vessel": 1, "factor": 1.2, "fraction": 0.1, "seed": None, "warm_s": 30.0, "basis": "cap"}
+# per-vessel overrides of "vessels" (E4 fairness cells: {"1": {"size_scale": 1}, ..., "4": {"video": false}})
+VESSEL_KEYS = ("size_scale", "fps_scale", "video", "topics")
+FAIRNESS_VESSELS = {"1": {"size_scale": 1.0}, "2": {"size_scale": 1.0}, "3": {"size_scale": 1.0},
+                    "4": {"video": False}}
 # E1: oscillator schedule of a vessel (fdt-clockerr.py reads it) and the log of the injector
 CLOCK_SCHEDULE = "/etc/fleetdt/clock-schedule.json"
 CLOCK_LOG = "/var/log/fdt-clockerr.jsonl"
@@ -561,6 +591,212 @@ def paper_jitter_ms(spec):
     return float(j)
 
 
+def paper_ablation(spec):
+    """"ablation" of an E3 experiment: None, "R7", "R8" or "R9" """
+    ab = spec.get("ablation")
+    if ab is None:
+        return None
+    if ab not in ABLATIONS:
+        raise SystemExit("ablation %s: one of %s" % (ab, ", ".join(ABLATIONS)))
+    return ab
+
+
+def paper_brokers(spec):
+    """settings of both brokers: "brokers" {"nodelay", "max_inflight"} over the defaults (true, 0) and the
+    ablation (R8: nodelay false; R9: max_inflight 20); explicit "brokers" keys win"""
+    b = dict(PAPER_BROKERS)
+    ab = paper_ablation(spec)
+    if ab == "R8":
+        b["nodelay"] = False
+    elif ab == "R9":
+        b["max_inflight"] = R9_MAX_INFLIGHT
+    given = spec.get("brokers") or {}
+    bad = [k for k in given if k not in PAPER_BROKERS]
+    if bad:
+        raise SystemExit("brokers: unknown keys %s (allowed: %s)" % (bad, ", ".join(PAPER_BROKERS)))
+    b.update(given)
+    b["nodelay"] = bool(b["nodelay"])
+    if int(b["max_inflight"]) < 0:
+        raise SystemExit("brokers.max_inflight must be >= 0")
+    b["max_inflight"] = int(b["max_inflight"])
+    return b
+
+
+def paper_broker_opts(spec):
+    """fleetdt.gsconf options of the broker settings of the run (R8, R9)"""
+    b = paper_brokers(spec)
+    return ("" if b["nodelay"] else " --nagle") + (" --max-inflight %d" % b["max_inflight"] if b["max_inflight"] else "")
+
+
+def paper_guest_tcp(spec):
+    """TCP settings of the data NIC route and sysctl of every VM for the run ("guest_tcp" over the defaults
+    quickack on, rto_min 20 ms, tcp_slow_start_after_idle 0; R8: quickack off, so Linux delays the ACKs)"""
+    g = dict(PAPER_GUEST_TCP)
+    if paper_ablation(spec) == "R8":
+        g["quickack"] = False
+    given = spec.get("guest_tcp") or {}
+    bad = [k for k in given if k not in PAPER_GUEST_TCP]
+    if bad:
+        raise SystemExit("guest_tcp: unknown keys %s (allowed: %s)" % (bad, ", ".join(PAPER_GUEST_TCP)))
+    g.update(given)
+    if float(g["rto_min_ms"]) < 0 or int(g["slow_start_after_idle"]) not in (0, 1):
+        raise SystemExit("guest_tcp: rto_min_ms >= 0, slow_start_after_idle 0 or 1")
+    return {"quickack": bool(g["quickack"]), "rto_min_ms": float(g["rto_min_ms"]),
+            "slow_start_after_idle": int(g["slow_start_after_idle"])}
+
+
+def paper_tcp_cmd(spec):
+    """guest command of the TCP settings of the run (emu/vm/guest/fdt-netsetup.py --tcp-only of the
+    synchronized repository); every preparation runs it, so the settings of an R8 run do not outlast it"""
+    g = paper_guest_tcp(spec)
+    return ("sudo python3 emu/vm/guest/fdt-netsetup.py --tcp-only --quickack %d --rto-min-ms %g "
+            "--slow-start-after-idle %d > %s/netsetup.txt 2>&1") % (int(g["quickack"]), g["rto_min_ms"],
+                                                                   g["slow_start_after_idle"], RUN)
+
+
+def _gen():
+    _emu_module("scenarios")
+    import gen
+    return gen
+
+
+OUTAGE_KEYS = ("target", "peer", "start_s", "dur_s", "loss_db", "seed", "start_range_s")
+
+
+def paper_scenario(spec):
+    """scenario of the run: "scenario" with the modifiers of emu/scenarios/gen.py that the experiment asks
+    for: "outage" {"target" (v1), "peer" (gs), "start_s" (null: seeded after the warm-up), "dur_s",
+    "loss_db" (200), "seed" (the scenario seed), "start_range_s"} (E0) and "ablation" R7 (rate
+    adaptation). A scenario that already carries the same modifier stays as it is (a generator may apply
+    it); a different outage is refused."""
+    sc = spec["scenario"]
+    gen = _gen()
+    o = spec.get("outage")
+    try:
+        if o is not None:
+            bad = [k for k in o if k not in OUTAGE_KEYS]
+            if bad or o.get("dur_s") is None:
+                raise SystemExit("outage: needs dur_s; unknown keys %s (allowed: %s)" % (bad, ", ".join(OUTAGE_KEYS)))
+            if sc.get("outage") is None:
+                sc = gen.with_outage(sc, float(o["dur_s"]), o.get("start_s"), o.get("target", "v1"),
+                                     o.get("peer", "gs"), o.get("loss_db"), o.get("seed"), o.get("start_range_s"))
+            else:
+                have = sc["outage"]
+                for k in ("target", "peer", "start_s", "dur_s", "loss_db"):
+                    if o.get(k) is not None and have.get(k) != (o[k] if k in ("target", "peer") else float(o[k])):
+                        raise SystemExit("outage: the scenario carries the outage %s, the experiment asks %s"
+                                         % (have, o))
+        if paper_ablation(spec) == "R7" and sc.get("ablation") != "R7":
+            sc = gen.with_rate_adaptation(sc)
+    except ValueError as e:
+        raise SystemExit(str(e))
+    return sc
+
+
+def paper_vessels(spec, M=None):
+    """per-vessel overrides {vessel: {"size_scale", "fps_scale", "video", "topics"}} of "vessels" (keys
+    "1".."M"); size_scale, fps_scale and video go into video_layers.vessels of the DTP (so the per-vessel
+    DTP, the DTI program, the regulator and the source follow them), topics replaces "source"."topics" for
+    that vessel"""
+    v = spec.get("vessels") or {}
+    out = {}
+    dtp = spec.get("dtp")
+    names = set(t["name"] for t in (dtp.get("topics", []) if isinstance(dtp, dict) else []) if isinstance(t, dict))
+    for k, o in v.items():
+        h = int(k)
+        if h < 1 or (M is not None and h > M):
+            raise SystemExit("vessels: vessel %s outside 1..M" % k)
+        bad = [x for x in o if x not in VESSEL_KEYS]
+        if bad:
+            raise SystemExit("vessels.%s: unknown keys %s (allowed: %s)" % (k, bad, ", ".join(VESSEL_KEYS)))
+        for x in ("size_scale", "fps_scale"):
+            if x in o and not float(o[x]) > 0:
+                raise SystemExit("vessels.%s.%s must be > 0" % (k, x))
+        if o.get("topics") is not None and names and not set(o["topics"]) <= names:
+            raise SystemExit("vessels.%s.topics: unknown topics %s" % (k, sorted(set(o["topics"]) - names)))
+        out[h] = dict(o)
+    return out
+
+
+def paper_dtp_vessels(dtp, vessels):
+    """DTP with the size_scale, fps_scale and video of "vessels" in video_layers.vessels"""
+    keys = ("size_scale", "fps_scale", "video")
+    if not any(k in o for o in vessels.values() for k in keys):
+        return dtp
+    if not dtp.get("video_layers"):
+        raise SystemExit("vessels: size_scale, fps_scale and video need a DTP with video_layers")
+    d = json.loads(json.dumps(dtp))
+    vv = d["video_layers"].setdefault("vessels", {})
+    for h, o in sorted(vessels.items()):
+        e = dict(vv.get(str(h), {}))
+        e.update({k: (bool(o[k]) if k == "video" else float(o[k])) for k in keys if k in o})
+        vv[str(h)] = e
+    return d
+
+
+def paper_overload(spec):
+    """"overload" of an E4 experiment over PAPER_OVERLOAD (seed null: the run seed; warm_steps =
+    ceil(warm_s / Ts)), or None"""
+    o = spec.get("overload")
+    if not o:
+        return None
+    bad = [k for k in o if k not in PAPER_OVERLOAD]
+    if bad:
+        raise SystemExit("overload: unknown keys %s (allowed: %s)" % (bad, ", ".join(PAPER_OVERLOAD)))
+    out = dict(PAPER_OVERLOAD)
+    out.update(o)
+    if out["seed"] is None:
+        out["seed"] = int(spec.get("seed", 1))
+    if not float(out["factor"]) > 0 or not 0 <= float(out["fraction"]) <= 1 or out["basis"] not in ("cap", "size") \
+            or float(out["warm_s"]) < 0:
+        raise SystemExit("overload: factor > 0, 0 <= fraction <= 1, warm_s >= 0, basis cap or size")
+    out["warm_steps"] = int(math.ceil(float(out["warm_s"]) / float(spec["Ts"]) - 1e-9))
+    return out
+
+
+def paper_session(spec):
+    """session options of a run ("session" over PAPER_SESSION; probe_period_s null: Ts)"""
+    given = spec.get("session") or {}
+    bad = [k for k in given if k not in PAPER_SESSION]
+    if bad:
+        raise SystemExit("session: unknown keys %s (allowed: %s)" % (bad, ", ".join(PAPER_SESSION)))
+    out = dict(PAPER_SESSION)
+    out.update(given)
+    if out["probe_period_s"] is None:
+        out["probe_period_s"] = float(spec["Ts"])
+    if out["cpu_ratio"] is not None and not 0 < float(out["cpu_ratio"]) <= 1:
+        raise SystemExit("session.cpu_ratio must be in (0, 1] or null")
+    if not float(out["probe_period_s"]) > 0:
+        raise SystemExit("session.probe_period_s must be > 0")
+    out["clock_inject"] = bool(out["clock_inject"])
+    out["probe_period_s"] = float(out["probe_period_s"])
+    out["cpu_ratio"] = None if out["cpu_ratio"] is None else float(out["cpu_ratio"])
+    return out
+
+
+def session_of_state(st):
+    """session options of the session that is up (state.json of emu/run.py up)"""
+    return {"cpu_ratio": None if st.get("cpu_ratio") is None else float(st["cpu_ratio"]),
+            "clock_inject": bool(st.get("clock_inject")),
+            "probe_period_s": float(st.get("probe_period", BARE_SESSION["probe_period_s"]))}
+
+
+def check_session(spec, st):
+    """with "session" in the experiment, the session that is up must have its options; returns them"""
+    if spec.get("session") is None:
+        return None
+    want, have = paper_session(spec), session_of_state(st)
+    diff = {}
+    for k in want:
+        a, b = have[k], want[k]
+        if (a is None) != (b is None) or (b is not None and abs(float(a) - float(b)) > 1e-9):
+            diff[k] = [a, b]
+    if diff:
+        raise SystemExit("session: the session is up with other options ([have, want]): %s "
+                         "(emu/run.py up --cpu-ratio, --clock-inject, --probe-period)" % diff)
+    return want
+
+
 def _video_layers():
     pub = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "vessel", "publishers")
     if pub not in sys.path:
@@ -598,6 +834,7 @@ def paper_prepare_cmd(R, spec, h, M):
         vs = " ".join("--vessel %d=%s" % (i, R.host_ip(i)) for i in range(1, M + 1))
         opt = {"single": "", "b2": " --b2", "per_topic": " --per-topic %s/dtp.json" % RUN}[cfg["bridges"]]
         opt += " --feedback" if cfg["feedback"] else ""
+        opt += paper_broker_opts(spec)
         lines += ["python3 -m fleetdt.gsconf gs %s%s > %s/m.conf" % (vs, opt, RUN),
                   "echo 'log_dest file %s/mosquitto.log' >> %s/m.conf" % (RUN, RUN)]
     else:
@@ -610,7 +847,8 @@ def paper_prepare_cmd(R, spec, h, M):
                   "cc -O2 -Wall -o build/fdt_outq emu/tools/outq_sampler.c -lm >> %s/make.log 2>&1" % RUN,
                   "sha256sum build/fdt_regulator.so build/fdt_dti build/fdt_outq > %s/build.sha256" % RUN,
                   ("python3 -m fleetdt.gsconf vessel --vessel %d --dtp %s/dtp_vessel.json --plugin $HOME/fleet-dt/build/"
-                   "fdt_regulator.so --mode %s --log-dest 'file %s/mosquitto.log' > %s/m.conf") % (h, RUN, pm, RUN, RUN),
+                   "fdt_regulator.so --mode %s --log-dest 'file %s/mosquitto.log'%s > %s/m.conf") % (
+                      h, RUN, pm, RUN, paper_broker_opts(spec), RUN),
                   # the vessel log of the regulator (the messages of each step that it did not forward)
                   "echo 'plugin_opt_log %s/regulator.jsonl' >> %s/m.conf" % (RUN, RUN),
                   # the step summaries of the regulator (p(t), d, received, forwarded, held, cost per topic)
@@ -624,6 +862,8 @@ def paper_prepare_cmd(R, spec, h, M):
                 continue
             lines.append("echo %s >> %s/m.conf" % (shlex.quote("plugin_opt_%s %s" % (k, v)), RUN))
         lines.append("grep -q '^plugin_opt_mode %s$' %s/m.conf" % (pm, RUN))
+    # route and TCP sysctl of the data NIC for this run (R8); every run sets them
+    lines.append(paper_tcp_cmd(spec))
     lines.append("echo prepared")
     return "\n".join(lines)
 
@@ -833,13 +1073,23 @@ def paper_source_cmd(spec, h, t0, dur):
             c += ["--median", repr(float(src["median"])), "--sigma", repr(float(src.get("sigma", 0.5)))]
         if float(src.get("scale", 1.0)) != 1.0:
             c += ["--load", repr(float(src["scale"])), "--load-mode", str(src.get("load_mode", "size"))]
-        for k, opt in (("jitter_ms", "--jitter-ms"), ("phase", "--phase"), ("stream_size", "--stream-size")):
+        # J of the telemetry topics (the layer topics carry "jitter": 0 in the DTP): "source"."jitter_ms",
+        # else the J of the regulator and of fdt_dti (2 ms), so the sources release as the demand assumes
+        c += ["--jitter-ms", "%g" % (float(src["jitter_ms"]) if src.get("jitter_ms") is not None
+                                     else paper_jitter_ms(spec))]
+        for k, opt in (("phase", "--phase"), ("stream_size", "--stream-size")):
             if src.get(k) is not None:
                 c += [opt, str(src[k])]
+        o = paper_overload(spec)
+        if o and int(o["vessel"]) == int(h):
+            c += ["--overload-factor", repr(float(o["factor"])), "--overload-fraction", repr(float(o["fraction"])),
+                  "--overload-seed", str(o["seed"]), "--overload-steps", str(int(spec.get("steps", 1200))),
+                  "--overload-warm-steps", str(o["warm_steps"]), "--overload-basis", o["basis"]]
     else:
         raise SystemExit("source kind: fdt_source or raw_load")
-    if src.get("topics"):
-        c += ["--topics", ",".join(src["topics"])]
+    topics = (paper_vessels(spec).get(int(h)) or {}).get("topics") or src.get("topics")
+    if topics:
+        c += ["--topics", ",".join(topics)]
     return "cd ~/fleet-dt && exec " + " ".join(shlex.quote(x) for x in c)
 
 
@@ -859,7 +1109,8 @@ def paper_emu_args(R, spec, mon):
     """Options of the emulator of a paper-stack run: the nl80211 counter export, the per-step lag of the
     phases (--phaseLag from the DTP) with the lag abort (--abortLagUs = "abort_lag_us", default 1000 us;
     0 records only, as in the qualification Q), the bytes per step and vessel at the AP (--stepBytes,
-    ground truth of r_il), the pcap of the AP with "pcap": true (E0), then "emu_args"."""
+    ground truth of r_il), the pcap of the AP with "pcap": true (E0), the catch-up threshold
+    (--catchupUs = "catchup_us", default 100 us; a --catchupUs of "emu_args" replaces it), then "emu_args"."""
     d = spec["dtp"]
     us = lambda x: int(round(float(x) * 1e6))   # noqa: E731
     Ts_us, T1_us, T2_us = us(d["Ts"]), us(d["T1"]), us(d["T2"])
@@ -878,6 +1129,14 @@ def paper_emu_args(R, spec, mon):
            "--stepBytes=%d:%d" % (Ts_us, T1_us + T2_us)]
     if spec.get("pcap"):
         out.append("--pcap=1")
+    if any(x.startswith("--catchupUs=") for x in extra):
+        if spec.get("catchup_us") is not None:
+            raise SystemExit("catchup_us and --catchupUs in emu_args exclude each other")
+    else:
+        cu = spec.get("catchup_us", PAPER_CATCHUP_US)
+        if cu is None or float(cu) < 0:
+            raise SystemExit("catchup_us must be >= 0")
+        out.append("--catchupUs=%g" % float(cu))
     return out + extra
 
 
@@ -908,8 +1167,12 @@ def _emu_module(*parts):
 
 
 def paper_clock(spec):
-    """"clock" of an E1 experiment: {"inject": true, ...parameters of fdt_clock_schedule.make}, or None"""
-    c = spec.get("clock") or {}
+    """"clock" of the experiment: {"inject": true, ...parameters of fdt_clock_schedule.make}, or None; without
+    "clock", an experiment with "session" whose clock_inject is true (the default) gets {"inject": true}"""
+    c = spec.get("clock")
+    if c is None and spec.get("session") is not None and paper_session(spec)["clock_inject"]:
+        c = {"inject": True}      # a session of the paper campaign: the injector with the default schedule
+    c = c or {}
     if not c.get("inject"):
         return None
     bad = [k for k in c if k not in CLOCK_KEYS + ("inject", "seed")]
@@ -1070,6 +1333,13 @@ def run_fleet_paper(R, spec, a):
                 obj["vessels"] = list(range(1, M + 1))
             spec = dict(spec, **{k: obj})
     check_paper_spec(spec, M)
+    # per-vessel overrides (E4 fairness) into the DTP, the modifiers of the scenario (E0 outage, R7)
+    vessels = paper_vessels(spec, M)
+    spec = dict(spec, dtp=paper_dtp_vessels(spec["dtp"], vessels), scenario=paper_scenario(spec))
+    session = check_session(spec, st)
+    brokers, guest_tcp, overload = paper_brokers(spec), paper_guest_tcp(spec), paper_overload(spec)
+    if overload and not 1 <= int(overload["vessel"]) <= M:
+        raise SystemExit("overload.vessel %s outside 1..M" % overload["vessel"])
     dtp = spec["dtp"]
     mon = paper_monitor(spec)
     method, mcfg = paper_method(spec)
@@ -1115,7 +1385,11 @@ def run_fleet_paper(R, spec, a):
            "plugin_mode": paper_plugin_mode(spec),
            "demand": "external (fdt_dti)" if (spec.get("dti") or {}).get("enabled", True) else "internal (plugin)",
            "video": video, "abort_lag_us": float(spec.get("abort_lag_us", PAPER_ABORT_LAG_US)),
-           "pcap": bool(spec.get("pcap")), "cpu_profile": {"ratio": st.get("cpu_ratio")}}
+           "pcap": bool(spec.get("pcap")), "cpu_profile": {"ratio": st.get("cpu_ratio")},
+           "session": session_of_state(st), "session_spec": session, "ablation": paper_ablation(spec),
+           "brokers": brokers, "guest_tcp": guest_tcp, "vessels": {str(h): o for h, o in sorted(vessels.items())},
+           "outage": spec["scenario"].get("outage"), "regimes": spec["scenario"].get("regimes"),
+           "scenario_ablation": spec["scenario"].get("ablation")}
 
     def save():
         with open(os.path.join(rd, "result.json"), "w") as f:
@@ -1170,6 +1444,9 @@ def run_fleet_paper(R, spec, a):
         if ov is not None:       # the outer-loop variant, its origin S0 and its regime change steps
             res["outer_variant"] = dict(ov, origin=S0, regime_steps=[
                 [S0 + int(math.floor(r["t0"] / Ts + 1e-9)), r["scenario"]] for r in ov["regimes"]])
+        if overload:
+            rel = _video_layers().overload_steps(overload["seed"], steps, overload["fraction"], overload["warm_steps"])
+            res["overload"] = dict(overload, steps_rel=rel, steps=[S0 + r for r in rel])
         save()
         if clock:
             # E1: the oscillator schedule of each vessel, origin start(S0); fdt-clockerr.py reloads it

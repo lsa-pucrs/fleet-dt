@@ -1902,7 +1902,8 @@ ReportPhy(std::ostream& os)
         Ptr<QosTxop> be = mac->GetQosTxop(AC_BE);
         Ptr<QosTxop> vo = mac->GetQosTxop(AC_VO);
         os << (n ? "," : "") << "\"" << g_names[n] << "\":{\"mac\":\"" << g_wifiMac[n]
-           << "\",\"slot_us\":" << g_phy[n]->GetSlot().GetMicroSeconds()
+           << "\",\"center_mhz\":" << static_cast<double>(g_phy[n]->GetFrequency())
+           << ",\"slot_us\":" << g_phy[n]->GetSlot().GetMicroSeconds()
            << ",\"sifs_us\":" << g_phy[n]->GetSifs().GetMicroSeconds()
            << ",\"be_aifsn\":" << int(be->Txop::GetAifsn()) << ",\"be_cwmin\":" << be->Txop::GetMinCw()
            << ",\"be_cwmax\":" << be->Txop::GetMaxCw() << ",\"vo_aifsn\":" << int(vo->Txop::GetAifsn())
@@ -2006,9 +2007,24 @@ class FdtMatrixLoss : public PropagationLossModel
     double m_walkDt = 1.0;
     std::map<MobKey, std::vector<double>> m_walk;
     std::map<MobKey, double> m_fadeM;
+    // timed entries [a, b, loss, t0, t1] of channel.loss: the loss of the pair during [t0, t1) of scenario
+    // time (E0 outages), ahead of the walk and of the fixed loss of the pair
+    std::map<MobKey, std::vector<std::array<double, 3>>> m_window;
 
     double LossOf(const MobilityModel* a, const MobilityModel* b) const
     {
+        auto o = m_window.find({a, b});
+        if (o != m_window.end())
+        {
+            double t = ScenarioNowS();
+            for (const auto& e : o->second)
+            {
+                if (t >= e[0] && t < e[1])
+                {
+                    return e[2];
+                }
+            }
+        }
         auto w = m_walk.find({a, b});
         if (w != m_walk.end() && !w->second.empty())
         {
@@ -2469,6 +2485,19 @@ main(int argc, char* argv[])
         for (size_t k = 0; k < L.size(); k++)
         {
             auto a = mobOf(L[k][0].Str()), b = mobOf(L[k][1].Str());
+            if (L[k].size() >= 5)
+            {
+                // timed entry [a, b, loss, t0, t1]
+                double t0 = L[k][3].Num(), t1 = L[k][4].Num();
+                NS_ABORT_MSG_IF(!(t1 > t0), "channel.loss: a timed entry needs t1 > t0");
+                std::array<double, 3> e = {t0, t1, L[k][2].Num()};
+                loss->m_window[{a, b}].push_back(e);
+                if (a != b)
+                {
+                    loss->m_window[{b, a}].push_back(e);
+                }
+                continue;
+            }
             loss->m_loss[{a, b}] = loss->m_loss[{b, a}] = L[k][2].Num();
         }
         const mj::Value& W = ch["walk"];
@@ -2612,6 +2641,15 @@ main(int argc, char* argv[])
     }
     WifiPhyHelper& phy = (phyModel == "spectrum") ? static_cast<WifiPhyHelper&>(sphy)
                                                   : static_cast<WifiPhyHelper&>(yphy);
+    // operating channel: "channel_number" (20 MHz; 2.4 GHz band for 11g, 5 GHz for 11a), else the ns-3
+    // default of the standard (11g: channel 1, 11a: channel 36)
+    if (sc.Has("channel_number"))
+    {
+        int chn = int(sc["channel_number"].Num());
+        std::string band = standard == "11a" ? "BAND_5GHZ" : "BAND_2_4GHZ";
+        NS_ABORT_MSG_IF(standard == "11g" && (chn < 1 || chn > 13), "channel_number: 1..13 for 11g");
+        phy.Set("ChannelSettings", StringValue("{" + std::to_string(chn) + ", 20, " + band + ", 0}"));
+    }
     double txp = sc["tx_power_dbm"].Num(20);
     phy.Set("TxPowerStart", DoubleValue(txp));
     phy.Set("TxPowerEnd", DoubleValue(txp));

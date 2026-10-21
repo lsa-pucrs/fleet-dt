@@ -44,6 +44,18 @@ Queue variants (S1, S3): q100 = the base file; q1000: MAC queue 1000 packets on 
 with a MaxDelay of 60 s (no lifetime drop, like a Linux txqueuelen of 1000); codel: mq + one CoDel per
 access category (target 5 ms, interval 100 ms, limit 1000 packets) on the vessels above a MAC queue of 4
 packets.
+
+Every paper scenario sets "channel_number" 6 (the BSS of the radios, radio/openwrt/*/wireless; the
+emulator sets the ChannelSettings of every PHY to it), so the two-ray models of S5 and S7 use the
+frequency of channel 6, 2.437 GHz (channel_hz).
+
+Modifiers of a paper scenario for the experiments (each returns a copy and records itself in the file):
+
+| Function | Experiment | Effect |
+|---|---|---|
+| with_outage(sc, dur_s, ...) | E0 | loss of 200 dB between the AP and vessel 1 during [start_s, start_s + dur_s) of scenario time (a timed entry of "channel"."loss"); start_s seeded in start_range_s (after the warm-up of 30 s) when not given; "outage" records the parameters |
+| with_rate_adaptation(sc) | E3, ablation R7 | Minstrel rate adaptation over the OFDM rates 6 to 54 Mb/s instead of the constant 24 Mb/s; standard 11a (see the function) |
+| make_paper_sequence(M, seed, ...) | E5 | one run over the regimes S1, S3, S1 (130 s each by default) on the spectrum PHY, with the injector of S3 only in the S3 regime; "regimes" lists [{"t0", "scenario"}] |
 """
 import argparse
 import json
@@ -180,7 +192,20 @@ PAPER_PARAMS = {
     "s7_sigma_s_m": 5.0,
     "codel": {"target_ms": 5, "interval_ms": 100, "limit_packets": 1000, "device_packets": 4},
     "q1000": {"packets": 1000, "max_delay_ms": 60000},
+    "channel_number": 6,             # 2.4 GHz channel of the BSS (radio/openwrt/*/etc/config/wireless)
+    # E0 outages: loss between the AP and the target vessel, seeded start inside the run after the warm-up
+    "outage_loss_db": 200.0,
+    "outage_start_range_s": [30.0, 100.0],
+    # E5: regimes S1, S3, S1 of 130 s each (390 s run)
+    "sequence_regime_s": 130.0,
 }
+
+
+def channel_hz(ch):
+    """center frequency (Hz) of 2.4 GHz channel ch = 1..13 (IEEE 802.11-2020, 17.3.8.4.2)"""
+    if not 1 <= int(ch) <= 13:
+        raise ValueError("2.4 GHz channel must be 1..13")
+    return 2.407e9 + 5e6 * int(ch)
 
 
 def paper_file(sid, M, queue=None):
@@ -227,6 +252,7 @@ def make_paper(sid, M, seed, duration=180.0, queue=None):
     sc["scenario_set"] = "paper-v2"
     sc["queue_variant"] = queue or "q100"
     sc["phy"] = "spectrum" if sid in ("S3", "S8") else "yans"
+    sc["channel_number"] = P["channel_number"]
     sc["cca_ed_dbm"] = P["cca_ed_dbm"]
     sc["tx_power_dbm"] = P["tx_dbm"]
     sc["basic_modes"] = ["ErpOfdmRate6Mbps", "ErpOfdmRate12Mbps", "ErpOfdmRate24Mbps"]
@@ -273,7 +299,7 @@ def make_paper(sid, M, seed, duration=180.0, queue=None):
         sc["speeds_mps"] = speeds
         if sid == "S5":
             m = P["s5_nakagami_m"]
-            sc["channel"] = {"model": "tworay", "frequency_hz": 2.412e9,
+            sc["channel"] = {"model": "tworay", "frequency_hz": channel_hz(P["channel_number"]),
                              "nakagami": {"m0": m, "m1": m, "m2": m, "d1": 80, "d2": 200}, "positions": pos}
             params["fading_m"] = m
         else:
@@ -286,7 +312,7 @@ def make_paper(sid, M, seed, duration=180.0, queue=None):
                                      "roll_phase_rad": round(rng2.uniform(0, 2 * math.pi), 4)}
             # sea water at 2.4 GHz: eps_r ~ 70, sigma ~ 5 S/m (ITU-R P.527); vertical dipoles; rms
             # height of a sinusoidal swell of amplitude A: A / sqrt(2) (Miller-Brown roughness)
-            sc["channel"] = {"model": "sea", "frequency_hz": 2.412e9, "eps_r": P["s7_eps_r"],
+            sc["channel"] = {"model": "sea", "frequency_hz": channel_hz(P["channel_number"]), "eps_r": P["s7_eps_r"],
                              "sigma_s_m": P["s7_sigma_s_m"], "polarization": "V",
                              "rough_sigma_m": round(P["s7_heave_m"] / math.sqrt(2), 4), "antenna": "dipole",
                              "min_distance_m": 1, "positions": pos, "motion": motion}
@@ -307,6 +333,126 @@ def make_paper(sid, M, seed, duration=180.0, queue=None):
                      "target_ms": c["target_ms"], "interval_ms": c["interval_ms"]}
         sc["station_queue"] = {"packets": c["device_packets"]}
     sc["params"] = params
+    return sc
+
+
+# ------------------------------------------------------------------------------------------------
+# modifiers of the experiments (E0 outages, E3 ablation R7) and the regime sequence of E5
+
+MATRIX_ONLY = "the %s modifier needs a scenario with the matrix channel model (S1 to S4, S6, S8, S9)"
+
+
+def outage_start(seed, M, target, dur_s, start_range_s=None):
+    """seeded start (s of scenario time, ms resolution) of an outage of dur_s seconds, uniform over the
+    starts that keep the outage inside start_range_s (default PAPER_PARAMS outage_start_range_s)"""
+    lo, hi = start_range_s or PAPER_PARAMS["outage_start_range_s"]
+    if dur_s <= 0 or hi < lo:
+        raise ValueError("outage: dur_s > 0 and start_range_s = [lo, hi] with lo <= hi")
+    rng = random.Random("outage:%s:%d:%d:%g" % (target, int(M), int(seed), float(dur_s)))
+    return round(rng.uniform(float(lo), float(hi)), 3)
+
+
+def with_outage(sc, dur_s, start_s=None, target="v1", peer="gs", loss_db=None, seed=None, start_range_s=None):
+    """E0: copy of matrix scenario sc with the link peer-target at loss_db (default 200 dB) during
+    [start_s, start_s + dur_s) of scenario time; start_s None: seeded by (seed or sc["seed"], M, target,
+    dur_s) in start_range_s. The emulator reads the timed entry [peer, target, loss, t0, t1] of
+    "channel"."loss" (fdt-emu.cc FdtMatrixLoss), which takes precedence over the walk and the fixed loss of
+    the pair; "outage" records {"target", "peer", "start_s", "dur_s", "loss_db"}."""
+    if (sc.get("channel") or {}).get("model", "matrix") != "matrix":
+        raise ValueError(MATRIX_ONLY % "outage")
+    M = int(sc["M"])
+    names = ["gs"] + ["v%d" % i for i in range(1, M + 1)]
+    if target not in names or peer not in names or target == peer:
+        raise ValueError("outage: target and peer must be two of %s" % names)
+    dur_s = float(dur_s)
+    if start_s is None:
+        start_s = outage_start(sc["seed"] if seed is None else seed, M, target, dur_s, start_range_s)
+    start_s = float(start_s)
+    if start_s < 0 or dur_s <= 0:
+        raise ValueError("outage: start_s >= 0 and dur_s > 0")
+    L = float(PAPER_PARAMS["outage_loss_db"] if loss_db is None else loss_db)
+    out = json.loads(json.dumps(sc))
+    out["channel"].setdefault("loss", []).append([peer, target, L, start_s, round(start_s + dur_s, 6)])
+    out["outage"] = {"target": target, "peer": peer, "start_s": start_s, "dur_s": dur_s, "loss_db": L}
+    out["name"] = "%s-out%s%g" % (sc["name"], target, dur_s)
+    return out
+
+
+def with_rate_adaptation(sc):
+    """E3 ablation R7: copy of sc with the Minstrel rate adaptation instead of the constant 24 Mb/s.
+
+    ns-3 Minstrel adapts over every rate of the standard, and in 802.11g these include the DSSS rates,
+    which SpectrumWifiPhy cannot send in a 20 MHz channel (S3 needs the spectrum PHY) and which the
+    radios do not use (OpenWrt legacy_rates 0). The ablation therefore runs 802.11a (OFDM 6 to 54 Mb/s,
+    the OFDM rates of the radios with supported_rates opened; the same exchange airtime as ERP-OFDM:
+    SIFS 16 us = 10 us + 6 us signal extension, slot 9 us) on the default 5 GHz channel of ns-3 (36),
+    because ns-3 allows 802.11a only in the 5 GHz band; the matrix loss model does not depend on the
+    frequency. Basic rates OFDM 6/12/24 Mb/s, beacons and management at 6 Mb/s. Only for scenarios with
+    the matrix model and without DSSS beacons of a second BSS (S1, S3, S4, S6, S8)."""
+    if (sc.get("channel") or {}).get("model", "matrix") != "matrix":
+        raise ValueError(MATRIX_ONLY % "R7")
+    ext = sc.get("external_bss") or {}
+    if any(str(m).startswith("Dsss") for m in ext.get("basic_modes", [])):
+        raise ValueError("R7: the DSSS beacons of the second BSS do not exist in 802.11a")
+    out = json.loads(json.dumps(sc))
+    out["standard"] = "11a"
+    out["rate"] = {"manager": "minstrel", "non_unicast": "OfdmRate6Mbps"}
+    out["basic_modes"] = ["OfdmRate6Mbps", "OfdmRate12Mbps", "OfdmRate24Mbps"]
+    out.pop("channel_number", None)
+    if ext:
+        out["external_bss"]["data"] = str(ext.get("data", "ErpOfdmRate24Mbps")).replace("ErpOfdm", "Ofdm")
+        if "basic_modes" in ext:
+            out["external_bss"]["basic_modes"] = [str(m).replace("ErpOfdm", "Ofdm") for m in ext["basic_modes"]]
+    out["ablation"] = "R7"
+    out.setdefault("params", {})["rate_adaptation"] = ("Minstrel over OFDM 6-54 Mb/s, standard 11a, ns-3 channel 36 "
+                                                       "(deviation: 11g Minstrel would try DSSS rates)")
+    out["name"] = sc["name"] + "-R7"
+    return out
+
+
+SEQUENCE_SCENARIOS = ("S1", "S3")
+
+
+def make_paper_sequence(M, seed, regimes=("S1", "S3", "S1"), regime_s=None, duration=None):
+    """E5: one scenario over consecutive regimes (each "S1" or "S3", regime_s seconds each, default
+    PAPER_PARAMS sequence_regime_s = 130 s): S1 on the spectrum PHY with the injector of S3 present in
+    every regime and transmitting only inside the S3 regimes (the on/off schedule of make_paper("S3")
+    drawn for the length of the regime, shifted to its start; the same draw in every S3 regime). The
+    spectrum PHY holds over the whole run, because the injector of S3 needs it. "regimes" lists
+    [{"t0": start in s of scenario time, "scenario": id}]; duration (default: the regimes plus 30 s)
+    bounds the last regime."""
+    regimes = list(regimes)
+    if not regimes or any(r not in SEQUENCE_SCENARIOS for r in regimes):
+        raise ValueError("regimes must be a non-empty list of %s" % (SEQUENCE_SCENARIOS,))
+    L = float(PAPER_PARAMS["sequence_regime_s"] if regime_s is None else regime_s)
+    if L <= 0:
+        raise ValueError("regime_s must be > 0")
+    total = L * len(regimes)
+    duration = total + 30.0 if duration is None else float(duration)
+    sc = make_paper("S1", M, seed, duration)
+    s3 = make_paper("S3", M, seed, L)
+    sc["name"] = "P-SEQ-%s-m%d-s%d" % ("-".join(regimes), M, seed)
+    sc["scenario_id"] = "SEQ"
+    sc["phy"] = "spectrum"
+    sc["channel"]["loss"] = list(s3["channel"]["loss"])      # the injector at -50 dBm from every node
+    sch = []
+    starts = []
+    for k, r in enumerate(regimes):
+        t0 = round(k * L, 6)
+        t1 = duration if k == len(regimes) - 1 else round((k + 1) * L, 6)
+        starts.append({"t0": t0, "scenario": r})
+        if r == "S3":
+            for a, b, per, duty, pw in s3["jammer"]["schedule"]:
+                a, b = round(t0 + a, 3), round(min(t0 + b, t1), 3)
+                if b > a:
+                    sch.append([a, b, per, duty, pw])
+    if sch:
+        sc["jammer"] = {"schedule": sch}
+    else:                    # no S3 regime: the emulator creates no injector node, so no loss entries for it
+        sc["channel"]["loss"] = [e for e in sc["channel"]["loss"] if "jam" not in e[:2]]
+    sc["regimes"] = starts
+    sc["params"] = dict(sc["params"], regime_s=L, injector_rx_dbm=s3["params"]["injector_rx_dbm"],
+                        regimes=list(regimes))
     return sc
 
 
