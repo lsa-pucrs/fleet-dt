@@ -5,10 +5,13 @@ real-time lag of the emulator with the traffic of the paper model, M in {2, 4} x
 and K = 3 (TOST) on the main outcomes.
 
   python3 emu/experiments/qualify.py manifest --out DIR [--steps 1200] [--seed0 7000] [--dtp dtp.json]
-          [--source-scale 1.0] [--U 0.8]
+          [--source-scale 1.0] [--U 0.8] [--bare-session]
       DIR/manifest.json and DIR/specs/*.json for emu/experiments/runner.py (paper stack, fleet.py):
       the K = 3 runs first, then the K = 1 runs with "max_K": 1 (they start only alone); the same seed
-      for the K = 1 and the K = 3 run of a (M, profile, repetition), so the comparison is paired
+      for the K = 1 and the K = 3 run of a (M, profile, repetition), so the comparison is paired; every
+      spec holds "session": the session of the paper campaign (emu/fleet.py PAPER_SESSION: CPU quota
+      0.25, clock injector, one probe read per step), or with --bare-session the session of the pilot
+      runs of Q (no quota, no injector, probe every 0.1 s)
   python3 emu/experiments/qualify.py analyze RESULTS [--manifest DIR/manifest.json] [--warm-steps 240]
           [--hard-limit-us 1000] [--delta-us 1000] [--criterion bytes] [--json OUT]
 
@@ -44,6 +47,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, os.path.join(ROOT, "emu", "scenarios"))
 sys.path.insert(0, os.path.join(ROOT, "emu", "tools"))
+sys.path.insert(0, os.path.join(ROOT, "emu"))
 
 PROFILES = ("S1", "S2", "S3", "S6", "S7")
 MS = (2, 4)
@@ -56,7 +60,14 @@ PHASES = ("max1_us", "max2_us", "max3_us")
 # ------------------------------------------------------------------------------------------------
 # manifest
 
-def q_spec(profile, M, K, rep, seed, steps, dtp, U, scale, Ts=0.125, T1=0.020, T2=0.010):
+def q_session(bare=False, Ts=0.125):
+    """"session" of the Q specs: the paper campaign (fleet.PAPER_SESSION, probe period Ts) or the bare
+    session of the pilot runs"""
+    import fleet
+    return dict(fleet.BARE_SESSION) if bare else fleet.paper_session({"Ts": Ts})
+
+
+def q_spec(profile, M, K, rep, seed, steps, dtp, U, scale, Ts=0.125, T1=0.020, T2=0.010, session=None):
     import gen
     dur = steps * Ts + 30.0
     rid = "Q-%s-m%d-k%d-r%d" % (profile, M, K, rep)
@@ -74,10 +85,12 @@ def q_spec(profile, M, K, rep, seed, steps, dtp, U, scale, Ts=0.125, T1=0.020, T
             # (--abortLagUs=0: the analysis applies the 1 ms rule), ns-3's own HardLimit of 50 ms stays as
             # a backstop
             "abort_lag_us": 0,
+            "session": dict(session) if session is not None else q_session(False, Ts),
             "qualify": {"profile": profile, "K": K, "rep": rep}}
 
 
-def write_manifest(out, steps=1200, seed0=7000, dtp="dtp.json", U=0.8, scale=1.0, order_seed=20261016):
+def write_manifest(out, steps=1200, seed0=7000, dtp="dtp.json", U=0.8, scale=1.0, order_seed=20261016,
+                   bare_session=False):
     os.makedirs(os.path.join(out, "specs"), exist_ok=True)
     runs = []
     for pi, prof in enumerate(PROFILES):
@@ -85,7 +98,7 @@ def write_manifest(out, steps=1200, seed0=7000, dtp="dtp.json", U=0.8, scale=1.0
             for rep in range(REPS):
                 seed = seed0 + 100 * pi + 10 * M + rep
                 for K in KS:
-                    s = q_spec(prof, M, K, rep, seed, steps, dtp, U, scale)
+                    s = q_spec(prof, M, K, rep, seed, steps, dtp, U, scale, session=q_session(bare_session))
                     p = os.path.join(out, "specs", s["name"] + ".json")
                     with open(p, "w") as f:
                         json.dump(s, f)
@@ -369,6 +382,8 @@ def main():
     m.add_argument("--dtp", default="dtp.json")
     m.add_argument("--U", type=float, default=0.8)
     m.add_argument("--source-scale", type=float, default=1.0)
+    m.add_argument("--bare-session", action="store_true",
+                   help="the session of the pilot runs (no CPU quota, no clock injector, probe every 0.1 s)")
     a_ = sub.add_parser("analyze")
     a_.add_argument("results")
     a_.add_argument("--manifest", default=None)
@@ -379,7 +394,7 @@ def main():
     a_.add_argument("--json", default=None)
     a = ap.parse_args()
     if a.cmd == "manifest":
-        man = write_manifest(a.out, a.steps, a.seed0, a.dtp, a.U, a.source_scale)
+        man = write_manifest(a.out, a.steps, a.seed0, a.dtp, a.U, a.source_scale, bare_session=a.bare_session)
         print("%d runs -> %s" % (len(man["runs"]), a.out))
         return 0
     runs = collect(a.results, a.manifest, a.warm_steps, a.hard_limit_us, a.delta_us, a.criterion)

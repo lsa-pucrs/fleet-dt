@@ -25,6 +25,14 @@ keeps at least 20 GB of available memory after it.
 
 Stack: a spec without "stack" runs on the as2 stack (the specs of matrix.py and of the frozen campaign);
 a spec with "stack": "paper" runs on the paper stack.
+
+Session of a paper-stack run (Section VI-B): "session" of the spec over emu/fleet.py PAPER_SESSION, so by
+default the vessel VMs run under the CPU quota of 0.25 of a core (run.py up --cpu-ratio 0.25), the clock
+injector is on (--clock-inject, and the run gets "clock": {"inject": true}, the default schedule of
+fdt_clock_schedule: +-20 ppm ramps and NTP loss episodes) and the clock probe reads once per step
+(--probe-period Ts). "session": {"cpu_ratio": null, "clock_inject": false, "probe_period_s": 0.1} gives
+the session of run.py up without options (the as2 stack always runs on it). A run whose session options
+(or M) differ from those of the session of its slot takes the session down and up again.
 """
 import argparse
 import json
@@ -37,6 +45,9 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+if os.path.join(ROOT, "emu") not in sys.path:
+    sys.path.insert(0, os.path.join(ROOT, "emu"))
+import fleet  # noqa: E402
 RUNPY = os.path.join(ROOT, "emu", "run.py")
 EMU = os.path.expanduser(os.environ.get("FDT_EMU", "~/fleetdt-deploy/emu"))
 LOCK = threading.Lock()
@@ -117,10 +128,35 @@ def run_spec(spec, rd, man_dir):
     spec["run_dir"] = rd
     spec["sync"] = False
     spec.setdefault("stack", "as2")
+    if spec["stack"] == "paper" and spec.get("Ts") is not None:
+        # the session options of the run, resolved (the defaults of the paper campaign unless "session" sets
+        # them), so that emu/fleet.py checks them against the session and installs the clock schedule
+        spec["session"] = fleet.paper_session(spec)
     ref = (spec.get("as") or {}).get("init_scores_file")
     if ref and not os.path.isabs(ref):
         spec["as"] = dict(spec["as"], init_scores_file=os.path.join(man_dir, ref))
     return spec
+
+
+def session_key(spec):
+    """(M, cpu_ratio, clock_inject, probe_period_s) of the session that a run (spec of run_spec) needs"""
+    if spec.get("stack") == "paper" and spec.get("session") is not None:
+        s = spec["session"]
+    else:
+        s = fleet.BARE_SESSION
+    return (int(spec["M"]), s["cpu_ratio"], bool(s["clock_inject"]), float(s["probe_period_s"]))
+
+
+def up_args(key, clock_seed):
+    """options of run.py up for the session key of session_key"""
+    M, ratio, inject, period = key
+    out = ["up", "--scenario", os.path.join(ROOT, "emu", "scenarios", "S1-m%d.json" % M),
+           "--clock-seed", str(clock_seed), "--sync", "--probe-period", repr(period)]
+    if ratio is not None:
+        out += ["--cpu-ratio", repr(float(ratio))]
+    if inject:
+        out.append("--clock-inject")
+    return out
 
 
 def run_py(slot, *args, log_path=None, timeout=None):
@@ -192,6 +228,7 @@ class Runner:
     def slot_loop(self, k):
         lp = os.path.join(self.results, "slot%d.log" % k)
         M_up = None
+        key_up = None
         try:
             while not self.stop.is_set():
                 if k >= self.K or os.path.exists(os.path.join(self.a.dir, "STOP")):
@@ -204,27 +241,26 @@ class Runner:
                         break
                     time.sleep(10)
                     continue
-                if r["M"] != M_up:
+                rd = os.path.join(self.results, r["id"])
+                with open(os.path.join(self.a.dir, r["spec"])) as f:
+                    spec = run_spec(json.load(f), rd, self.a.dir)
+                key = session_key(dict(spec, M=r["M"]))
+                if key != key_up:
                     if M_up is not None:
                         run_py(k, "down", log_path=lp)
                     need = (r["M"] + 1) * 0.8
                     while mem_available_gb() - need < RESERVE_GB and not self.stop.is_set():
                         log("slot %d: waiting for memory (%.1f GB available)" % (k, mem_available_gb()))
                         time.sleep(30)
-                    scen = os.path.join(ROOT, "emu", "scenarios", "S1-m%d.json" % r["M"])
-                    rc = run_py(k, "up", "--scenario", scen, "--clock-seed", str(100 + k), "--sync", log_path=lp,
-                                timeout=600)
+                    rc = run_py(k, *up_args(key, 100 + k), log_path=lp, timeout=600)
                     if rc != 0:
                         log("slot %d: up failed (see %s)" % (k, lp))
                         self.man.update(r, status="pending")
                         run_py(k, "down", log_path=lp)
-                        M_up = None
+                        M_up = key_up = None
                         time.sleep(30)
                         continue
-                    M_up = r["M"]
-                rd = os.path.join(self.results, r["id"])
-                with open(os.path.join(self.a.dir, r["spec"])) as f:
-                    spec = run_spec(json.load(f), rd, self.a.dir)
+                    M_up, key_up = r["M"], key
                 sp = os.path.join(self.results, ".spec-slot%d.json" % k)
                 with open(sp, "w") as f:
                     json.dump(spec, f)

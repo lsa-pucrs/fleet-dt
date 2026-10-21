@@ -118,13 +118,21 @@ repository paths, a DTP path gets `"vessels"` = 1..M):
 | `dti` | `enabled` (true; false: the plugin publishes D_i(t), `plugin_opt_demand internal`), `offset_ms` (1), `stagger_ms` (0, added per vessel index), `idle` (8), `jitter_ms` (the J of `plugin_opts`; both must agree) |
 | `jmcs` | `period_s` (10), `first` (survey), `offset_ms` (2), `video_prefix` (video), `modes` (explicit orders) |
 | `monitor` | `offset_us` (500), `jitter_us` (0), `quant` (harvest or cumulative), `harvest_ms` (0), `sigma` (0; 0.02, 0.05), `noise_seed` (seed), `backend` (auto, c, py) |
-| `source` | `kind` `fdt_source` (default: `trace` (`emu/traces/water-sbs-q90-s1.txt`; null with `median`, `sigma`: lognormal), `scale` (scale of the frame sizes, `load_mode`), `jitter_ms`, `phase`, `stream_size`, `topics`, `allow_trunc`) or `raw_load` (`scale`, `size`, `min_frac`, `topics`), or `cmd` (template with `{dtp}`, `{dtp_vessel}`, `{vessel}`, `{seed}`, `{t0}`, `{duration}`, `{run}`). The run refuses a trace replay whose largest frame times `scale` exceeds `video_layers.frame_cap` (the source would truncate stripes) or whose share profile (`q<Q>-s<S>` of the file name) differs from `video_layers.profile`, unless `allow_trunc` |
+| `source` | `kind` `fdt_source` (default: `trace` (`emu/traces/water-sbs-q90-s1.txt`; null with `median`, `sigma`: lognormal), `scale` (scale of the frame sizes, `load_mode`), `jitter_ms` (release jitter J of the telemetry topics, `--jitter-ms`; default the J of the regulator and of `fdt_dti`, 2 ms; the layer topics keep their `"jitter": 0`), `phase`, `stream_size`, `topics`, `allow_trunc`) or `raw_load` (`scale`, `size`, `min_frac`, `topics`), or `cmd` (template with `{dtp}`, `{dtp_vessel}`, `{vessel}`, `{seed}`, `{t0}`, `{duration}`, `{run}`). The run refuses a trace replay whose largest frame times `scale` exceeds `video_layers.frame_cap` (the source would truncate stripes) or whose share profile (`q<Q>-s<S>` of the file name) differs from `video_layers.profile`, unless `allow_trunc` |
 | `abort_lag_us` | lag at which the emulator stops the run (`--abortLagUs`, default 1000; 0 records only, as in Q); the emulator always runs with `--phaseLag` (Ts:T1:T2 of the DTP) and `--stepBytes`; an emulator that exits early (status 3: lag abort) or reports `phase_lag.aborted` fails the run; `emu_args` may not repeat these options |
 | `pcap` | true: `--pcap=1`, the emulator writes `RUN/emu/ap.pcap` (IPv4 packets between the AP node and the GS; E0 conformance) |
 | `outq` | `enabled` (true), `fifo` (SCHED_FIFO priority of the sampler) |
 | `clock` | E1: `{"inject": true, "ramp_ppm", "ramp_s", "hold_s", "loss_n", "loss_s", "loss_windows", "warm_s", "seed"}`: per vessel `fdt_clock_schedule.make(...)` with the origin at start(S0) and ppm0 = the frequency error of the vessel in the session, installed at `/etc/fleetdt/clock-schedule.json` before the emulator starts, `/var/log/fdt-clockerr.jsonl` copied to `RUN/clockerr.jsonl` after the run, the schedule removed; needs a session up with `--clock-inject` |
 | `replay_subsets`, `replay_jobs` | E2: after the run, `emu/replay_subsets.py RUN --jobs J` (default 4) on the auxiliary CPUs (`replay_subsets.log`, `result.json` "replay_subsets") |
 | `stack_commit` | refuse the run unless the checkout is this commit and the files of the stack are unchanged |
+| `catchup_us` | catch-up threshold of `steplag.csv` (`--catchupUs`, default 100: a step whose lag changes by more than 0.1 ms in phase 3, Section VI-B); a `--catchupUs=` in `emu_args` replaces it (both at once are refused) |
+| `session` | session options that the run needs: `cpu_ratio` (0.25: CPU quota of the vessel VMs, `run.py up --cpu-ratio`; null: none), `clock_inject` (true: `run.py up --clock-inject`, and without `"clock"` the run gets `{"inject": true}`, the default schedule of `fdt_clock_schedule`: +-20 ppm ramps and NTP loss episodes), `probe_period_s` (null: Ts, one probe read per step; `run.py up --probe-period`); `fleet.PAPER_SESSION` holds the defaults, `fleet.BARE_SESSION` (null, false, 0.1) the session of `run.py up` without options. With `"session"`, the run refuses a session that is up with other options; `experiments/runner.py` fills it for every paper-stack spec and brings the slot up with it. Without `"session"` (a run started by hand), no check and no default clock schedule |
+| `outage` | E0: `{"dur_s": 1, 3 or 5, "target": "v1", "peer": "gs", "start_s": null, "loss_db": 200, "seed": null, "start_range_s": [30, 100]}`: `gen.with_outage` on the scenario, the loss of the pair peer-target at `loss_db` during [start_s, start_s + dur_s) of scenario time; start_s null: seeded by (seed or the scenario seed, M, target, dur_s) uniformly in `start_range_s` (after the warm-up of 30 s); matrix scenarios only; a scenario that already carries the same `"outage"` stays as it is, another one is refused |
+| `ablation` | E3: `R7` (`gen.with_rate_adaptation`: Minstrel over the OFDM rates 6-54 Mb/s, standard 11a, see "Paper scenarios"; matrix scenarios without DSSS beacons), `R8` (Nagle and delayed acknowledgments: `set_tcp_nodelay false` in both brokers, which patch 0002 follows for the bridge sockets, and the data NIC route of every VM without `quickack`), `R9` (`max_inflight_messages 20` in both brokers) |
+| `brokers` | `nodelay` (true), `max_inflight` (0) of both brokers (`fleetdt.gsconf --nagle`, `--max-inflight N`); the ablation sets them (R8: nodelay false, R9: max_inflight 20), explicit keys win |
+| `guest_tcp` | `quickack` (true), `rto_min_ms` (20), `slow_start_after_idle` (0): route of the data NIC and TCP sysctl of every VM for the run (`sudo python3 emu/vm/guest/fdt-netsetup.py --tcp-only ...` in the preparation of every run, output in `RUN/netsetup.txt`, so an R8 run does not leave its route to the next run); R8 sets quickack false |
+| `vessels` | per-vessel overrides `{"<i>": {"size_scale", "fps_scale", "video", "topics"}}`: size_scale, fps_scale and video (false: no video) go into `video_layers.vessels` of the DTP, so the DTP of vessel i (`dtp_vessel.json`), its DTI program, its regulator and its source follow them (video false: the layer topics get rate 0, d_il = 0, the source publishes none of them); `topics` replaces `source.topics` for vessel i. `fleet.FAIRNESS_VESSELS` is the E4 fairness cell: size scale 1 for vessels 1 to 3, no video for vessel 4 |
+| `overload` | E4: `{"vessel": 1, "factor": 1.2, "fraction": 0.1, "seed": null (the run seed), "warm_s": 30, "basis": "cap"}`: the source of the vessel (`fdt_source.py --overload-*`) sends, in the seeded `round(fraction n)` of the n steps after the warm-up (`video_layers.overload_steps`), every stripe with `factor` times the bytes that its demand table declares (basis `cap`; `size`: the replayed size times the factor, about 8 % above the cap on average with the default trace), so the policing of the regulator must cut them; `result.json` `overload.steps` lists the overloaded steps (absolute indices) and the source log marks those stripes with `"over"` |
 
 RUN/result.json records `stack`, `revision` (git `commit`, `branch`, `describe`, `dirty`, `dirty_stack`:
 the files of the stack that differ from the commit, the tree digest, and `stack_files`: sha256 of every
@@ -134,7 +142,9 @@ lines of the run), S0, t0 and the emulator summary (with `nl80211`). RUN/dtp_b<i
 vessel i.
 `result.json` also records `video` (frame rate, frame cap, profile, trace, scale, mean frame over the cap),
 `abort_lag_us`, `pcap`, `cpu_profile` (`ratio` of the session and `emu/vm/cpu_profile.py status` of every
-QEMU process before and after the run), `clock` (E1), `emu_exit` and `replay_subsets`; `emu_summary` adds
+QEMU process before and after the run), `clock` (E1), `emu_exit` and `replay_subsets`, `session` (the
+options of the session that is up) and `session_spec`, `ablation`, `brokers`, `guest_tcp`, `vessels`,
+`outage`, `overload`, `regimes` (E5) and `scenario_ablation`; `emu_summary` adds
 `phase_lag`, `qdisc`, `conf`, `pcap` and `step_bytes` of `emu/summary.json`. The AS log `as.jsonl` holds
 `D` (the demand tables of M(t)) and `y_used` (the y(t - 1) of eq. (2)), and each G(t) of `dta.jsonl` its
 emission time `emitted`, for the conformance check.
@@ -538,6 +548,11 @@ comparison is between distributions. `matrix.py eval --yans E4` writes the cells
 | (always) | QEMU with `-cpu host,+invtsc` (invariant TSC for the TSC clock source of the guests) |
 | `--cpu-ratio R` | each vessel QEMU runs in a systemd user scope with CPUQuota = R of one CPU (`emu/vm/cpu_profile.py wrap`, inside the CPU pinning); off by default; `state.json` "cpu_ratio" |
 | `--clock-inject` | the `emu-host.json` of each vessel names `/etc/fleetdt/clock-schedule.json` in "clock", so `fdt-clockinit` sets only the offset and the frequency error comes from the schedule of each run (`"clock": {"inject": true}`) |
+| `--probe-period S` | period of the clock probe (default 0.1 s); `runner.py` passes Ts for the paper campaign (one read per step); `state.json` "probe_period" |
+
+`experiments/runner.py` brings each slot up with the `"session"` of its next paper-stack run (default
+`--cpu-ratio 0.25 --clock-inject --probe-period Ts`; as2 runs: no options) and takes it down and up again
+when M or these options change.
 
 ### Rootless hosts (hydra: Rocky Linux 8.10, QEMU 6.2 of RHEL, cgroup v1, no root)
 
@@ -623,13 +638,36 @@ Common to all: ConstantRate ERP-OFDM 24 Mb/s for data and ACKs, beacons and mana
 | S2 | S1 + ap2/sta2 at 70 dB: UDP 1400 B sta2 -> ap2 with CSMA, on U[1, 6] s at U[2, 8] Mb/s, off U[2, 8] s; ap2 beacons every 100 TU at DSSS 1 Mb/s (basic rate set of its BSS starts with DsssRate1Mbps; needs yans) |
 | S3 | S1 + WaveformGenerator 20 dBm at 70 dB from every node (-50 dBm, above the ED threshold -62 dBm), on U[1, 6] s with period U[0.5, 5] ms and duty U[0.05, 0.3], off U[2, 8] s |
 | S4 | S1 with v1-v2 and v3-v4 at 200 dB (M = 2: v1-v2) |
-| S5 | lawnmower survey, AP at 6 m, vessels at 1.5 m, lanes 100-800 m, U[1, 2] m/s; TwoRayGround + Nakagami m = 5; fixed 24 Mb/s ERP (no Minstrel, no 11a) |
+| S5 | lawnmower survey, AP at 6 m, vessels at 1.5 m, lanes 100-800 m, U[1, 2] m/s; TwoRayGround at 2.437 GHz (channel 6) + Nakagami m = 5; fixed 24 Mb/s ERP (no Minstrel, no 11a) |
 | S6 | S1 with the AP-vessel loss on a seeded walk in [95, 106] dB (+-1 dB per second, reflected, linear between seconds; `channel.walk`); `preamble_min_rssi_dbm` -90 |
 | S7 | trajectories of S5 (same seed) over the sea (`channel.model` `sea`): direct and reflected ray with their phase difference, Fresnel coefficient of sea water (eps_r 70, sigma 5 S/m, vertical polarization), Miller-Brown roughness (sigma_h = 0.3 / sqrt 2 m), heave 0.3 m with period U[2, 8] s per vessel, roll 10 deg with the same period (own seeded phase), half-wave dipole field patterns at both ends |
 | S8 | S3 schedule of the same seed with the injector at -72 dBm (92 dB to every node) and the AP-vessel loss 84 dB (-64 dBm) |
 | S9 | S2 schedule of the same seed with ap2/sta2 at 102 dB from the fleet nodes (mean -82 dBm) and Nakagami m = 5 power fading per frame on these links (`channel.fading`) |
 | q1000 | MAC queue 1000 packets with MaxDelay 60 s on the AP and the vessels (`fleet_queue`) |
 | codel | mq root with one CoDel per AC (target 5 ms, interval 100 ms, limit 1000 packets) on the vessels (`aqm`), above a MAC queue of 4 packets (`station_queue`); q100 = the base file |
+
+Every paper scenario sets `"channel_number": 6` (the channel of the radios, `radio/openwrt/*/etc/config/wireless`;
+before, the emulator ran on the ns-3 default channel 1), and the two-ray models of S5 and S7 use 2.437 GHz
+(`gen.channel_hz(6)`). The jammer of S3 and S8 follows the frequency of the AP PHY.
+
+Modifiers and the sequence of E5 (`emu/scenarios/gen.py`; `fleet.py` applies the first two from the
+`"outage"` and `"ablation"` fields):
+
+| Function | Experiment | Effect |
+|---|---|---|
+| `with_outage(sc, dur_s, start_s=None, target="v1", peer="gs", loss_db=200, seed=None, start_range_s=[30, 100])` | E0 | timed entry `[peer, target, loss_db, start_s, start_s + dur_s]` of `channel.loss`, `"outage"` record; start seeded after the warm-up when not given; matrix scenarios only |
+| `with_rate_adaptation(sc)` | E3, R7 | `standard` 11a, `rate.manager` minstrel, basic rates OFDM 6/12/24, no `channel_number` (ns-3 channel 36), `"ablation": "R7"`; refuses S2 and S9 (DSSS beacons) and S5, S7 (frequency-dependent models) |
+| `make_paper_sequence(M, seed, regimes=("S1", "S3", "S1"), regime_s=130, duration=None)` | E5 | S1 of the seed on the spectrum PHY for the whole run, the injector of S3 at -50 dBm from every node, its bursts (the schedule of `make_paper("S3", M, seed, regime_s)` shifted to the start of the regime) only inside the S3 regimes; `"regimes": [{"t0": 0, "scenario": "S1"}, {"t0": 130, "scenario": "S3"}, {"t0": 260, "scenario": "S1"}]`, `"scenario_id": "SEQ"`; duration default the regimes plus 30 s |
+
+Deviation of R7: the ablation replaces the constant 24 Mb/s by the rate adaptation of ns-3 Minstrel over
+the OFDM rates of 802.11a (6 to 54 Mb/s). ns-3 Minstrel adapts over every rate of the standard, and in
+802.11g these include the DSSS rates, which SpectrumWifiPhy cannot send in a 20 MHz channel (S3 needs the
+spectrum PHY) and which the radios do not use (`legacy_rates 0`); the radios with the rate adaptation
+would use minstrel_ht over the same OFDM rates with `supported_rates` opened. ns-3 allows 802.11a only in
+the 5 GHz band, so the R7 runs use channel 36; the matrix loss model and the injector (centered on the
+frequency of the AP) do not depend on the frequency, and the exchange airtime of 802.11a equals that of
+ERP-OFDM (SIFS 16 us = 10 us + 6 us signal extension, slot 9 us). The AS keeps R_PHY = 24 Mb/s of the
+DTP.
 
 Parameters of the drafted Section VI that ns-3 does not reproduce as intended, and the values used:
 
@@ -666,10 +704,12 @@ Full-length (182 s, 2 Mb/s per vessel, M = 4): no deassociation in S5-S9.
 | `--shiftS=X` | scenario time 0 at simulator time X (offline replays; overrides `--runStartUs`) |
 | `--selftestSet=1,3` | self-test sources on these vessels only |
 | `--stepBytes=TS_US:P3OFF_US` | `stepbytes.csv`: per step k and vessel, unique IP packets (and bytes) received without error by the AP, in phase 3 and in the step (by the end of the reception, scenario time) |
-| `--phaseLag=TS_US:T1_US:T2_US` | `steplag.csv`: per step the largest lag of phases 1, 2 and 3 (samples every `--phaseLagEveryUs`, 250 us, at every PHY TX start and RX end, and at the phase boundaries), the lag at the start of phase 3 and at the end of the step, catch-up flag (`|lag_end - lag_p3| > --catchupUs`, 1 ms); `summary.json` `phase_lag` |
+| `--phaseLag=TS_US:T1_US:T2_US` | `steplag.csv`: per step the largest lag of phases 1, 2 and 3 (samples every `--phaseLagEveryUs`, 250 us, at every PHY TX start and RX end, and at the phase boundaries), the lag at the start of phase 3 and at the end of the step, catch-up flag (`|lag_end - lag_p3| > --catchupUs`, default 1 ms; the paper stack passes 100 us, `catchup_us`); `summary.json` `phase_lag` |
 | `--abortLagUs=1000` | stop the emulator (exit status 3, `ABORT lag` line, `phase_lag.aborted`) when the lag exceeds the value at scenario time >= 0; ns-3's HardLimit (`--hardLimitMs`, 50) stays as a backstop because it applies from the emulator start, when the VMs reconnect (lags of several ms) |
 | `--probeLoss=A-B,...:DT_MS` | `lossprobe.csv` of the received power of node pairs (diagnostics; draws from the fading streams) |
 | `channel.walk`, `channel.fading` | per-pair loss series and Nakagami-m fading of the matrix model (FdtMatrixLoss; without them the matrix model gives the same results as before: gt.bin of S1-S5 identical) |
+| `channel.loss` timed entries | `[a, b, loss_db, t0_s, t1_s]`: the loss of the pair during [t0, t1) of scenario time, ahead of the walk and of the fixed loss of the pair (E0 outages, `gen.with_outage`); entries of three elements are the fixed losses as before |
+| `channel_number` | 20 MHz operating channel of every PHY (`ChannelSettings` {N, 20, BAND_2_4GHZ (11g) or BAND_5GHZ (11a), 0}); without it the ns-3 default of the standard (11g: channel 1, 2412 MHz; 11a: channel 36); the paper scenarios set 6; `summary.json` `conf.<node>.center_mhz` |
 | `channel.model: sea` | SeaTwoRayLoss (see the table above; `motion.<node>`: heave_m, period_s, phase_rad, roll_deg, roll_phase_rad) |
 | `preamble_min_rssi_dbm`, `preamble_snr_db`, `rx_noise_figure_db` | ThresholdPreambleDetectionModel and noise figure of every PHY |
 | `external_bss.beacon_tu`, `external_bss.basic_modes` | beacon interval and basic rate set of the second BSS |
@@ -729,7 +769,9 @@ chrony rendering and the convergence/warm-up check on a synthetic clock.csv, the
 
 `qualify.py manifest --out DIR` writes 60 paper-stack runs (M {2, 4} x {S1, S2, S3, S6, S7} x K {1, 3} x 3;
 the same seed for K = 1 and K = 3 of a repetition; K = 1 runs last with `"max_K": 1`; every spec sets
-`"abort_lag_us": 0`, and the paper stack passes `--phaseLag` itself). Run with
+`"abort_lag_us": 0`, and the paper stack passes `--phaseLag` itself; every spec holds `"session"`, the
+session of the paper campaign: CPU quota 0.25, clock injector, one probe read per step; `--bare-session`
+writes the session of the pilot runs: no quota, no injector, probe every 0.1 s). Run with
 `runner.py DIR --K 3 --retry 0 --lag-exempt S1 S2 S3 S6 S7` (so that the runner neither lowers K nor
 repeats lagging runs during the qualification). `qualify.py analyze RESULTS --manifest DIR/manifest.json
 [--json q.json]` applies the run rule (completed, not aborted, lag of every step <= 1 ms), the step rule
@@ -743,4 +785,6 @@ the vessels, and the paired TOST of K = 3 against K = 1 (signed differences) per
 the per-cell TOST is equivalent only when the three differences agree within a small fraction of the
 margin; the pooled TOST has up to 30 pairs.
 
-Tests: `tests/test_emu_paper_v2.py` (24 tests; the emulator tests run with `FDT_EMU_BIN` or `FDT_NS3`).
+Tests: `tests/test_emu_paper_v2.py` (24 tests; the emulator tests run with `FDT_EMU_BIN` or `FDT_NS3`);
+the factors of the experiments (outage, R7 to R9, E5 sequence, overload, vessels, session, catch-up and
+source jitter defaults): `tests/test_paper_factors.py`.

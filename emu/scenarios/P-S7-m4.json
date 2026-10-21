@@ -35,7 +35,7 @@
  },
  "channel": {
   "model": "sea",
-  "frequency_hz": 2412000000.0,
+  "frequency_hz": 2437000000.0,
   "eps_r": 70.0,
   "sigma_s_m": 5.0,
   "polarization": "V",
@@ -182,6 +182,7 @@
  "scenario_set": "paper-v2",
  "queue_variant": "q100",
  "phy": "yans",
+ "channel_number": 6,
  "cca_ed_dbm": -62.0,
  "basic_modes": [
   "ErpOfdmRate6Mbps",

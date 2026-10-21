@@ -40,7 +40,17 @@ vessel broker:
   "video_layers", n = the messages of one stripe, video_layers.msgs_per_stripe, of at most "bound"
   bytes) and the other topics streams of one message of "bound" bytes; J_l is the "jitter" of the
   topic, else --jitter-ms (default 0). The per-vessel DTP of `video_layers.py resolve` gives the rates
-  and bounds of the vessel.
+  and bounds of the vessel; a layer topic with rate 0 there (a vessel with "video": false) is not
+  published;
+* overload (E4, --overload-factor F with --t0): in the seeded steps of video_layers.overload_steps
+  (--overload-seed, --overload-steps, --overload-fraction, --overload-warm-steps; steps relative to the
+  first step S0 = (t0 - epoch) / Ts of the run, a stripe belongs to the collection step of its nominal
+  release, floor((t - epoch - T1 - T2) / Ts) + 1, as in the regulator) every stripe of the layer topics
+  goes out with F times the bytes that the demand table declares for it: --overload-basis cap (default)
+  sends F n_l (s_l - 8) bytes, so the step exceeds d_il by the factor F whatever the trace; --overload-basis
+  size multiplies the replayed size by F (truncated at F n_l (s_l - 8); with the default trace, whose mean
+  frame is 0.9 of the frame cap, F = 1.2 exceeds the cap by 8 % on average); the log line of such a stripe
+  holds "over": F.
 
 Python >= 3.7, paho-mqtt 1.x or 2.x.
 
@@ -48,6 +58,8 @@ Python >= 3.7, paho-mqtt 1.x or 2.x.
                 [--stream-size max|uniform] [--median 11000 --sigma 0.5 | --size-trace sizes.txt]
                 [--load 1.0 --load-mode size|rate] [--phase random|zero] [--duration S] [--seed 1]
                 [--video-scale S --fps-scale F] [--jitter-ms J] [--log out.jsonl]
+                [--overload-factor 1.2 --overload-fraction 0.1 --overload-seed N --overload-steps 1200
+                 --overload-warm-steps 240 --overload-basis cap|size]
 """
 import argparse
 import heapq
@@ -126,7 +138,8 @@ def v1_topic(t, d, jitter_s):
     j = video_layers.layer_index(name, c["base"], int(c["layers"])) if c is not None else None
     if j is not None:
         n = video_layers.msgs_per_stripe(d, name)
-        return Topic({"name": name, "rate": float(c["fps"]), "jitter": J, "n": n, "s": int(t["bound"]),
+        fps = float(c["fps"]) if float(t.get("rate", 1.0)) > 0 else 0.0   # rate 0: a vessel without video
+        return Topic({"name": name, "rate": fps, "jitter": J, "n": n, "s": int(t["bound"]),
                       "kind": "output", "group": c["base"], "layer": j, "layers": int(c["layers"])})
     return Topic({"name": name, "rate": float(t["rate"]), "jitter": J, "n": 1, "s": int(t["bound"]), "kind": "stream"})
 
@@ -210,6 +223,23 @@ class Source(object):
         self.out_id = {}
         self.log = open(a.log, "a") if a.log else None
         self.count = {}
+        self.over = None
+        if getattr(a, "overload_factor", None):
+            d = dtp
+            S0 = int(round((a.t0 - d["epoch"]) / d["Ts"]))
+            self.over = {"factor": float(a.overload_factor), "basis": a.overload_basis, "S0": S0,
+                         "steps": set(video_layers.overload_steps(a.overload_seed, a.overload_steps,
+                                                                  a.overload_fraction, a.overload_warm_steps))}
+
+    def overload(self, tp, nominal):
+        """factor of the stripe of layer topic tp released at the nominal time `nominal` (1.0 outside
+        the overloaded steps)"""
+        o = self.over
+        if o is None or tp.layer is None:
+            return 1.0
+        d = self.dtp
+        t = int(math.floor((nominal - d["epoch"] - d["T1"] - d["T2"]) / d["Ts"] + 1e-9)) + 1
+        return o["factor"] if (t - o["S0"]) in o["steps"] else 1.0
 
     def rate(self, tp):
         r = tp.rate * (getattr(self.a, "fps_scale", 1.0) if tp.layer is not None else 1.0)
@@ -241,10 +271,14 @@ class Source(object):
         start time of the process (mode --t0)"""
         return random.Random("%d:%d:%s:%d:%s" % (self.a.seed, self.a.vessel, tp.name, j, what))
 
-    def output_size(self, tp, j=None):
+    def output_size(self, tp, j=None, factor=1.0):
         cap = tp.n * (tp.s - OUT_HEADER.size)
         if tp.layer is not None:   # stripe of frame k: share w of the frame size
             size = max(1, int(round(self.frame_size(tp, self.frame(tp, j), cap) * tp.share)))
+            if factor != 1.0:      # overloaded step: F times the declared bytes (basis cap) or the size
+                capx = int(math.ceil(factor * cap - 1e-9))
+                size = capx if self.over["basis"] == "cap" else max(1, int(round(size * factor)))
+                return min(size, capx), size > capx
             return min(size, cap), size > cap
         if self.trace is not None:
             if j is not None:     # mode --t0: a seeded start position in the trace, then output j
@@ -268,8 +302,8 @@ class Source(object):
             return self.rng.randint(max(1, tp.s // 2), tp.s)
         return tp.s
 
-    def messages(self, tp, j, now_us):
-        """the messages of output j of topic tp and the logged size"""
+    def messages(self, tp, j, now_us, factor=1.0):
+        """the messages of output j of topic tp and the logged size (factor: overload of the stripe)"""
         seeded = self.a.t0 is not None
         if tp.kind == "stream":
             msgs, total = [], 0
@@ -281,7 +315,7 @@ class Source(object):
                 msgs.append(body)
                 total += size
             return msgs, total, False, j
-        size, trunc = self.output_size(tp, j if (seeded or tp.layer is not None) else None)
+        size, trunc = self.output_size(tp, j if (seeded or tp.layer is not None) else None, factor)
         chunk = tp.s - OUT_HEADER.size
         m = max(1, int(math.ceil(size / float(chunk))))
         if tp.layer is not None:
@@ -365,7 +399,8 @@ class Source(object):
             if dt > 0 and stop.wait(dt):
                 break
             now_us = int(time.time() * 1e6)
-            res = self.messages(tp, j, now_us)
+            over = self.overload(tp, nominal)
+            res = self.messages(tp, j, now_us, over)
             topic = "boat/b%d/raw/%s" % (self.a.vessel, name)
             for body in res[0]:
                 client.publish(topic, body, qos=0)
@@ -373,6 +408,8 @@ class Source(object):
             if self.log is not None:
                 rec = {"topic": name, "out": res[3], "j": j, "n": len(res[0]), "bytes": res[1],
                        "t_us": now_us, "trunc": bool(res[2])}
+                if over != 1.0:
+                    rec["over"] = over
                 self.log.write(json.dumps(rec, separators=(",", ":")) + "\n")
                 self.log.flush()
             nxt = nominal + 1.0 / self.rate(tp)
@@ -412,10 +449,20 @@ def main(argv=None):
                     help="frame-rate scale of the layer topics (default: fps_scale of the vessel in the DTP)")
     ap.add_argument("--jitter-ms", type=float, default=0.0,
                     help="release jitter J of the topics without \"jitter\" in a DTP of the SPEC.md format")
+    ap.add_argument("--overload-factor", type=float, default=None,
+                    help="E4: factor F of the bytes of the stripes in the overloaded steps (needs --t0)")
+    ap.add_argument("--overload-fraction", type=float, default=0.1, help="share of the steps after the warm-up")
+    ap.add_argument("--overload-seed", default="1", help="seed of the overloaded steps")
+    ap.add_argument("--overload-steps", type=int, default=1200, help="steps of the run")
+    ap.add_argument("--overload-warm-steps", type=int, default=240, help="steps of the warm-up (no overload)")
+    ap.add_argument("--overload-basis", choices=("cap", "size"), default="cap",
+                    help="cap: F times the declared bytes of each stripe; size: F times the replayed size")
     a = ap.parse_args(argv)
     a.topics = set(n for n in a.topics.split(",") if n) if a.topics else None
     if a.jitter_ms < 0:
         ap.error("--jitter-ms must be >= 0")
+    if a.overload_factor is not None and (a.t0 is None or not a.overload_factor > 0):
+        ap.error("--overload-factor needs --t0 and a positive factor")
     dtp = load_dtp(a.dtp, a.jitter_ms * 1e-3)
     vs, vf = vessel_video(dtp, a.vessel)
     a.video_scale = vs if a.video_scale is None else a.video_scale
