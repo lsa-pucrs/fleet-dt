@@ -874,8 +874,10 @@ static void test_dtp_baselines(void)
 	CHECK(fdt_pmode_table(FDT_PMODE_NOEOS) && !fdt_pmode_table(FDT_PMODE_B8));
 	CHECK(fabs(D.U - 0.8) < 1e-12 && fabs(D.C0 - 300000) < 1e-9);
 	CHECK(D.order[0] == STATE && D.order[3] == VIDEO && D.n_required == 0);
-	/* classes of paper_b2: no "required": the first topic of the order is ef */
-	CHECK(fdt_pclass(&D, STATE) == 2 && fdt_pclass(&D, IMU) == 1 && fdt_pclass(&D, VIDEO) == 1);
+	/* classes of paper_b2 (B2): state ef (AC_VO); imu and gps af41 (AC_VI); "video" is not a stripe (no layer
+	 * topic of "video_layers"): af41 */
+	CHECK(fdt_pclass(&D, STATE) == 2 && fdt_pclass(&D, IMU) == 1 && fdt_pclass(&D, GPS) == 1 &&
+	      fdt_pclass(&D, VIDEO) == 1);
 	const char *lay = "{\"Ts\":0.125,\"T1\":0.02,\"T2\":0.01,\"c_b\":1.06,\"c_m\":180,\"U\":0.7,\"vessels\":[3,1],"
 	                  "\"topics\":[{\"name\":\"state\",\"rate\":8,\"bound\":48},{\"name\":\"imu\",\"rate\":32,\"bound\":48},"
 	                  "{\"name\":\"video_1\",\"rate\":64,\"bound\":1400,\"jitter\":0},{\"name\":\"video_2\",\"rate\":64,"
@@ -887,6 +889,22 @@ static void test_dtp_baselines(void)
 	CHECK(d.topic[2].video && d.topic[3].video && !d.topic[4].video && !d.topic[1].video);
 	CHECK(fdt_pclass(&d, 0) == 2 && fdt_pclass(&d, 1) == 1 && fdt_pclass(&d, 2) == 0 && fdt_pclass(&d, 4) == 1);
 	CHECK(fabs(d.U - 0.7) < 1e-12 && d.n_required == 1);
+	/* the class follows the topic state, not "required": a required imu stays af41, and state is ef also when
+	 * it is neither required nor first in "order" */
+	const char *req = "{\"Ts\":0.125,\"T1\":0.02,\"T2\":0.01,\"vessels\":[1],"
+	                  "\"topics\":[{\"name\":\"imu\",\"rate\":32,\"bound\":48},{\"name\":\"video_1\",\"rate\":64,"
+	                  "\"bound\":1400},{\"name\":\"state\",\"rate\":8,\"bound\":48},{\"name\":\"gps\",\"rate\":8,"
+	                  "\"bound\":80}],\"order\":[\"imu\",\"video_1\",\"gps\",\"state\"],\"required\":[\"imu\"],"
+	                  "\"video_layers\":{\"base\":\"video\",\"layers\":1}}";
+	CHECK(fdt_pdtp_parse(req, strlen(req), &d, err, sizeof err) == 0);
+	CHECK(fdt_pclass(&d, 0) == 1 && fdt_pclass(&d, 1) == 0 && fdt_pclass(&d, 2) == 2 && fdt_pclass(&d, 3) == 1);
+	/* without a topic named state: the first topic of "order" is ef */
+	const char *nost = "{\"Ts\":0.125,\"T1\":0.02,\"T2\":0.01,\"vessels\":[1],"
+	                   "\"topics\":[{\"name\":\"imu\",\"rate\":32,\"bound\":48},{\"name\":\"pose\",\"rate\":8,"
+	                   "\"bound\":48},{\"name\":\"video_1\",\"rate\":64,\"bound\":1400}],\"order\":[\"pose\",\"imu\"],"
+	                   "\"video_layers\":{\"base\":\"video\",\"layers\":1}}";
+	CHECK(fdt_pdtp_parse(nost, strlen(nost), &d, err, sizeof err) == 0);
+	CHECK(fdt_pclass(&d, 1) == 2 && fdt_pclass(&d, 0) == 1 && fdt_pclass(&d, 2) == 0);
 	/* a layer topic with "jitter": 0 claims exactly one frame of 8 messages per step */
 	CHECK(fdt_p_msgs(&d, 2, d.topic[2].jitter) == 8 && fdt_p_msgs(&d, 2, 0.002) == 9);
 	const char *bad = "{\"Ts\":0.125,\"T1\":0.02,\"T2\":0.01,\"topics\":[{\"name\":\"a\",\"rate\":1,\"bound\":4}],"
@@ -930,13 +948,15 @@ static void test_b1_b2(void)
 	}
 	CHECK(r.s.logged == 0);
 	fdt_preg_free(&r);
-	/* paper_b2: the class in the topic */
+	/* paper_b2: the class in the topic (state ef, the other telemetry af41) */
 	o.mode = FDT_PMODE_B2;
 	start_at(&r, &o, 40);
 	from = nsent;
 	raw(&r, STATE, 48, S(40) + 1000, 1);
 	raw(&r, GPS, 80, S(40) + 2000, 2);
-	CHECK(find_topic("boat/b1/tx2/ef/state", from) && find_topic("boat/b1/tx2/af41/gps", from));
+	raw(&r, IMU, 48, S(40) + 3000, 3);
+	CHECK(find_topic("boat/b1/tx2/ef/state", from) && find_topic("boat/b1/tx2/af41/gps", from) &&
+	      find_topic("boat/b1/tx2/af41/imu", from));
 	CHECK(count_topic("boat/b1/tx/", from) == 0);
 	fdt_preg_free(&r);
 }
@@ -1084,7 +1104,12 @@ static void test_tdma(void)
 	fake.s[0].nsd = 6000;
 	fdt_preg_tick(&r, g0 + 1000);
 	CHECK(count_topic("boat/b2/tx/", from) == 4);
+	/* the broker still holds bytes for the bridge client (bq), the socket is empty: nothing more either */
 	fake.s[0].nsd = 0;
+	fake.s[0].bq = 6000;
+	fdt_preg_tick(&r, g0 + 1500);
+	CHECK(count_topic("boat/b2/tx/", from) == 4);
+	fake.s[0].bq = 0;
 	fdt_preg_tick(&r, g0 + 2000);
 	CHECK(count_topic("boat/b2/tx/", from) == 7);
 	/* the rest of a slot stays: two more videos released after the slot are logged as slot */

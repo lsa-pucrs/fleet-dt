@@ -49,37 +49,43 @@
  * v(t+1), v(t+2), ... before the newer messages of its topic, under the table and the policing of that
  * step, with its own step index in the header (so the GS sees it as late).
  *
- * Baselines of the paper stack (design Section 5). They keep the clock, the payload t:u32, s:u16, the
+ * Baselines of the paper stack (Table S3 of the paper; the mode names are internal). They keep the clock, the payload t:u32, s:u16, the
  * collection windows, the end-of-step rule, the vessel log and the step summary of mode paper, take no
  * priority table (a table that arrives is stored and ignored), and publish every message with QoS 1 on
  * the vessel broker; the data bridges of the paper stack subscribe with QoS 0 (fleetdt/gsconf.py), so the
  * messages cross the channel with QoS 0 as those of the levels do, and the GS records repeated copies
  * (by t, s) in the log of the operation and excludes them from the step (Corollary 2). The modes take the names paper_<x> because b1, b2, b3 and tdma name the modes of the older
  * core (fdt_reg.c, as2 stack: DTP v2, 1-based clock, JSON tables).
- *  paper_b1    (B1, B10) no regulation: each raw message is forwarded when it reaches the regulator, with
- *              the step t = floor((now - epoch) / Ts) of that instant in its header.
- *  paper_b2    (B2) paper_b1 on boat/b<i>/tx2/<class>/<topic>, one data bridge per class (fleetdt/gsconf.py
- *              --b2): ef for the topics of "required" (without "required": the first topic of "order"),
- *              be for the video topics, af41 for the other topics.
+ *  paper_b1    (B1, and B9 with one data bridge per uplink topic, fleetdt/gsconf.py --per-topic) no
+ *              regulation: each raw message is forwarded when it reaches the regulator, with the step
+ *              t = floor((now - epoch) / Ts) of that instant in its header.
+ *  paper_b2    (B2) paper_b1 on boat/b<i>/tx2/<class>/<topic>, one data bridge per EDCA access category
+ *              (fleetdt/gsconf.py --b2, system/nftables-fdt.nft): ef (AC_VO) for the topic named "state"
+ *              (without one: the first topic of "order"), be (AC_BE) for the video stripes (the layer
+ *              topics of "video_layers"), af41 (AC_VI) for the other telemetry topics.
  *  paper_b3    (B3) strict priority without phases 1 and 2: at v(t) every message of step t, topic by topic
  *              in sigma_t, each topic in order of reception.
- *  b8          (B8, LIMERIC/DCC-like rate control) paper_b3 with the budget
+ *  b8          (B7, rate control from y(t-1) as the DCC) paper_b3 with the budget
  *              B(t) = U y(t-1) T3 / (Ts m): the messages leave in the order of paper_b3 while the sum of
  *              c_b (x + 6) + c_m,l stays within B(t); the first message that does not fit and every
  *              message after it in that order stay (reason budget: no message of a later topic passes
  *              it). y, U and m come from the last fleet feedback (below), y = "C0" of the DTP before the
- *              first one, U = plugin_opt_U (default: "U" of the DTP), m = the vessels of the DTP.
- *  paper_tdma  (B9, overlay TDMA) fixed equal slots of phase 3 in the order of "vessels" of the DTP: vessel
- *              at position k of M sends in [v(t) + k T3 / M, v(t) + (k + 1) T3 / M); in its slot it releases
- *              the messages of step t in the order of paper_b3 at every tick (tick_us) while the unsent
- *              bytes of the data bridge (SIOCOUTQNSD) plus the bytes released in the tick stay below
- *              lw_bytes; the messages left at the end of the slot stay (reason slot).
- * Fleet feedback (paper_b3, b8, paper_tdma): fleet/feedback, published by the GS once per step
- * (fleetdt/feedback.py) and carried by the control bridge: t:u32, y:f64 (y(t), bytes per step; NaN when
- * missing), U:f32 (0: keep the own U), m:u8 (0: keep), L:u8, sigma_1..sigma_L:u8 (1-based topics).
- * The last feedback received before v(t) (normally that of step t - 1, published when y(t - 1) is known)
- * sets sigma_t and the y of B(t); a missing feedback keeps the last values (sigma of the DTP, y = C0
- * before the first one).
+ *              first one, U = plugin_opt_U (default: "U" of the DTP), m = m(t) of the feedback (the vessels
+ *              of the DTP before the first one).
+ *  paper_tdma  (B8, equal slots of phase 3 above the MAC) fixed equal slots of phase 3 in the order of
+ *              "vessels" of the DTP: vessel at position k of M sends in [v(t) + k T3 / M, v(t) + (k + 1) T3 / M);
+ *              in its slot it releases the messages of step t in the order of paper_b3 at every tick
+ *              (tick_us, 1 ms) while the unsent bytes of the data bridge (SIOCOUTQNSD of the socket plus
+ *              the bytes that the broker still holds for the bridge client, bq) plus the bytes released in
+ *              the tick stay below lw_bytes (16384); the messages left at the end of the slot stay (reason
+ *              slot).
+ * Fleet feedback (B3, B7, B8: paper_b3, b8, paper_tdma): fleet/feedback, published by the GS once per step
+ * at start(t) + T1 (fleetdt/feedback.py) and carried by the control bridge: t:u32 (the step t that the
+ * feedback serves), y:f64 (y(t - 1), bytes per step; NaN when it did not reach the GS by start(t) + T1),
+ * U:f32 (0: keep the own U), m:u8 (m(t) = |M(t)|, the vessels whose demand table reached the GS in phase 1
+ * of step t; 0: keep), L:u8, sigma_1..sigma_L:u8 (sigma_t, 1-based topics). The last feedback received
+ * before v(t) (normally that of step t) sets sigma_t and the y and m of B(t); a missing feedback keeps the
+ * last values (sigma of the DTP, y = C0 and m = the vessels of the DTP before the first one).
  */
 #ifndef FDT_REG_PAPER_H
 #define FDT_REG_PAPER_H
@@ -92,6 +98,8 @@
 
 #define FDT_P_STEPS 4
 
+/* modes and the paper label they run: PAPER Fleet-DT and B4, B6; NOPOLICE B5a; NOEOS B5b; B1 B1 and B9; B2 B2;
+ * B3 B3; B8 (mode b8) B7; TDMA B8 */
 enum fdt_pmode { FDT_PMODE_PAPER = 0, FDT_PMODE_NOPOLICE = 1, FDT_PMODE_NOEOS = 2, FDT_PMODE_B1 = 3,
                  FDT_PMODE_B2 = 4, FDT_PMODE_B3 = 5, FDT_PMODE_B8 = 6, FDT_PMODE_TDMA = 7, FDT_PMODE_N };
 
@@ -115,7 +123,9 @@ const char *fdt_pmode_name(int mode);
 const char *fdt_preason_name(int reason);
 /* the mode takes the priority table (paper and its ablations) */
 int fdt_pmode_table(int mode);
-/* traffic class of topic l in paper_b2: 2 ef, 1 af41, 0 be (the order of fdt_class) */
+/* traffic class of topic l in paper_b2 (B2): 2 ef (AC_VO) for the topic named "state" (without one, the first
+ * topic of "order"), 0 be (AC_BE) for a video stripe, 1 af41 (AC_VI) for the other topics (the order of
+ * fdt_class) */
 int fdt_pclass(const struct fdt_pdtp *d, int l);
 
 #define FDT_FEEDBACK_MIN 18   /* t:u32, y:f64, U:f32, m:u8, L:u8 */
@@ -188,12 +198,12 @@ struct fdt_preg {
 	size_t json_cap;
 	/* baselines */
 	uint8_t sigma[FDT_L_MAX];       /* sigma_t, 0-based topic indices */
-	double U;                       /* b8: own U */
+	double U;                       /* b8 (B7): own U */
 	int have_fb;
 	int64_t fb_t;                   /* step of the last feedback */
 	double fb_y, fb_U;              /* y of the last feedback with a measurement (C0 before), its U */
 	int fb_m;
-	int64_t lw_bytes, tick_us;      /* paper_tdma */
+	int64_t lw_bytes, tick_us;      /* paper_tdma (B8) */
 	int slot_pos, slot_n;
 	int64_t gate_t;                 /* paper_tdma: step whose slot is open or ahead (-1: none) */
 	int gate_left;                  /* messages of that step not yet released */

@@ -16,8 +16,13 @@
 # Both directions: each host marks the packets it sends, the vessel with source port 1883, the GS
 # with destination port 1883. Loopback traffic (local programs of the vessel) stays unmarked.
 #
-# Mode b2 (one data bridge per class, plugin_opt_mode b2): DSCP only, by listener port of the vessel:
-#   1884 BE (unmarked), 1885 AF41, 1886 EF.
+# Baseline B2 (one data bridge per EDCA access category, plugin_opt_mode paper_b2 or b2), by listener port
+# of the vessel, both directions:
+#   1884  unmarked                                 UP 0, AC_BE (video stripes)
+#   1885  meta priority 0:105, DSCP AF41 (34)      UP 5, AC_VI (other telemetry topics)
+#   1886  meta priority 0:106, DSCP EF (46)        UP 6, AC_VO (topic state)
+# The skb->priority sets the UP on the hosts as for the control bridge (with DSCP alone, EF gives UP 5, AC_VI,
+# under the precedence mapping); the DSCP serves the ns-3 emulator, which maps 34 to UP 5 and 46 to UP 6.
 #
 # Clock synchronization (NTP, UDP port 123, both directions): the same marking as the control bridge, so
 # that the only AC_BE frames of the fleet are those of the data bridges and the monitor of the AP can
@@ -31,6 +36,8 @@ define FDT_CTL_PRIO = 0:106
 define FDT_CTL_DSCP = ef
 define FDT_B2_AF41_PORT = 1885
 define FDT_B2_EF_PORT = 1886
+define FDT_B2_AF41_PRIO = 0:105
+define FDT_B2_EF_PRIO = 0:106
 
 table inet fleetdt {
 	chain output {
@@ -53,7 +60,11 @@ table inet fleetdt {
 		meta nfproto ipv6 udp dport $FDT_NTP_PORT ip6 dscp set $FDT_CTL_DSCP
 		meta nfproto ipv6 udp sport $FDT_NTP_PORT ip6 dscp set $FDT_CTL_DSCP
 
-		# baseline b2: data bridges per class
+		# baseline B2: data bridges per access category
+		tcp sport $FDT_B2_AF41_PORT meta priority set $FDT_B2_AF41_PRIO
+		tcp dport $FDT_B2_AF41_PORT meta priority set $FDT_B2_AF41_PRIO
+		tcp sport $FDT_B2_EF_PORT meta priority set $FDT_B2_EF_PRIO
+		tcp dport $FDT_B2_EF_PORT meta priority set $FDT_B2_EF_PRIO
 		meta nfproto ipv4 tcp sport $FDT_B2_AF41_PORT ip dscp set af41
 		meta nfproto ipv4 tcp dport $FDT_B2_AF41_PORT ip dscp set af41
 		meta nfproto ipv4 tcp sport $FDT_B2_EF_PORT ip dscp set ef

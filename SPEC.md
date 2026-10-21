@@ -127,7 +127,7 @@ The AS subscribes to the state of the data bridges (`fleet/bridge/b<i>-data/stat
 of the subscription) means a disconnection or a reconnection: the new TCP connection (clean session) starts
 with an empty send queue, so the AS clears the book entry of vessel i (Qbar_i = 0 until the next demand table of
 i) and logs `bridge_reset` in the next decision. Only `b<i>-data` counts: the methods with several data bridges
-per vessel (B2, B10) run without the AS.
+per vessel (B2 per access category, B9 per uplink topic) run without the AS.
 
 Every MQTT client of Fleet-DT sets TCP_NODELAY on its socket (paho-mqtt leaves Nagle's algorithm
 on): without it, a small PUBLISH that follows another unacknowledged segment of the same client waits for the

@@ -13,6 +13,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - gs.conf and vessel-b1.conf: max_inflight_messages 0 (R9), as the generator already writes
 - radios: the wireless path is the PCIe AR9280 of the XM Bullet M2 (pci0000:00/0000:00:00.0), and the
   channel monitor builds with the SDK of the firmware of the radios (ath79-tiny-22.03.7)
+- baselines: the method labels follow Table S3 of the paper. B6 is the former B7 (one table per vessel,
+  IPACT limited service with excess distribution; AS policy `b6`, `as_model.admission_b6`), B7 the former
+  B8 (DCC-like rate control, regulator mode b8), B8 the former B9 (equal slots of phase 3, mode
+  paper_tdma), B9 the former B10 (B1 with one data bridge per uplink topic). The method `B10` and the AS
+  policy `b7` fail with the name of the new label; experiments written with the former B7 to B9 must change
+- B2: the class follows the topic: `state` (without one, the first topic of "order") in EF and AC_VO, the
+  other telemetry topics in AF41 and AC_VI, the video stripes in BE and AC_BE (before: the topics of
+  "required" in EF); nftables-fdt.nft also sets skb->priority 0:105 and 0:106 on the B2 ports 1885 and 1886,
+  so the UP does not depend on the DSCP mapping of the kernel
+- fleet feedback of B3, B7 and B8: published once per step t at start(t) + T1 with y(t - 1) (when it reached
+  the GS by then), U, m(t) = |M(t)| of the demand tables at the GS (before: a fixed m, the vessels of the
+  DTP) and sigma_t; its t field is the step that it serves
+- B8 (paper_tdma): the unsent bytes of the data bridge add the bytes that the broker holds for the bridge
+  client (bq) to SIOCOUTQNSD, and a released message counts with its PUBLISH packet
 
 ## [2.0.0] - 2026-10-14
 

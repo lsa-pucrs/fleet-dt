@@ -74,7 +74,7 @@ The paper stack runs the model of the paper (Sections III to V):
 
 | Host | Programs (per run) |
 |---|---|
-| GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel; B2 three data bridges, B10 one per topic), the AS `fleetdt.as_service` (methods with tables; Algorithm 1 or `--policy b7`, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA, in a child process), the fleet feedback `fleetdt.feedback` (B3, B8, B9; `feedback.jsonl`), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`) |
+| GS VM | Mosquitto (`fleetdt.gsconf gs`: data bridge and control bridge per vessel; B2 three data bridges, B9 one per topic), the AS `fleetdt.as_service` (methods with tables; Algorithm 1 or `--policy b6`, SCHED_FIFO 40, decisions in `as.jsonl`; with `"outer"`, the outer loop `fleetdt.outer` every `every` steps on the DTA, in a child process), the fleet feedback `fleetdt.feedback` (B3, B7, B8: y(t-1), U, m(t) = |M(t)| and sigma_t at start(t) + T1; `feedback.jsonl`), the VE collector `fleetdt.ve live` (G(t) of each step in `dta.jsonl`, the DTA of the outer loop), the JMCS stub `emu/jmcs_stub.py` (`order.jsonl`) |
 | vessel VM i | `RUN/dtp_vessel.json` = `video_layers.py resolve` of the DTP for vessel i (rates and bounds of the layer topics from its `size_scale`); Mosquitto with `fdt_regulator.so` in the mode of the method, `plugin_opt_log RUN/regulator.jsonl` (vessel log), `plugin_opt_step_log RUN/regsteps.jsonl` (step summaries: p, d, rx, fwd, held, cost per topic), `plugin_opt_demand external`, `plugin_opt_jitter_ms J`; the v1 DTI program `build/fdt_dti --jitter-ms J` (D_i(t) at start(t) + `dti.offset_ms`, SCHED_FIFO 45); the stripe video source `vessel/publishers/fdt_source.py` (frame sizes of a trace times the stripe shares, `src.jsonl`), or `raw_load.py`, or `"source": {"cmd": ...}`; the sampler `build/fdt_outq` (SIOCOUTQ of the bridge sockets, `RUN/outq.jsonl`, built by the preparation from `emu/tools/outq_sampler.c`, started after the bridges connect, steps S0 .. S0 + steps) |
 | host | emulator with the ground truth and the nl80211 counter export (`--cnt`, `--cntDst` = 127.0.0.1:9650+K), `fleetdt.monitor_adapter` (y(t) on `fleet/throughput` through 127.0.0.1:2883+K), monitor bridge and capture (ground truth), clock probe |
 
@@ -82,23 +82,26 @@ Steps are 0-based on every program of this stack: start(t) = epoch + t Ts (the D
 2026-01-01T00:00:00Z). The run picks S0 at least `lead_s` ahead, passes `--runStartUs` = start(S0) to the
 emulator (the counter reads fall at start(t) + `monitor.offset_us` + U[0, `monitor.jitter_us`]) and stops
 after `steps` steps. The paper stack starts the adapter, the emulator, the brokers, waits for the bridges
-(2M; B2 4M; B10 M (L + 1)), then the VE, the JMCS stub, the fleet feedback, the AS, the DTI programs and
+(2M; B2 4M; B9 M (L + 1)), then the VE, the JMCS stub, the fleet feedback, the AS, the DTI programs and
 the sources.
 
-Methods (`"method"`, design Section 5; the regulator modes are those of `vessel/regulator/fdt_reg_paper.h`):
+Methods (`"method"`, the labels of Table S3 of the paper; the regulator modes are those of
+`vessel/regulator/fdt_reg_paper.h`). The code named B6 to B9 `B7` to `B10` before it took the paper labels;
+the label `B10` fails with its paper label B9, and an experiment written with the former labels B7 to B9 must
+take the labels below:
 
 | Method | AS | Regulator mode | Data bridges | Fleet feedback |
 |---|---|---|---|---|
 | `fleetdt` | Algorithm 1 | `paper` | one | no |
-| `B1` | none | `paper_b1` (forward on arrival, QoS 1) | one | no |
-| `B2` | none | `paper_b2` (as B1, one bridge per access category) | three (`--b2`) | no |
+| `B1` | none | `paper_b1` (forward on arrival with the step of that instant, QoS 1) | one (AC_BE) | no |
+| `B2` | none | `paper_b2` (as B1; `state` in AC_VO, the other telemetry in AC_VI, the stripes in AC_BE) | three (`--b2`) | no |
 | `B3` | none | `paper_b3` (strict priority in sigma_t at v(t), QoS 1) | one | sigma_t |
 | `B4` | Algorithm 1, `--alpha 0 --C0 as.C_ref`, no outer loop | `paper` | one | no |
 | `B5a`, `B5b` | Algorithm 1 | `paper_nopolice`, `paper_noeos` | one | no |
-| `B7` | `--policy b7` (per-vessel grants, redistribution of the unused grant) | `paper` | one | no |
-| `B8` | none | `b8` (budget U y(t-1) T3 / (Ts m) in sigma_t, QoS 1) | one | y, U, m, sigma_t |
-| `B9` | none | `paper_tdma` (equal slots of phase 3 in the order of `vessels`, QoS 1) | one | sigma_t |
-| `B10` | none | `paper_b1` | one per topic (`--per-topic`) | no |
+| `B6` | `--policy b6` (one table per vessel: IPACT limited service with excess distribution) | `paper` | one | no |
+| `B7` | none | `b8` (DCC-like budget U y(t-1) T3 / (Ts m(t)) in sigma_t, QoS 1) | one | y(t-1), U, m(t), sigma_t |
+| `B8` | none | `paper_tdma` (equal slots of phase 3 in the order of `vessels`, every 1 ms while the unsent bytes stay below 16384, QoS 1) | one | sigma_t |
+| `B9` | none | `paper_b1` | one per uplink topic (`--per-topic`) | no |
 
 The older core keeps its modes `b1`, `b2`, `b3`, `tdma` for the as2 stack (1-based clock, JSON tables
 and logs, QoS of the DTP v2); the GS programs of the paper stack read the 0-based step header and the
@@ -113,7 +116,7 @@ repository paths, a DTP path gets `"vessels"` = 1..M):
 | `method` | `fleetdt`; one of the methods above (case-insensitive) |
 | `plugin_mode`, `plugin_opts` | the mode of the method (a different mode is refused); extra `plugin_opt_<k> <v>` lines of the vessel brokers; `plugin_opts.jitter_ms` (2) is J of the regulator and of `fdt_dti` |
 | `as` | `U`, `alpha`, `C0` (override the DTP), `C_ref` (B4), `extra` (arguments of `fleetdt.as_service`) |
-| `feedback` | `U` (B8; default `as.U`, else the DTP), `m` (default the vessels of the DTP) |
+| `feedback` | `U` (B7; default `as.U`, else the DTP), `m` (a fixed m; default m(t) = &#124;M(t)&#124; of the demand tables at the GS) |
 | `outer` | `every`, `window`, `target` (0.99); `dta_file`: a DTA of earlier runs (host path) instead of the DTA of the run |
 | `dti` | `enabled` (true; false: the plugin publishes D_i(t), `plugin_opt_demand internal`), `offset_ms` (1), `stagger_ms` (0, added per vessel index), `idle` (8), `jitter_ms` (the J of `plugin_opts`; both must agree) |
 | `jmcs` | `period_s` (10), `first` (survey), `offset_ms` (2), `video_prefix` (video), `modes` (explicit orders) |
@@ -311,8 +314,8 @@ category of a QoS data frame from its TID (ns-3 AcIndex: 0 AC_BE, 1 AC_BK, 2 AC_
 other frames. Check (run `t1`, S1, M = 4, Fleet-DT, 30 s): every frame of TCP port 1883 (control bridges)
 and of UDP port 123 (NTP, marked like the control bridge by `system/nftables-fdt.nft`) carries TID 6 and
 `ac` 3, every frame of port 1884 (data bridges) TID 0 and `ac` 0; the AS takes the data frames of the
-vessels with `ac` 0 as the frames of the data bridges. Mode b2 marks its bridges 1885 (AF41, UP 5, AC_VI)
-and 1886 (EF, UP 6, AC_VO); 1884 stays AC_BE.
+vessels with `ac` 0 as the frames of the data bridges. Mode b2 or paper_b2 (B2) marks its bridges 1885
+(AF41 and skb->priority 0:105: UP 5, AC_VI) and 1886 (EF and 0:106: UP 6, AC_VO); 1884 stays AC_BE.
 
 ### Ground truth `gt.bin`
 

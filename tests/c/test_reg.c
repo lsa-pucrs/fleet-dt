@@ -680,7 +680,8 @@ static void test_resync(void)
 
 
 /* modes b3 and tdma of this core with the layered DTP v2 of the repository (dtp_v2.json, L = 22): the as2
- * stack runs B3 and B9 with them (the paper stack uses paper_b3 and paper_tdma of fdt_reg_paper.c) */
+ * stack runs B3 and TDMA with them (the paper stack runs B3 and B8 of Table S3 with paper_b3 and
+ * paper_tdma of fdt_reg_paper.c) */
 static void test_layered_dtp_v2(void)
 {
 	const char *path = getenv("FDT_DTP_V2") ? getenv("FDT_DTP_V2") : "dtp_v2.json";

@@ -13,7 +13,7 @@ Topics (prefixes configurable):
 r_il(t) charges each received message the channel bytes that the demand d_il(t) and the policing of the
 vessel regulator charge: c_b (x + 6) + c_m,l for x content bytes (DTP.message_bytes), so a topic whose
 declared messages all arrive gives r_il = d_il when the messages have the size of the bound.
-The priority table of boat/b<i>/levels sets the levels of the edges of vessel i (baseline B7 sends one
+The priority table of boat/b<i>/levels sets the levels of the edges of vessel i (baseline B6 sends one
 table per vessel); the first table of a step also stands for the vessels without a table of their own.
 """
 from __future__ import annotations

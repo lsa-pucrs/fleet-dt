@@ -15,13 +15,13 @@ subscriptions, so step 0 never runs with a subscription that the broker has not 
 
 Policies (--policy):
   alg1  Algorithm 1, one table for the fleet (the paper; default)
-  b7    baseline B7: per-vessel grants with redistribution of the unused grant (IPACT limited service
-        with excess distribution, as_model.admission_b7); each vessel of M(t) gets its own table on
-        boat/b<i>/levels, and fleet/as carries "p": null, "p_by" and "grants"
+  b6    baseline B6 (Table S3): one priority table per vessel by the limited service of IPACT with excess
+        distribution (as_model.admission_b6); each vessel of M(t) gets its own table on boat/b<i>/levels,
+        and fleet/as carries "p": null, "p_by" and "grants" (the grants add up to max(0, U K_hat(t) - Q(t)))
 Baseline B4 is this service with --alpha 0 --C0 C_ref (constant prediction) and no outer loop.
 
   python -m fleetdt.as_service --dtp dtp.json --broker host:port [--epoch T0] [--log decisions.jsonl]
-                               [--U u] [--alpha a] [--C0 c] [--policy alg1|b7]
+                               [--U u] [--alpha a] [--C0 c] [--policy alg1|b6]
                                [--outer-dta file.jsonl --outer-every steps]
                                [--outer-window W] [--outer-target 0.99]
 """
@@ -43,16 +43,22 @@ import time
 import uuid
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-from .as_model import DTP, BacklogBook, admission, admission_b7, grant_cap, smooth
+from .as_model import DTP, BacklogBook, admission, admission_b6, grant_cap, smooth
 from .model import decode_demand, encode_levels, tcp_nodelay
 
 log = logging.getLogger("fleetdt.as")
 
 DEMAND_RE = re.compile(r"^boat/b(\d+)/demand$")
 # state of the data bridge b<i>-data of fleetdt.gsconf: its notification topic (fleet/bridge/<name>/state, local
-# to the GS broker) or the default one of Mosquitto ($SYS/broker/connection/<name>/state); payload "0" or "1"
+# to the GS broker) or the default one of Mosquitto ($SYS/broker/connection/<name>/state); payload "0" or "1".
+# Only the single data bridge matches: every method with the AS (fleetdt, B4, B5a, B5b, B6) uses it, and the
+# methods with one data bridge per class (B2, b<i>-data-<class>) or per topic (B9, b<i>-data-<topic>) run
+# without the AS (emu/fleet.py PAPER_METHODS), so no Qbar_i depends on those bridges.
 BRIDGE_STATE_RE = re.compile(r"^(?:fleet/bridge|\$SYS/broker/connection)/b(\d+)-data/state$")
-POLICIES = ("alg1", "b7")
+POLICIES = ("alg1", "b6")
+# policy names of the code before the paper labels (policy b7 ran the baseline that the paper calls B6): refused
+# with the new name
+RENAMED_POLICIES = {"b7": "b6"}
 SUBSCRIPTIONS = [("boat/+/demand", 0), ("fleet/throughput", 0), ("fleet/order", 0), ("fleet/bridge/+/state", 0),
                  ("$SYS/broker/connection/+/state", 0)]
 
@@ -64,6 +70,8 @@ class AS:
 
     def __init__(self, dtp: DTP, epoch: float, U: Optional[float] = None, alpha: Optional[float] = None,
                  C0: Optional[float] = None, now: Callable[[], float] = time.time, policy: str = "alg1"):
+        if policy in RENAMED_POLICIES:
+            raise ValueError("policy %s is now %s (baseline B6 of the paper)" % (policy, RENAMED_POLICIES[policy]))
         if policy not in POLICIES:
             raise ValueError("policy must be one of %s" % ", ".join(POLICIES))
         self.policy = policy
@@ -214,8 +222,8 @@ class AS:
                 return None
             b = cap / m                                               # eq. (3)
             dec["b"] = b
-            if self.policy == "b7":                                   # baseline B7
-                p_by, g = admission_b7(D, self.sigma, self.N, b)
+            if self.policy == "b6":                                   # baseline B6
+                p_by, g = admission_b6(D, self.sigma, self.N, b)
                 dec["p_by"] = {i: p_by[i] for i in M}
                 dec["grants"] = {i: g[i] for i in M}
                 self._admitted(dec, D, {i: p_by[i] for i in M})
@@ -443,7 +451,7 @@ class Service:
             self.log_file.flush()
 
     def _publish(self, dec: Dict) -> None:
-        if dec.get("p_by") is not None:      # B7: one table per vessel
+        if dec.get("p_by") is not None:      # B6: one table per vessel
             for i in dec["M"]:
                 self.client.publish("boat/b%d/levels" % i, encode_levels(dec["t"], dec["p_by"][i]), qos=0)
         else:
@@ -531,14 +539,19 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--alpha", type=float, default=None, help="gain of eq. (2) (overrides the DTP)")
     ap.add_argument("--C0", type=float, default=None,
                     help="initial prediction C_hat(0), bytes per step (overrides the DTP; B4: C_ref with --alpha 0)")
-    ap.add_argument("--policy", choices=POLICIES, default="alg1",
-                    help="alg1: Algorithm 1 (one table for the fleet); b7: per-vessel grants with redistribution")
+    ap.add_argument("--policy", default="alg1",
+                    help="alg1: Algorithm 1 (one table for the fleet); b6: baseline B6, one table per vessel "
+                         "(IPACT limited service with excess distribution)")
     ap.add_argument("--outer-dta", default=None, help="DTA file written by the VE, input of the outer loop")
     ap.add_argument("--outer-every", type=int, default=0, help="steps between runs of the outer loop")
     ap.add_argument("--outer-window", type=int, default=None, help="last W steps of the DTA used by the outer loop")
     ap.add_argument("--outer-target", type=float, default=0.99, help="coverage target gamma of the outer loop")
     ap.add_argument("-v", "--verbose", action="store_true")
     a = ap.parse_args(argv)
+    if a.policy in RENAMED_POLICIES:
+        ap.error("--policy %s is now %s (baseline B6 of the paper)" % (a.policy, RENAMED_POLICIES[a.policy]))
+    if a.policy not in POLICIES:
+        ap.error("--policy: one of %s" % ", ".join(POLICIES))
     logging.basicConfig(level=logging.INFO if a.verbose else logging.WARNING,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")
     dtp = DTP.load(a.dtp)

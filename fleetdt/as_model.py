@@ -1,7 +1,7 @@
 """Computations of the AS that the VE reproduces when the AS does not publish them:
 exponential smoothing (eq. 2, C_hat(t) = (1 - alpha) C_hat(t-1) + alpha c_y y(t-1)), predicted capacity of phase 3
 K_hat(t) = C_hat(t) (T3 - T_m) / Ts, grant limit (eq. 3, b(t) = max(0, U K_hat(t) - Q(t)) / m(t)), Algorithm 1
-(admission control), the per-vessel grants of baseline B7, and the cost bound of the channel bytes of the
+(admission control), the per-vessel grants of baseline B6, and the cost bound of the channel bytes of the
 forwarded messages."""
 from __future__ import annotations
 
@@ -260,10 +260,10 @@ class BacklogBook:
             self.last[int(i)] = (int(t), int(Qi.get(i, 0)), int(a.get(i, 0)))
 
 
-def admission_b7(D: Dict[int, Sequence[int]], order: Sequence[int], needed: Sequence[int],
+def admission_b6(D: Dict[int, Sequence[int]], order: Sequence[int], needed: Sequence[int],
                  b: float) -> Tuple[Dict[int, List[int]], Dict[int, float]]:
-    """Baseline B7: per-vessel grants with redistribution of the unused grant (IPACT limited service with
-    excess distribution) under the grant limit b = max(0, U K_hat - Q) / m.
+    """Baseline B6 (Table S3 of the paper): one priority table per vessel by the limited service of IPACT
+    with excess distribution, under the grant limit b = max(0, U K_hat - Q) / m.
 
     Each vessel of D starts with the grant g_i = b and gets its own table p_i = Algorithm 1 over its own
     demand table with the limit g_i. A vessel whose table admits every topic keeps g_i = a_i (its
