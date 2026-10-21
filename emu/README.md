@@ -13,7 +13,8 @@ every PHY event.
 | `fleet.py` | one Fleet-DT run of the whole stack (`run.py run` of an experiment with `"kind": "fleet"`); `--stack paper` (default) or `--stack as2` |
 | `jmcs_stub.py` | operation control stub of the paper stack: `fleet/order` (sigma_t, N(t)) every step, survey/transit every 10 s |
 | `experiments/matrix.py`, `runner.py`, `calibrate.py`, `dtp_base.json` | experiment matrix of Section VI (E0 to E4, saturation and pilot), parallel runner with a resumable manifest, calibration (rho, lambda, gamma, scores, Z of B4) |
-| `analysis/gtstep.py`, `metrics.py`, `stats.py`, `report.py` | ground truth per step, metrics of a run, statistics, hypothesis tests, LaTeX tables and PDF figures |
+| `analysis/gtstep.py`, `metrics.py`, `stats.py`, `report.py` | ground truth per step, metrics of a run, statistics, hypothesis tests, LaTeX tables and PDF figures (as2 stack) |
+| `analysis/paper_post.py`, `analysis/hypotheses.py` | metrics of a paper-stack run with its per-step series; hypothesis-level driver of the paper (H1a to H6b, IUT, fixed sequence) |
 | `scenarios/gen.py`, `scenarios/S<k>-m<M>.json` | channel scenarios S1 to S5 (seeded) and their seed-1 files for M = 2, 4, 8 |
 | `traces/` | frame-size traces of the video topic (see `traces/README.md`) |
 | `monitor_bridge.py` | UDP monitor batches of the emulator → `fleet/monitor` on the GS broker |
@@ -637,10 +638,19 @@ Environment of hydra: `~/fleetdt-emu/env.sh` (`FDT_EMU` on the local disk `/var/
 
 ### Post-processing and E0 conformance
 
-`experiments/runner.py` post-processes a paper-stack run with `analysis/paper_post.py RUN` (the metrics of
-the paper from `vms/gs/dta.jsonl` with `fleetdt/analysis.py`, after a warm-up of 240 steps, steps with a
-lag above 1 ms in `steplag.csv` counted in `lag_discarded` and left out; `RUN/metrics.json`), and an as2 run
-with `gtstep.py` and `metrics.py` of the older model.
+`experiments/runner.py` post-processes a paper-stack run with `analysis/paper_post.py RUN` (`RUN/metrics.json`:
+the metrics of the paper from `vms/gs/dta.jsonl` with `fleetdt/analysis.py` and criterion `count`, after a
+warm-up of 240 steps, with the per-step series of the hypothesis driver). Every step stays in the metrics;
+`steplag.csv` flags a step as `lag` (largest lag of a phase above 1 ms, or no row) and as `catchup` (the lag
+changes by more than 0.1 ms between the start of phase 3 and the end of the step, `--catchup-us 100`, or the
+emulator flag), and H3a counts both as failures. `rt_valid` is false when the emulator aborted the run or a
+step from scenario step 0 lags by more than 1 ms (the abort rule of Section VI-B, applied offline); the runner
+reads `steps_over_1ms`. The regulator step logs (`vms/v<i>/regsteps.jsonl`: rx, fwd, late_fwd, x) and the
+vessel logs (`vms/v<i>/regulator.jsonl`: bytes of each withheld message) give each edge `src_n` and `src_x`,
+the messages and content bytes that the sources produced (denominator of BDR_i, completeness of PCR,
+PDR_state); `csub/c_t.jsonl` gives K(t) for PICP_C; `clock.csv` gives max |theta_i - theta_0| after the
+warm-up (H1c); `h1.jsonl` (`{"t", "w1", "w2"}` in s; no program writes it yet) gives w1(t) and w2(t) (H1a).
+An as2 run gets `gtstep.py` and `metrics.py` of the older model.
 
 `python3 emu/experiments/conformance.py RUN` checks a paper-stack run against the model (E0): offline
 replay of eq. (2), the grant limit and Algorithm 1 from the logged D_i(t), y(t - 1), sigma_t and N(t)
@@ -913,3 +923,42 @@ margin; the pooled TOST has up to 30 pairs.
 Tests: `tests/test_emu_paper_v2.py` (24 tests; the emulator tests run with `FDT_EMU_BIN` or `FDT_NS3`);
 the factors of the experiments (outage, R7 to R9, E5 sequence, overload, vessels, session, catch-up and
 source jitter defaults): `tests/test_paper_factors.py`.
+
+## Hypothesis driver (`analysis/hypotheses.py`)
+
+`python3 emu/analysis/hypotheses.py CAMPAIGN [--manifest M] [--out DIR] [--B 2000] [--seed 0]
+[--arima-engine auto|statsmodels|css] [--dmr-hat-scenarios same|loso] [--burn 50] [--keep-invalid]
+[--test-q0-stratum]` computes every component of the Table of hypotheses (Section VI) from the
+`metrics.json` of `paper_post.py` in each run directory, the IUT of each hypothesis over its tested components
+and cells, and the fixed sequence H1 to H6, and writes `DIR/hypotheses.json` (components, cells, calibration
+fits, hypotheses, sequence) and `DIR/hypotheses.md` (ID, estimate, bound or p, threshold, verdict). The module
+docstring lists the test of each component. Defaults: the stratum Q(t) = 0 of H3a is descriptive (the general
+condition K_y >= U K_hat >= Q is tested, on steps and on groups of 8 steps); DMR-hat(U) of H3b replays the
+calibration runs of the same M and scenario with alpha*(M, s) of the leave-scenario-out fit; H1b takes
+tau_int from the per-step count of absent vessels; H6a pools the E3 runs outside the ablations and the E4
+Fleet-DT runs in one TOST; H5 evaluates the one-step errors from step 50 of the series c_y y(t) (NaN steps
+removed) and fits ARIMA(p, 1, q), p, q <= 2, with statsmodels when installed (`auto`), else by conditional sum
+of squares; C_ref of H5 is the calibration table of the manifest, else the mean C(t) of the calibration runs
+of the cell (csub), else their mean c_y y(t).
+
+The manifest follows the format of `experiments/qualify.py` (`{"name", "runs": [...]}`) and the campaign
+generator writes these fields:
+
+| Field | Meaning |
+|---|---|
+| `runs[].id` | run identifier; the run directory is `CAMPAIGN/<dir or id>` and its metrics `<dir>/metrics.json` (or `metrics`) |
+| `runs[].exp` | `Q`, `E0`, `Cal`, `E1` to `E5` (reruns keep the experiment of the run they repeat) |
+| `runs[].cell` | cell identifier: one combination of factor levels without the method and the block |
+| `runs[].block` | block: `{"seed": s, "slot": k}` (one seed and one session slot) or a string; without it, `seed` and `slot` of the run |
+| `runs[].method` | `fleetdt`, `B1` to `B4`, `B5a`, `B5b`, `B6` to `B9` (labels of the paper), `O1` to `O5` |
+| `runs[].factors` | `M`, `scenario` (`S1` to `S9`), `rho`, `U` (E3), `load` (`idle`/`saturated`), `alpha` (`alpha*` or a number; E2), `queue` (E2 MAC queues), `ablation` (`R7`, `R8`, `R9`), `fairness` (true in the E4 fairness cells), `regimes` and `regime_changes` (E5: scenario steps k = t - S0 at which each new regime starts) |
+| `runs[].status` | runs with `pending`, `running`, `failed`, `invalid`, `aborted` or `skipped` stay out (default `done`) |
+| `runs[].descriptive` | optional override of the rule: S4, S8, S9, `queue`, `ablation` and E4 cells at rho <= 1 are descriptive |
+| `runs[].block_invalid` | true on a run whose third abort invalidates its block for every method of its cell |
+| `calibration.eps_s`, `calibration.T2_s` | eps and T2 per M (`{"2": s, "4": s}`) of the calibration (H1a, H1c) |
+| `calibration.PICP_nom`, `calibration.N_w` | nominal coverage (0.99) and window of the outer loop (480 steps, H6b) |
+| `calibration.C_ref` | optional C_ref per `"<M>/<scenario>"` (H5) |
+
+A run whose `metrics.json` has `rt_valid` false stays out unless `--keep-invalid`; of the runs with the same
+(exp, cell, block, method), the last one of the manifest stays. Tests: `tests/test_hypotheses.py` (synthetic
+campaign of 93 runs through `paper_post.post`), `tests/test_predictors.py`.
