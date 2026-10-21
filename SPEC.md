@@ -13,7 +13,7 @@ Digital Twin with Dynamic Bandwidth Allocation for Fleets of Unmanned Surface Ve
 | Telemetry publisher `mav_publisher.py` | vessel RP4 | Python ≥ 3.7 | `vessel/publishers/` | R2 |
 | Video publisher `zed_publisher.py` | vessel RP4 | Python ≥ 3.7 | `vessel/publishers/` | R2 |
 | Synthetic load `raw_load.py` | vessel RP4 (bench, tests) | Python ≥ 3.7 | `vessel/publishers/` | Section VI |
-| AS (prediction, admission control, outer loop) | GS PC | Python | `fleetdt/as_service.py`, `fleetdt/outer.py` | eq. 2, eq. 3, Alg. 1, Def. 15 |
+| AS (prediction, admission control, outer loop) | GS PC | Python | `fleetdt/as_service.py`, `fleetdt/outer.py`, `fleetdt/outer_variants.py` (O1 to O5) | eq. 2, eq. 3, Alg. 1, Def. 15 |
 | VE | GS PC | Python + HTML | `fleetdt/ve/` | Def. 11 |
 | Analysis of the DTA (Section VI metrics) | any | Python | `fleetdt/analysis.py` | Section VI |
 | Broker configuration generator | GS PC | Python | `fleetdt/gsconf.py` | R5, R8, R9 |

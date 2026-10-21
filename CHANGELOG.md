@@ -4,7 +4,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- outer-loop variants O1 to O5 of Table S4 (`fleetdt/outer_variants.py`, `fleetdt.as_service --outer-variant`):
+  fixed (alpha_0, U_0), fixed (alpha*, U*) of a calibration file, recomputation from the DTA of each window of
+  N_w = 480 steps, coverage feedback on U (+/- 0.05 per window, clamped to [0.30, 1.2]), and the regime oracle;
+  the calibration file format `fleetdt-calibration/1` (alpha*, U* per M and scenario); per-step `variant`,
+  `cover` and `regime` in the AS decision records; experiment field `outer.variant` and its parameters in
+  `emu/fleet.py`, with the regimes of the scenario JSON
+- `fleetdt.outer.run_job` and `python -m fleetdt.outer --steps T1:T2`: the outer loop over a range of steps
+
 ### Changed
+
+- outer loop: alpha* stays on the grid 0.01..1 of Section VI-E; the golden-section refinement, which can leave
+  the grid, runs only with `refine=True` (`--refine`)
 
 - fidelity: the mean absolute scaled error (MASE, Hyndman and Koehler 2006) replaces the MAPE; the scale is
   the error of the last-value predictor c_y y(t-1) over the same steps, so smoothing with alpha = 1 gives 1

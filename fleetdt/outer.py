@@ -7,9 +7,9 @@ test and B_ctl_bar the bytes of control traffic outside the data bridges in phas
 (T3 - T_m)/Ts).
 
   (a) alpha_star = argmin of the one-step mean squared error of eq. (2), C_hat(t) = (1 - alpha) C_hat(t-1) +
-      alpha c_y y(t-1), replayed on c_y y(t) (grid 0.01..1 step 0.01, then golden-section refinement around
-      the best grid point); with several runs, the MSE is pooled over the runs (each run replayed from its
-      own C0);
+      alpha c_y y(t-1), replayed on c_y y(t), over the grid 0.01..1 step 0.01 of Section VI-E (refine=True adds
+      a golden-section search around the best grid point, whose result can leave the grid; off by default);
+      with several runs, the MSE is pooled over the runs (each run replayed from its own C0);
   (b) PICP(U) (prediction interval coverage probability; gamma in earlier versions) = fraction of the
       steps of S (steps with y(t) and C_hat(t)) with K_y(t) >= U K_hat(t), C_hat(t) recomputed causally
       with alpha_star; PICP_low(U) = lower one-sided 95 % bound of PICP(U) by circular block bootstrap
@@ -36,10 +36,12 @@ test and B_ctl_bar the bytes of control traffic outside the data bridges in phas
       delay step t.
 
 alpha* and U* per number of vessels M: calibrate_by_M (one DTA per run, M of a run = largest m(t)).
+Variant O3 of the experiments (fleetdt.outer_variants): the AS runs run_job over the steps t_first..t_last of
+each window of N_w steps (window_records).
 
   python -m fleetdt.outer dta.jsonl [--dtp dtp.json] [--target 0.99] [--c-y 1.0] [--B-ctl-bar 0] [--window W]
-                                    [--every K] [--json]
-  python -m fleetdt.outer run1.jsonl run2.jsonl ... --by-M [--target 0.99] [--c-y 1.0] [--json]
+                                    [--every K] [--steps T1:T2] [--refine] [--json]
+  python -m fleetdt.outer run1.jsonl run2.jsonl ... --by-M [--target 0.99] [--c-y 1.0] [--refine] [--json]
 
 Output keys: PICP, PICP_low, DMR per U (whatif), PICP_nom, c_y, B_ctl_bar; the keys of earlier versions stay
 as aliases for one release: gamma (= PICP), gamma_low (= PICP_low), phi (= 1 - DMR), gamma_target
@@ -170,8 +172,8 @@ def golden(f: Callable[[float], float], lo: float, hi: float, tol: float = 1e-5)
     return (a + b) / 2.0
 
 
-def fit_alpha(y: np.ndarray, C0: float, grid: np.ndarray = ALPHA_GRID, refine: bool = True) -> Tuple[float, float]:
-    """(a) alpha_star and its MSE."""
+def fit_alpha(y: np.ndarray, C0: float, grid: np.ndarray = ALPHA_GRID, refine: bool = False) -> Tuple[float, float]:
+    """(a) alpha_star and its MSE (refine: golden-section search off the grid)."""
     return fit_alpha_runs([y], [C0], grid=grid, refine=refine)
 
 
@@ -195,8 +197,9 @@ def mse_runs(ys: Sequence[np.ndarray], C0s: Sequence[float], alphas) -> np.ndarr
 
 
 def fit_alpha_runs(ys: Sequence[np.ndarray], C0s: Sequence[float], grid: np.ndarray = ALPHA_GRID,
-                   refine: bool = True) -> Tuple[float, float]:
-    """(a) over several runs: alpha_star = argmin of the pooled one-step MSE, and that MSE."""
+                   refine: bool = False) -> Tuple[float, float]:
+    """(a) over several runs: alpha_star = argmin of the pooled one-step MSE over the grid, and that MSE; refine
+    adds a golden-section search within one grid step of the best grid point (its result can leave the grid)."""
     m = mse_runs(ys, C0s, grid)
     if np.all(np.isnan(m)):
         return float("nan"), float("nan")
@@ -442,7 +445,7 @@ def backlog_series(records: Iterable[Dict]) -> np.ndarray:
 
 def _calibrate(runs: Sequence[Tuple], C0s: Sequence[float], target: float,
                alpha: Optional[float], U_grid, conf: float, B: int, block: Optional[int], seed: int,
-               T3_Ts: float, c_y: float = 1.0, B_ctl_bar: float = 0.0) -> Dict:
+               T3_Ts: float, c_y: float = 1.0, B_ctl_bar: float = 0.0, refine: bool = False) -> Dict:
     """runs: (y, C_hat recorded), (y, C_hat recorded, f) or (y, C_hat recorded, f, Q) per run, f = fill_series
     and Q = backlog_series of the run. Eq. (2) smooths c_y y, so alpha* fits the replay to c_y y."""
     ys = [r[0] for r in runs]
@@ -450,7 +453,7 @@ def _calibrate(runs: Sequence[Tuple], C0s: Sequence[float], target: float,
     fills = [r[2] if len(r) > 2 else None for r in runs]
     Qs = [r[3] if len(r) > 3 else None for r in runs]
     if alpha is None:
-        a_star, m_star = fit_alpha_runs(zs, C0s)
+        a_star, m_star = fit_alpha_runs(zs, C0s, refine=refine)
     else:
         a_star, m_star = float(alpha), float(mse_runs(zs, C0s, [alpha])[0])
     rep = [(y, replay(z, [a_star], C0)[:, 0]) for y, z, C0 in zip(ys, zs, C0s)]
@@ -462,6 +465,7 @@ def _calibrate(runs: Sequence[Tuple], C0s: Sequence[float], target: float,
     return {
         "alpha_star": a_star, "mse": m_star, "rmse": math.sqrt(m_star) if m_star == m_star else None,
         "PICP_nom": target, "gamma_target": target, "c_y": c_y, "kappa": c_y, "B_ctl_bar": B_ctl_bar,
+        "refine": bool(refine),
         "n_admitted": n_fill,
         "conf": conf, "block": gb["block"], "tau_margin": gb["tau_margin"], "T3_Ts": T3_Ts,
         "U_star": largest_U(gb["gamma_low"], U_grid, target),
@@ -476,8 +480,9 @@ def outer_loop(records: Sequence[Dict], target: float = 0.99, window: Optional[i
                alpha: Optional[float] = None, C0: Optional[float] = None,
                U_grid: np.ndarray = U_GRID, conf: float = 0.95, B: int = 1000, block: Optional[int] = None,
                seed: int = 0, T3_Ts: Optional[float] = None, c_y: Optional[float] = None,
-               kappa: Optional[float] = None, B_ctl_bar: float = 0.0) -> Dict:
-    """Outer loop over the DTA (or its last `window` steps). With `alpha` given, (a) is skipped.
+               kappa: Optional[float] = None, B_ctl_bar: float = 0.0, refine: bool = False) -> Dict:
+    """Outer loop over the DTA (or its last `window` steps). With `alpha` given, (a) is skipped; refine: the
+    golden-section refinement of alpha_star (off the grid; off in the paper).
     C0 defaults to the C_hat recorded in the first step considered (the AS value at that step).
     U_star: largest U with the lower `conf` block-bootstrap bound of PICP >= target (PICP_nom; U_star_point:
     the rule on the point estimate). whatif[k]["DMR"]: DMR(U) of the backlog predictor (function backlog)
@@ -497,7 +502,8 @@ def outer_loop(records: Sequence[Dict], target: float = 0.99, window: Optional[i
         C0 = _C0(y, Crec)
     res = {"t_first": int(ts[0]), "t_last": int(ts[-1]), "n_steps": int(len(ts)), "n_y": int(np.sum(~np.isnan(y))),
            "window": window, "C0": C0}
-    res.update(_calibrate([(y, Crec, f, Q)], [C0], target, alpha, U_grid, conf, B, block, seed, r, cy, B_ctl_bar))
+    res.update(_calibrate([(y, Crec, f, Q)], [C0], target, alpha, U_grid, conf, B, block, seed, r, cy, B_ctl_bar,
+                          refine))
     return res
 
 
@@ -511,16 +517,32 @@ def _jsonable(o):
     raise TypeError("%r is not JSON serializable" % type(o))
 
 
+def window_records(records: Iterable[Dict], t_first: Optional[int], t_last: Optional[int]) -> List[Dict]:
+    """The records of the steps t_first..t_last (None: no bound on that side)."""
+    return [r for r in records if (t_first is None or int(r["t"]) >= int(t_first))
+            and (t_last is None or int(r["t"]) <= int(t_last))]
+
+
 def run_job(dta: str, target: float, window: Optional[int], out: str, c_y: float = 1.0, B_ctl_bar: float = 0.0,
-            T3_Ts: Optional[float] = None) -> None:
-    """Outer loop of fleetdt.as_service in a child process: outer_loop over the DTA file `dta` with the c_y,
-    B_ctl_bar and (T3 - T_m)/Ts of the DTP of the AS, written to `out` as {"result": ...} (or {"error": ...}
-    when the DTA cannot be read); the file appears complete (written to out.tmp, then renamed)."""
+            T3_Ts: Optional[float] = None, t_first: Optional[int] = None, t_last: Optional[int] = None,
+            refine: bool = False, B: int = 1000) -> None:
+    """Outer loop of fleetdt.as_service in a child process: outer_loop over the DTA file `dta` (its last `window`
+    records, or the steps t_first..t_last of variant O3) with the c_y, B_ctl_bar and (T3 - T_m)/Ts of the DTP of
+    the AS, written to `out` as {"result": ...} (or {"error": ...} when the DTA cannot be read); the file
+    appears complete (written to out.tmp, then renamed)."""
     import os
     try:
         recs = load_dta(dta)
-        msg = {"result": outer_loop(recs, target=target, window=window, c_y=c_y, B_ctl_bar=B_ctl_bar,
-                                    T3_Ts=T3_Ts) if recs else None}
+        if t_first is not None or t_last is not None:
+            recs = window_records(recs, t_first, t_last)
+        if recs:
+            res = outer_loop(recs, target=target, window=window, c_y=c_y, B_ctl_bar=B_ctl_bar, T3_Ts=T3_Ts,
+                             refine=refine, B=B)
+            res.pop("whatif", None)
+            msg = {"result": res}
+        else:
+            msg = {"result": None} if t_first is None and t_last is None else \
+                {"error": "no DTA record of steps %s..%s" % (t_first, t_last)}
     except (OSError, ValueError) as e:
         msg = {"error": str(e)}
     with open(out + ".tmp", "w", encoding="utf-8") as f:
@@ -537,7 +559,7 @@ def run_M(records: Sequence[Dict]) -> int:
 def calibrate_by_M(runs: Sequence[Sequence[Dict]], target: float = 0.99, alpha: Optional[float] = None,
                    U_grid: np.ndarray = U_GRID, conf: float = 0.95, B: int = 1000, block: Optional[int] = None,
                    seed: int = 0, T3_Ts: Optional[float] = None, c_y: Optional[float] = None,
-                   kappa: Optional[float] = None, B_ctl_bar: float = 0.0) -> Dict[int, Dict]:
+                   kappa: Optional[float] = None, B_ctl_bar: float = 0.0, refine: bool = False) -> Dict[int, Dict]:
     """alpha* and U* per number of vessels M (calibration session): the runs (one DTA each) are grouped
     by run_M; alpha* minimizes the MSE pooled over the runs of the group, gamma and its block-bootstrap
     bound pool the steps of the group (blocks inside each run), and DMR(U) restarts the backlog in each
@@ -559,20 +581,23 @@ def calibrate_by_M(runs: Sequence[Sequence[Dict]], target: float = 0.99, alpha: 
             C0s.append(_C0(y, Crec))
         res = {"M": M, "runs": len(rr), "n_steps": int(sum(len(s[0]) for s in ser)),
                "n_y": int(sum(np.sum(~np.isnan(s[0])) for s in ser))}
-        res.update(_calibrate(ser, C0s, target, alpha, U_grid, conf, B, block, seed, r, cy, B_ctl_bar))
+        res.update(_calibrate(ser, C0s, target, alpha, U_grid, conf, B, block, seed, r, cy, B_ctl_bar, refine))
         out[M] = res
     return out
 
 
 def sliding(records: Sequence[Dict], window: int, every: Optional[int] = None, target: float = 0.99,
             B: int = 1000, c_y: Optional[float] = None, B_ctl_bar: float = 0.0,
-            T3_Ts: Optional[float] = None) -> List[Dict]:
-    """Recomputation over the last `window` steps every `every` steps (variant O3 of the experiments)."""
+            T3_Ts: Optional[float] = None, refine: bool = False) -> List[Dict]:
+    """Offline recomputation over the last `window` records every `every` records. With window = every = N_w and
+    a DTA that holds every step from the origin, the windows are those of variant O3 (fleetdt.outer_variants),
+    which the AS selects by step (window_records)."""
     recs = sorted(records, key=lambda r: int(r["t"]))
     every = every or window
     out = []
     for end in range(window, len(recs) + 1, every):
-        res = outer_loop(recs[end - window:end], target=target, B=B, c_y=c_y, B_ctl_bar=B_ctl_bar, T3_Ts=T3_Ts)
+        res = outer_loop(recs[end - window:end], target=target, B=B, c_y=c_y, B_ctl_bar=B_ctl_bar, T3_Ts=T3_Ts,
+                         refine=refine)
         res.pop("whatif")
         out.append(res)
     return out
@@ -590,6 +615,9 @@ def main(argv: Optional[List[str]] = None) -> None:
                     help="bytes of control traffic outside the data bridges in phase 3 (default: the DTP, else 0)")
     ap.add_argument("--window", type=int, default=None, help="last W steps (with --every: sliding windows)")
     ap.add_argument("--every", type=int, default=None, help="sliding recomputation every K steps (needs --window)")
+    ap.add_argument("--steps", default=None, help="T1:T2: only the steps T1..T2 of the DTA (a window of O3)")
+    ap.add_argument("--refine", action="store_true",
+                    help="golden-section refinement of alpha* off the grid 0.01..1 (off in the paper)")
     ap.add_argument("--by-M", action="store_true", help="alpha* and U* per number of vessels M over the runs")
     ap.add_argument("--conf", type=float, default=0.95, help="confidence of the lower bound of gamma")
     ap.add_argument("--B", type=int, default=1000, help="bootstrap resamples")
@@ -606,7 +634,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     a.B_ctl_bar = 0.0 if a.B_ctl_bar is None else a.B_ctl_bar
     if a.by_M or len(a.dta) > 1:
         res = calibrate_by_M([load_dta(p) for p in a.dta], target=a.target, conf=a.conf, B=a.B, c_y=a.c_y,
-                             B_ctl_bar=a.B_ctl_bar, T3_Ts=r3)
+                             B_ctl_bar=a.B_ctl_bar, T3_Ts=r3, refine=a.refine)
         if a.json:
             print(json.dumps({str(k): v for k, v in res.items()}, indent=1))
             return
@@ -616,8 +644,12 @@ def main(argv: Optional[List[str]] = None) -> None:
                 r["block"]))
         return
     recs = load_dta(a.dta[0])
+    if a.steps:
+        lo, _, hi = a.steps.partition(":")
+        recs = window_records(recs, int(lo) if lo else None, int(hi) if hi else None)
     if a.every and a.window:
-        res = sliding(recs, a.window, a.every, a.target, B=a.B, c_y=a.c_y, B_ctl_bar=a.B_ctl_bar, T3_Ts=r3)
+        res = sliding(recs, a.window, a.every, a.target, B=a.B, c_y=a.c_y, B_ctl_bar=a.B_ctl_bar, T3_Ts=r3,
+                      refine=a.refine)
         if a.json:
             print(json.dumps(res, indent=1))
             return
@@ -626,7 +658,7 @@ def main(argv: Optional[List[str]] = None) -> None:
             print("%8d %8.4f %10.1f %8s" % (r["t_last"], r["alpha_star"], r["rmse"] or float("nan"), r["U_star"]))
         return
     res = outer_loop(recs, target=a.target, window=a.window, conf=a.conf, B=a.B, c_y=a.c_y, B_ctl_bar=a.B_ctl_bar,
-                     T3_Ts=r3)
+                     T3_Ts=r3, refine=a.refine)
     if a.json:
         print(json.dumps(res, indent=1))
         return
