@@ -7,9 +7,9 @@ test and B_ctl_bar the bytes of control traffic outside the data bridges in phas
 (T3 - T_m)/Ts).
 
   (a) alpha_star = argmin of the one-step mean squared error of eq. (2), C_hat(t) = (1 - alpha) C_hat(t-1) +
-      alpha c_y y(t-1), replayed on c_y y(t) (grid 0.01..1 step 0.01, then golden-section refinement around
-      the best grid point); with several runs, the MSE is pooled over the runs (each run replayed from its
-      own C0);
+      alpha c_y y(t-1), replayed on c_y y(t), over the grid {0.01, 0.02, ..., 1} of Section VI-E (refine=True
+      adds a golden-section refinement around the best grid point, off the grid of the paper); with several
+      runs, the MSE is pooled over the runs (each run replayed from its own C0);
   (b) PICP(U) (prediction interval coverage probability; gamma in earlier versions) = fraction of the
       steps of S (steps with y(t) and C_hat(t)) with K_y(t) >= U K_hat(t), C_hat(t) recomputed causally
       with alpha_star; PICP_low(U) = lower one-sided 95 % bound of PICP(U) by circular block bootstrap
@@ -36,6 +36,12 @@ test and B_ctl_bar the bytes of control traffic outside the data bridges in phas
       delay step t.
 
 alpha* and U* per number of vessels M: calibrate_by_M (one DTA per run, M of a run = largest m(t)).
+
+DMR-hat of the paper (Table of metrics, H3b): dmr_hat_replay replays eq. (2) with alpha and Algorithm 1 with U
+and Q(t) = q_hat(t - 1) on the demand tables of a DTA, and runs the backlog recursion (eq. lindley) with K_y(t)
+in place of K(t) - B_ctl(t):
+    q_hat(t) = max(0, q_hat(t-1) + sum_{i in M(t)} a_i(t) - K_y(t)),   q_hat(-1) = 0,
+    DMR_hat(U) = fraction of the evaluated steps with q_hat(t) > 0.
 
   python -m fleetdt.outer dta.jsonl [--dtp dtp.json] [--target 0.99] [--c-y 1.0] [--B-ctl-bar 0] [--window W]
                                     [--every K] [--json]
@@ -170,7 +176,7 @@ def golden(f: Callable[[float], float], lo: float, hi: float, tol: float = 1e-5)
     return (a + b) / 2.0
 
 
-def fit_alpha(y: np.ndarray, C0: float, grid: np.ndarray = ALPHA_GRID, refine: bool = True) -> Tuple[float, float]:
+def fit_alpha(y: np.ndarray, C0: float, grid: np.ndarray = ALPHA_GRID, refine: bool = False) -> Tuple[float, float]:
     """(a) alpha_star and its MSE."""
     return fit_alpha_runs([y], [C0], grid=grid, refine=refine)
 
@@ -195,8 +201,9 @@ def mse_runs(ys: Sequence[np.ndarray], C0s: Sequence[float], alphas) -> np.ndarr
 
 
 def fit_alpha_runs(ys: Sequence[np.ndarray], C0s: Sequence[float], grid: np.ndarray = ALPHA_GRID,
-                   refine: bool = True) -> Tuple[float, float]:
-    """(a) over several runs: alpha_star = argmin of the pooled one-step MSE, and that MSE."""
+                   refine: bool = False) -> Tuple[float, float]:
+    """(a) over several runs: alpha_star = argmin of the pooled one-step MSE over the grid (the first grid point
+    on ties), and that MSE; refine: golden-section search around it (off the grid of the paper)."""
     m = mse_runs(ys, C0s, grid)
     if np.all(np.isnan(m)):
         return float("nan"), float("nan")
@@ -314,6 +321,70 @@ def backlog_admitted(y: np.ndarray, A: np.ndarray, T3_Ts: float = T3_TS_DEFAULT,
             cur = max(0.0, max(cur, Qv[t]) + A[t] - (cy * y[t] * T3_Ts - B_ctl_bar))
         q[t] = cur
     return q, ok
+
+
+def _alg1(D: Dict[int, List[float]], order: Sequence[int], needed: Sequence[int], b: float) -> Dict[int, float]:
+    """Final a_i of Algorithm 1 (fleetdt.as_model.admission): the demand of the admitted topics per vessel."""
+    from .as_model import admission
+    p = admission(D, order, needed, b)
+    return {i: float(sum(d[l - 1] for l in range(1, len(p) + 1) if p[l - 1] > 0 and l - 1 < len(d)))
+            for i, d in D.items()}
+
+
+def dmr_hat_replay(records: Sequence[Dict], dtp, alpha: float, U: float, c_y: Optional[float] = None,
+                   C0: Optional[float] = None) -> Dict:
+    """DMR-hat(U) of the paper on a DTA (the calibration DTA in H3b): per step t (sorted), C_hat(t) of eq. (2)
+    with alpha on c_y y(t-1) (C_hat of the first step: C0, else the logged C_hat, else the C0 of the DTP; a
+    missing y(t-1) keeps C_hat), K_hat(t) = C_hat(t) (T3 - T_m)/Ts, Q(t) = q_hat(t-1), b(t) = (U K_hat(t) -
+    Q(t))^+ / m(t), the final a_i of Algorithm 1 on the logged demand tables d_il(t) of M(t), sigma_t and N(t)
+    (edges "d", "order", "needed"; the DTP order without them), and
+        q_hat(t) = max(0, q_hat(t-1) + sum_i a_i(t) - K_y(t)),  K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar,
+    with q_hat(-1) = 0. A step without y(t) leaves q_hat unchanged and is not evaluated; a step with m(t) = 0
+    admits nothing. Returns {"t", "q", "X" (sum_i a_i), "miss" (1.0 when q_hat > 0, NaN when not evaluated),
+    "value" (DMR-hat), "n" (evaluated steps), "alpha", "U"}."""
+    cy = dtp.c_y if c_y is None else float(c_y)
+    r = dtp.T3m / dtp.Ts
+    recs = sorted(records, key=lambda g: int(g["t"]))
+    L = dtp.L
+    default_order = [dtp.index(n) for n in dtp.order] if dtp.order else list(range(1, L + 1))
+    default_needed = [dtp.index(n) for n in dtp.needed] if dtp.needed else []
+    if C0 is None:
+        C0 = next((float(g["C_hat"]) for g in recs if g.get("C_hat") is not None), float(dtp.C0))
+    C, q = float(C0), 0.0
+    prev_t, prev_y = None, None
+    ts, qs, Xs, miss = [], [], [], []
+    for k, g in enumerate(recs):
+        t = int(g["t"])
+        if k > 0:
+            for _ in range(max(1, t - prev_t)):       # one update per step; a gap keeps C_hat
+                if prev_y is not None:
+                    C = (1.0 - alpha) * C + alpha * cy * prev_y
+                    prev_y = None
+        M = sorted(set(g.get("vessels") or []))
+        X = 0.0
+        if M:
+            D = {i: [0.0] * L for i in M}
+            for e in g.get("edges") or []:
+                if e.get("i") in D and 1 <= int(e["l"]) <= L:
+                    D[e["i"]][int(e["l"]) - 1] = float(e.get("d") or 0)
+            b = max(0.0, U * C * r - q) / len(M)
+            a = _alg1(D, list(g.get("order") or default_order), list(g.get("needed") or default_needed), b)
+            X = float(sum(a.values()))
+        y = g.get("y")
+        if y is not None:
+            q = max(0.0, q + X - (cy * float(y) * r - dtp.B_ctl_bar))
+            miss.append(float(q > 0.0))
+        else:
+            miss.append(np.nan)
+        ts.append(t)
+        qs.append(q)
+        Xs.append(X)
+        prev_t, prev_y = t, (float(y) if y is not None else None)
+    m = np.asarray(miss, float)
+    ok = ~np.isnan(m)
+    return {"t": ts, "q": np.asarray(qs), "X": np.asarray(Xs), "miss": m,
+            "value": float(np.mean(m[ok])) if ok.any() else float("nan"), "n": int(ok.sum()),
+            "alpha": float(alpha), "U": float(U)}
 
 
 def dmr_predicted(y: np.ndarray, C_hat: np.ndarray, U_grid=U_GRID, T3_Ts: float = T3_TS_DEFAULT,

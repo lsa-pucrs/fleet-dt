@@ -280,14 +280,24 @@ def test_paper_post_on_a_synthetic_run(tmp_path):
     with open(os.path.join(rd, "emu", "steplag.csv"), "w") as f:
         f.write("k,max1_us,max2_us,max3_us,lag_p3_us,lag_end_us,catchup,n\n")
         for k in range(TC.STEPS):
-            f.write("%d,%.1f,100.0,100.0,50.0,50.0,0,700\n" % (k, 1500.0 if k == 5 else 100.0))
+            # step 5: lag above 1 ms; step 7: the lag changes by 0.2 ms in phase 3 (catch-up, 0.1 ms rule)
+            f.write("%d,%.1f,100.0,100.0,50.0,%.1f,0,700\n" % (k, 1500.0 if k == 5 else 100.0,
+                                                              250.0 if k == 7 else 50.0))
     assert paper_post.main([rd, "--warm", "2"]) == 0
     out = json.load(open(os.path.join(rd, "metrics.json")))
-    assert out["stack"] == "paper" and out["lag_discarded"] == 1 and out["lag_steps"] == [TC.S0 + 5]
-    assert out["n_steps"] == TC.STEPS - 2 - 1
+    assert out["stack"] == "paper" and out["lag_flagged"] == 1 and out["lag_steps"] == [TC.S0 + 5]
+    assert out["catchup_steps"] == [TC.S0 + 7] and out["rt_valid"] is False and out["criterion"] == "count"
+    assert out["n_steps"] == TC.STEPS - 2                    # flagged steps stay in the metrics
     m = out["metrics"]
     assert m["steps"] == out["n_steps"] and 0 <= m["gamma"]["value"] <= 1 and m["fill"]["n"] > 0
+    assert m["lag_steps"] == 1 and m["catchup_steps"] == 1
+    sr = m["series"]
+    assert len(sr["t"]) == out["n_steps"] and sr["lag"][3] == 1.0 and sr["catchup"][5] == 1.0
+    # the sources of BDR_i come from the regulator step log and the vessel log
+    assert out["sources"]["regsteps"] and m["BDR_den"] == "source"
     assert set(out["use"]) <= set(TC.NAMES) and all(0 < v["r_over_d"] <= 1.0 for v in out["use"].values())
     import runner
-    bad, info = runner.lag_verdict(rd)        # the runner reads n_steps and lag_discarded of paper_post
+    bad, info = runner.lag_verdict(rd)        # the runner reads steps_over_1ms of paper_post
     assert info["steps_over_1ms"] == pytest.approx(1 / (TC.STEPS - 2))
+    assert paper_post.main([rd, "--warm", "2", "--catchup-us", "300"]) == 0
+    assert json.load(open(os.path.join(rd, "metrics.json")))["catchup_steps"] == []

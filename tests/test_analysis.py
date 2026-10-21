@@ -181,10 +181,15 @@ def test_holm_and_iut_and_fixed_sequence():
     assert r["reject"] and r["p"] == 0.049 and r["worst"] == "b"
     assert not A.iut([0.01, 0.06])["reject"]
     assert not A.iut([0.01, float("nan")])["reject"]
-    seq = A.fixed_sequence({"H1": 0.01, "H2": 0.02, "H4": 0.20, "H5": 0.001, "H3": 0.0, "H6": 0.0})
-    assert [s["id"] for s in seq] == ["H1", "H2", "H4", "H5", "H3", "H6"]
+    # fixed sequence H1 to H6 (Section VI-E): the first failure (H3 here) ends it
+    seq = A.fixed_sequence({"H1": 0.01, "H2": 0.02, "H3": 0.20, "H4": 0.001, "H5": 0.0, "H6": 0.0})
+    assert [s["id"] for s in seq] == ["H1", "H2", "H3", "H4", "H5", "H6"]
+    assert A.HYPOTHESIS_ORDER == ("H1", "H2", "H3", "H4", "H5", "H6")
     assert [(s["tested"], s["rejected"]) for s in seq] == [(True, True), (True, True), (True, False),
                                                            (False, False), (False, False), (False, False)]
+    v = A.fixed_sequence_verdicts({"H1": True, "H2": True, "H3": None, "H4": True})
+    assert [(s["tested"], s["rejected"]) for s in v] == [(True, True), (True, True), (True, False),
+                                                         (False, False), (False, False), (False, False)]
     seq = A.fixed_sequence({"H1": 0.01, "H2": 0.02, "H4": 0.03, "H5": 0.04, "H3": 0.05, "H6": 0.01})
     assert all(s["rejected"] for s in seq)
     assert [s["tested"] for s in A.fixed_sequence({"H1": 0.01})] == [True, True, False, False, False, False]
@@ -340,14 +345,18 @@ def test_h4a_steps_and_windows():
     assert no_lag["failures"] == 3
 
 
-def test_h4a_requires_empty_buffers():
+def test_h3a_empty_buffers_only_on_request():
+    """The condition of H3a is K_y >= U K_hat >= Q (Table of hypotheses); the empty send buffers enter it only
+    with require_buf_empty."""
     n = 40
     y, C = np.full(n, 300_000.0), np.full(n, 300_000.0)
     buf = np.ones(n, bool)
     buf[10:20] = False
     runs = [_records(y, C, buf_empty=buf, fail_at={15})]
-    r = A.h4a_bound(runs, tiny_dtp(), "bytes")
-    assert r["n_cond"] == 30 and r["failures"] == 0 and r["buffers_known"] is True
+    r = A.h3a_bound(runs, tiny_dtp(), "bytes")
+    assert r["n_cond"] == 40 and r["failures"] == 1 and r["buffers_known"] is True
+    r = A.h3a_bound(runs, tiny_dtp(), "bytes", require_buf_empty=True)
+    assert r["n_cond"] == 30 and r["failures"] == 0
 
 
 # --------------------------------------------------------------------------- outer loop (I4)
@@ -506,14 +515,19 @@ def _state_records(cases):
 
 
 def test_pdr_state_c8():
-    """C8: a pair (t, i) counts when the GS receives every state message forwarded in step t exactly once:
-    n_rx == n_fwd and no duplicate (two forwarded and two received count; one of two does not)."""
+    """A pair (t, i) counts when the GS receives within step t, exactly once after the deduplication, every state
+    message of step t: n == the messages produced (fwd here); a duplicate that the GS removed does not fail the
+    pair (Corollary 2)."""
     dtp = DTP(topics=["state"], Ts=0.125, T1=0.02, T2=0.01, U=0.8,
               specs=[__import__("fleetdt.as_model", fromlist=["TopicSpec"]).TopicSpec(name="state", rate=8)])
     recs = _state_records([(2, 2, 0), (1, 2, 0), (1, 1, 1), (1, None, 0), (2, None, 0), (1, 1, 0)])
     res = A.run_metrics(recs, dtp, criterion="count", ci=False)
-    assert res["PDR_state"]["value"] == pytest.approx(3 / 6)        # cases 0, 3 (n == ceil(8 Ts) = 1), 5
-    assert res["PDR_state"] is res["delta"]
+    assert res["PDR_state"]["value"] == pytest.approx(4 / 6)        # cases 0, 2 (dup), 3 (n == ceil(8 Ts) = 1), 5
+    assert res["PDR_state"] is res["delta"] and res["PDR_state_i"] == {1: pytest.approx(4 / 6)}
+    # the source count of the regulator step log (src_n) takes precedence: a withheld message fails the pair
+    recs = _state_records([(1, 1, 0)])
+    recs[0]["edges"][0].update(src_n=2, src_x=96)
+    assert A.run_metrics(recs, dtp, criterion="count", ci=False)["PDR_state"]["value"] == 0.0
 
 
 def test_names_aliases_pcr_and_relmse():
@@ -526,15 +540,16 @@ def test_names_aliases_pcr_and_relmse():
     assert res["PICP"] is res["gamma"] and res["u"] is res["nu"] and res["PDR_i"] is res["eta_vessel"]
     assert res["DMR"]["value"] == pytest.approx(1 - res["phi"]["value"])
     assert res["c_y"] == res["kappa"] == 0.9
-    # DMR_hat from the admitted demand of the edges: step 0 A = 700 (vessels 1, 2; p > 0), step 1 A = 1600;
-    # c_y y T3/Ts = 0.9 * 1000 * 0.76 = 684: q(0) = 16, q(1) = 932
-    assert res["DMR_hat"]["value"] == pytest.approx(1.0) and res["DMR_hat"]["n"] == 2
+    # DMR_hat: Algorithm 1 replayed with alpha = 0.125 (DTP) and U = 0.8: step 0 b = 0.8 * 760 / 3, only topic 1
+    # fits, X = 200; step 1 C_hat = 0.875 * 1000 + 0.125 * 900, b = 0.8 * 750.5 / 2, X = 200; K_y = 684: no backlog
+    assert res["DMR_hat"]["value"] == 0.0 and res["DMR_hat"]["n"] == 2
+    assert res["DMR_hat"]["alpha"] == 0.125 and res["DMR_hat"]["U"] == 0.8
     assert A.margin_series(_endpoint_records(), dtp, kappa=0.9).tolist() == \
         A.margin_series(_endpoint_records(), dtp, c_y=0.9).tolist()
     # RelMSE = MSE_ES / MSE_alt and its log
     r = A.rel_mse([1, 2, 3, 4], [1, 2, 3, 5], [0, 2, 3, 6])
     assert r["value"] == pytest.approx(0.25 / 1.25) and r["log"] == pytest.approx(math.log(0.2)) and r["n"] == 4
-    assert res["RelMSE"]["alt"] == "persistence"
+    assert res["RelMSE"]["alt"] == "last value" and res["RelMSE"]["target"] == "c_y y"
 
 
 def test_c20_n_eff_clopper_pearson_and_signed_tost():
@@ -608,50 +623,93 @@ def test_picp_ground_truth_uses_K_minus_B_ctl():
     C_gt = {0: 85_000.0, 1: 79_000.0, 2: 81_000.0}             # step 3 without ground truth
     B_ctl = {2: 2000.0 * r}                                      # 81000 - 2000 < 80000
     res = A.run_metrics(recs, d, criterion="bytes", ci=False, C_gt=C_gt, B_ctl=B_ctl)
-    assert res["PICP_C"] == {"value": pytest.approx(1 / 3), "n": 3}
+    assert res["PICP_C"]["value"] == pytest.approx(1 / 3) and res["PICP_C"]["n"] == 3
     assert "PICP_C" not in A.run_metrics(recs, d, criterion="bytes", ci=False)
 
 
-def test_dmr_hat_uses_K_y():
-    """q_hat(t) = max(0, q_hat(t-1) + sum_i a_i(t) - K_y(t))"""
-    d = _rev_dtp()
+def test_dmr_hat_replays_algorithm1_with_the_backlog_recursion():
+    """DMR-hat of the Table of metrics: q_hat(t) = (q_hat(t-1) + sum_i a_i(t) - K_y(t))^+ with the final a_i of
+    Algorithm 1 replayed with alpha, U and Q(t) = q_hat(t-1), K_y = c_y y (T3 - T_m)/Ts - B_ctl_bar."""
+    d = _rev_dtp()                                                # r = 0.72, c_y = 0.9, B_ctl_bar = 1000
     r = (0.095 - 0.005) / 0.125
-    y = np.array([100_000.0, 100_000.0, 100_000.0])
-    recs = _records(y, y, U=0.8)
-    for rec, A_ in zip(recs, (63_000.0, 66_000.0, 50_000.0)):
-        rec["A"] = A_
-    Ky = 0.9 * 100_000.0 * r - 1000.0                            # 63800
-    q, want = 0.0, []
-    for A_ in (63_000.0, 66_000.0, 50_000.0):
-        q = max(0.0, q + A_ - Ky)
+    y = [100_000.0, 100_000.0, 60_000.0, 100_000.0, 100_000.0]
+    recs = _records(y, [100_000.0] * 5, U=0.9)
+    for rec in recs:
+        for e in rec["edges"]:
+            e["d"] = 29_000
+    rep = O.dmr_hat_replay(recs, d, alpha=0.5, U=0.9)
+    # reference: C(0) = 100000; b = (U K_hat - q) / 2; the topic fits when 29000 <= b
+    C, q, want = 100_000.0, 0.0, []
+    for k, yy in enumerate(y):
+        if k:
+            C = 0.5 * C + 0.5 * 0.9 * y[k - 1]
+        b = max(0.0, 0.9 * C * r - q) / 2
+        X = 58_000.0 if 29_000 <= b else 0.0
+        q = max(0.0, q + X - (0.9 * yy * r - 1000.0))
         want.append(q)
-    assert want[0] == 0 and want[1] > 0 and want[2] == 0
-    res = A.run_metrics(recs, d, criterion="bytes", ci=False)
-    assert res["DMR_hat"]["value"] == pytest.approx(1 / 3)
-    qa, ok = O.backlog_admitted(y, np.array([63_000.0, 66_000.0, 50_000.0]), r, c_y=0.9, B_ctl_bar=1000.0)
-    assert qa == pytest.approx(want) and ok.all()
+    assert rep["q"].tolist() == pytest.approx(want)
+    assert [v > 0 for v in want] == [False, False, True, False, False]
+    assert rep["X"].tolist() == [58_000.0, 58_000.0, 58_000.0, 0.0, 0.0]    # step 3: Q(3) = q_hat(2) cuts b
+    assert rep["value"] == pytest.approx(1 / 5) and rep["n"] == 5
+    # a step without y(t) is not evaluated and keeps q_hat; eq. (2) keeps C_hat after it
+    recs[2]["y"] = None
+    rep2 = O.dmr_hat_replay(recs, d, alpha=0.5, U=0.9)
+    assert rep2["n"] == 4 and math.isnan(rep2["miss"][2]) and rep2["q"][2] == rep2["q"][1]
+    # run_metrics replays with the logged alpha and U
+    for rec in recs:
+        rec["alpha"] = 0.5
+    recs[2]["y"] = 60_000.0
+    res = A.run_metrics(recs, d, criterion="count", ci=False)
+    assert res["DMR_hat"]["value"] == pytest.approx(1 / 5) and res["DMR_hat"]["alpha"] == 0.5
+    # the diagnostic predictor on the logged admitted bytes stays available
+    qa, ok = O.backlog_admitted(np.array(y), np.array([63_000.0, 66_000.0, 50_000.0, 0.0, 0.0]), r, c_y=0.9,
+                                B_ctl_bar=1000.0)
+    assert ok.all() and qa[0] == 0.0
 
 
-def test_h4a_condition_needs_K_y_and_zero_backlog():
-    """H4a counts the failed fleet steps among the steps with K_y(t) >= U K_hat(t) and Q(t) = 0."""
+def test_h3a_condition_is_K_y_over_U_K_hat_over_Q():
+    """H3a counts the failed fleet steps among the steps with K_y(t) >= U K_hat(t) >= Q(t); Q(t) = 0 is a
+    stratum; catch-up and lag steps count as failures."""
     n = 40
     y, C = np.full(n, 100_000.0), np.full(n, 100_000.0)
     recs = _records(y, C, U=0.8, fail_at={5, 15, 25})
     for rec in recs:
         rec["Q"] = 0
     for t in range(10, 20):
-        recs[t]["Q"] = 3000                                      # backlog at the start of phase 1
+        recs[t]["Q"] = 3000                                      # Q <= U K_hat = 57600
+    for t in range(30, 35):
+        recs[t]["Q"] = 60_000                                    # Q > U K_hat: outside the condition
     recs[25]["y"] = 80_000.0                                     # 0.9 y < 0.8 C_hat: K_y < U K_hat
-    r = A.h4a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes")
-    assert r["n_cond"] == n - 10 - 1 and r["failures"] == 1 and r["backlog_known"] is True
+    dd = _rev_dtp(B_ctl_bar=0.0)
+    r = A.h3a_bound([recs], dd, "bytes")
+    assert r["n_cond"] == n - 5 - 1 and r["failures"] == 2 and r["backlog_known"] is True
+    assert r["stratum"] == "general" and r["estimate"] == pytest.approx(2 / (n - 6))
+    q0 = A.h3a_bound([recs], dd, "bytes", stratum="Q0")
+    assert q0["n_cond"] == n - 10 - 5 - 1 and q0["failures"] == 1
+    with pytest.raises(ValueError):
+        A.h3a_bound([recs], dd, "bytes", stratum="other")
     # Q(t) from the vertices of M(t) when the record has no "Q"
     for rec in recs:
         del rec["Q"]
         rec["vertices"] = [{"i": 1, "Q": 0, "member": True}, {"i": 2, "Q": 0, "member": True},
                            {"i": 7, "Q": 99, "member": False}]
     recs[3]["vertices"][1]["Q"] = 10
-    r2 = A.h4a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes")
+    r2 = A.h3a_bound([recs], dd, "bytes", stratum="Q0")
     assert r2["n_cond"] == n - 1 - 1 and r2["failures"] == 2
+    # the emulator flags of paper_post: a catch-up step and a lag step in the condition count as failures
+    recs[7]["catchup"] = True
+    recs[8]["lag"] = True
+    recs[9]["catchup"] = False
+    r3 = A.h3a_bound([recs], dd, "bytes")
+    assert r3["failures"] == r2["failures"] + 2
+    assert A.h3a_bound([recs], dd, "bytes", catchup_fails=False, lag_fails=False)["failures"] == r2["failures"]
+    # groups of 8 steps: the condition in every step, a failure in any step
+    g8 = A.h3a_bound([recs], dd, "bytes", window=8)
+    c = A.condition_steps(recs, dd, "bytes")
+    want_n = int(c["cond"][:40].reshape(-1, 8).all(axis=1).sum())
+    want_k = int((c["cond"][:40].reshape(-1, 8).all(axis=1) & c["fail"][:40].reshape(-1, 8).any(axis=1)).sum())
+    assert g8["n_cond"] == want_n and g8["failures"] == want_k
+    assert A.h4a_bound is A.h3a_bound
 
 
 def test_h5d_fairness_over_vessels_1_to_3():
@@ -704,9 +762,9 @@ def test_outer_loop_U_star_with_K_y():
     assert low["B_ctl_bar"] == 5000.0
 
 
-def test_backlog_with_qbar_in_h4a_and_dmr_hat():
-    """Q(t) of the analysis counts Qbar_i(t) of the vertices outside M(t): H4a drops such steps, and DMR-hat
-    carries max(q_hat(t-1), Q(t)) into phase 3."""
+def test_backlog_with_qbar_in_h3a_and_backlog_admitted():
+    """Q(t) of the analysis counts Qbar_i(t) of the vertices outside M(t): the stratum Q(t) = 0 of H3a drops
+    such steps, and the diagnostic predictor backlog_admitted carries max(q_hat(t-1), Q(t)) into phase 3."""
     r = {"vessels": [1], "vertices": [{"i": 1, "Q": 0, "member": True}, {"i": 2, "Q": 0, "member": False, "Qbar": 900}]}
     assert O.backlog_of(r) == 900 and O.backlog_of(dict(r, Q=5)) == 5
     n = 20
@@ -715,8 +773,10 @@ def test_backlog_with_qbar_in_h4a_and_dmr_hat():
     for rec in recs:
         rec["vertices"] = [{"i": 1, "Q": 0, "member": True}, {"i": 2, "Q": 0, "member": True}]
     recs[4]["vertices"].append({"i": 3, "Q": 0, "member": False, "Qbar": 700})
-    h = A.h4a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes")
+    h = A.h3a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes", stratum="Q0")
     assert h["n_cond"] == n - 1 and h["failures"] == 0
+    h = A.h3a_bound([recs], _rev_dtp(B_ctl_bar=0.0), "bytes")            # 700 <= U K_hat
+    assert h["n_cond"] == n and h["failures"] == 1
     # DMR-hat: K_y = 0.9 * 1000 * 0.72 = 648 per step, A = 600: no backlog unless Q(t) brings one
     yy = np.full(4, 1000.0)
     A_ = np.full(4, 600.0)
@@ -743,3 +803,100 @@ def test_mase_last_value_predictor_and_zero_increments():
     yc = np.full(4, 100_000.0)
     res3 = A.run_metrics(_records(yc, np.full(4, 90_000.0), U=0.8), d, criterion="bytes", ci=False)
     assert res3["MASE"]["value"] != res3["MASE"]["value"]
+
+
+# --------------------------------------------------------------------------- paper metrics and statistics (review 3)
+
+
+def test_tau_int_default_is_madras_sokal():
+    rng = np.random.default_rng(11)
+    x = ar1(20000, 0.8, rng)
+    rho = A.autocorr(x)
+    tau = 0.5
+    for W in range(1, len(rho)):                 # automatic window: smallest W >= 5 tau(W)
+        tau += rho[W]
+        if W >= 5 * tau:
+            break
+    assert A.tau_int(x) == pytest.approx(tau) and A.TAU_METHOD == "sokal"
+    assert A.tau_int(x, method="ips") != A.tau_int(x)
+    assert 3.5 < A.tau_int(x) < 5.5              # AR(1): (1 + 0.8) / (2 (1 - 0.8)) = 4.5
+    with pytest.raises(ValueError):
+        A.tau_int(x, method="other")
+
+
+def test_bb_diff_bounds_of_independent_samples():
+    rng = np.random.default_rng(12)
+    a = [(rng.random(500) < 0.10).astype(float) for _ in range(4)]
+    b = [(rng.random(500) < 0.02).astype(float) for _ in range(4)]
+    r = A.bb_diff_bounds(a, b, B=500, seed=1)
+    assert r["value"] == pytest.approx(np.mean(np.concatenate(a)) - np.mean(np.concatenate(b)))
+    assert r["lower"] < r["value"] < r["upper"] and r["n_a"] == r["n_b"] == 2000
+    z = A.bb_diff_bounds([np.zeros(100)], [np.zeros(50)], B=100)
+    assert z["upper"] == 0.0 and z["value"] == 0.0
+    assert math.isnan(A.bb_diff_bounds([], [np.zeros(5)])["upper"])
+
+
+def test_logistic_fit_matches_maximum_likelihood():
+    rng = np.random.default_rng(13)
+    x = rng.uniform(0, 10, 4000)
+    p = 1 / (1 + np.exp(-(-3.0 + 0.5 * x)))
+    y = (rng.random(4000) < p).astype(float)
+    f = A.logistic_fit(x, y)
+    assert f["converged"] and f["b1"] == pytest.approx(0.5, abs=0.06) and f["b0"] == pytest.approx(-3.0, abs=0.3)
+    assert f["p_b1"] < 1e-10 and f["n"] == 4000
+    from scipy.optimize import minimize
+    nll = lambda b: -np.sum(y * (b[0] + b[1] * x) - np.log1p(np.exp(b[0] + b[1] * x)))
+    ref = minimize(nll, [0.0, 0.0], method="BFGS").x
+    assert [f["b0"], f["b1"]] == pytest.approx(ref.tolist(), abs=1e-4)
+    none = A.logistic_fit(x, np.zeros(4000))
+    assert none["events"] == 0 and math.isnan(none["b1"])
+
+
+def test_bdr_with_source_counts_jain_over_vessels_1_to_3_and_pdr_state_per_vessel():
+    """BDR_i divides r by c_l(x, n) of the content bytes and messages that the sources produced; J takes
+    vessels 1 to 3; PDR_state_i per vessel."""
+    dtp = DTP(topics=["state"], Ts=0.125, T1=0.02, T2=0.01, U=0.8, c_b=1.0, c_m=10.0)
+
+    def edges(t):
+        out = []
+        for i, (r, n, sx, sn) in {1: (64, 1, 48, 1), 2: (64, 1, 96, 2), 3: (64, 1, 48, 1), 4: (6, 0, 48, 1)}.items():
+            out.append({"i": i, "l": 1, "d": 200, "p": 2, "r": r, "n": n, "dup": 0, "late": 0, "fwd": 1,
+                        "src_n": sn, "src_x": sx})
+        return out
+    recs = _records([100.0] * 3, [100.0] * 3, M=(1, 2, 3, 4), edges=edges)
+    res = A.run_metrics(recs, dtp, criterion="count", ci=False)
+    c1 = 48 + 6 + 10                                   # c_b (x + 6 n) + c_m n
+    assert res["BDR_den"] == "source"
+    assert res["BDR_i"][1] == pytest.approx(64 / c1) and res["BDR_i"][2] == pytest.approx(64 / (96 + 12 + 20))
+    assert res["J_vessels"] == [1, 2, 3]
+    assert res["J"] == pytest.approx(A.jain([res["BDR_i"][i] for i in (1, 2, 3)]))
+    assert res["J_all"] == pytest.approx(A.jain(list(res["BDR_i"].values())))
+    # vessel 2 produced 2 state messages and received 1, vessel 4 none
+    assert res["PDR_state_i"] == {1: 1.0, 2: 0.0, 3: 1.0, 4: 0.0}
+    for rec in recs:
+        for e in rec["edges"]:
+            del e["src_n"], e["src_x"]
+    assert A.run_metrics(recs, dtp, criterion="count", ci=False)["BDR_den"] == "demand"
+
+
+def test_picp_c_difference_bounds_and_series():
+    d = _rev_dtp(B_ctl_bar=0.0)
+    rng = np.random.default_rng(14)
+    n = 400
+    y = 100_000.0 + rng.normal(0, 5000, n)
+    recs = _records(y, np.full(n, 100_000.0), U=0.8)
+    C_gt = {t: float(v) * (0.95 if t % 7 == 0 else 1.0) for t, v in enumerate(y)}
+    res = A.run_metrics(recs, d, criterion="count", ci=True, B=300, C_gt=C_gt, series=True)
+    cov = (0.9 * y >= 0.8 * 100_000.0).astype(float)
+    cov_c = np.array([C_gt[t] >= 0.8 * 100_000.0 for t in range(n)], float)
+    pc = res["PICP_C"]
+    assert pc["value"] == pytest.approx(cov_c.mean()) and pc["diff"]["value"] == pytest.approx((cov - cov_c).mean())
+    assert pc["diff"]["lower"] <= pc["diff"]["value"] <= pc["diff"]["upper"] and "K_C" not in pc
+    sr = res["series"]
+    assert len(sr["t"]) == n and sr["K_C"][0] == pytest.approx(C_gt[0] * 0.72)
+    assert sr["miss"] == [0.0] * n and sr["cover"] == pytest.approx(cov.tolist())
+    assert all(v is None for v in sr["catchup"])            # no emulator flags in these records
+    # the H3a condition of the series equals the one of the records
+    c1 = A.condition_from_series(sr)
+    c2 = A.condition_steps(recs, d, "count")
+    assert (c1["cond"] == c2["cond"]).all() and (c1["fail"] == c2["fail"]).all()

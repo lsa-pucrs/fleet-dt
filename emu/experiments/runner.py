@@ -168,8 +168,11 @@ def lag_verdict(rd, exempt=False):
     try:
         with open(os.path.join(rd, "metrics.json")) as f:
             m = json.load(f)
-        n = max(1, m.get("n_steps", 0) + m.get("lag_discarded", 0))
-        info["steps_over_1ms"] = m.get("lag_discarded", 0) / n
+        if "steps_over_1ms" in m:          # paper_post: the steps stay in the metrics with a lag flag
+            info["steps_over_1ms"] = m["steps_over_1ms"]
+        else:                              # metrics.py of the as2 stack: the lagging steps are left out
+            n = max(1, m.get("n_steps", 0) + m.get("lag_discarded", 0))
+            info["steps_over_1ms"] = m.get("lag_discarded", 0) / n
     except (OSError, ValueError):
         info["steps_over_1ms"] = None
     steps_bad = (info["steps_over_1ms"] or 0) > 0.01

@@ -1,59 +1,74 @@
 """Metrics of Section VI of the Fleet-DT paper computed from a DTA (JSON lines of G(t)) and the DTP.
 
 Per run (names of the paper; the names of earlier versions stay in the JSON output as aliases for one
-release: gamma = PICP, delta = PDR_state, eta_vessel = PDR_i, Pi = PCR, nu = u, kappa = c_y; phi keeps the
-full-delivery fraction 1 - DMR):
+release: gamma = PICP, delta = PDR_state, eta_vessel = PDR_i = BDR_i, Pi = PCR, nu = u, kappa = c_y; phi keeps
+the full-delivery fraction 1 - DMR):
   K_hat(t) = C_hat(t) (T3 - T_m)/Ts (predicted capacity of phase 3) and K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar
   (measured capacity); c_y, T_m and B_ctl_bar come from the DTP (c_y can be overridden).
   MASE       mean absolute scaled error (Hyndman and Koehler 2006): sum of |c_y y(t) - C_hat(t)| divided by the
              sum of c_y |y(t) - y(t-1)| (the error of the last-value predictor, which is (3) with alpha = 1), both
-             over the steps t with y(t), y(t-1) and C_hat(t) defined (fidelity, Definition of the paper); the
-             steps with y(t) = y(t-1) stay in both sums
-  PICP       prediction interval coverage probability: fraction of the steps of S (y(t) and C_hat(t)
-             defined) with K_y(t) >= U K_hat(t) (C13)
-  PICP_C     the same with the ground truth K(t) - B_ctl(t) in place of K_y(t), K(t) = C(t) (T3 - T_m)/Ts (C(t) of
-             the subset replays, B_ctl(t) the control bytes outside the data bridges in phase 3), when given
-  PDR_state  fraction of the pairs (t, i), i in M(t) and "state" in A(t) ∩ N(t), in which the GS
-             applications receive every state message forwarded in step t exactly once within step t
-             (C8: n_rx == n_fwd of the regulator log, else n_rx == ceil(r Ts), and no duplicate)
-  DMR        deadline miss ratio: fraction of the fleet steps in which some message of level 1 or 2 of a
-             vessel of M(t) misses its step (DMR = 1 - phi, phi the full-delivery fraction)
-  DMR_hat    DMR predicted by the backlog predictor of C5 (fleetdt.outer.backlog_admitted):
-             q_hat(t) = max(0, max(q_hat(t-1), Q(t)) + sum_i a_i(t) - K_y(t)) with the logged Q(t) (Q_i over M(t)
-             plus Qbar_i outside M(t)), DMR_hat = fraction of the steps with q_hat > 0
+             over the steps t with y(t), y(t-1) and C_hat(t) defined (Definition of Fidelity); the steps with
+             y(t) = y(t-1) stay in both sums
+  PICP       fraction of the steps of S (y(t) and C_hat(t) defined) with K_y(t) >= U K_hat(t)
+  PICP_C     the same with K(t) - B_ctl(t) in place of K_y(t), K(t) = C(t) (T3 - T_m)/Ts (C(t) of the subset
+             replays, B_ctl(t) the control bytes outside the data bridges in phase 3), when given; "diff" holds
+             PICP - PICP_C on the steps with both and its block-bootstrap bounds (H2)
+  PDR_state  fraction of the pairs (t, i), i in M(t) and "state" in A(t) ∩ N(t), in which the GS applications
+             receive within step t, exactly once after the deduplication, every message of topic state of
+             step t of vessel i: n == the messages that the source produced in step t (src of the regulator
+             step log, else fwd + held, else fwd, else ceil(f Ts)); duplicates that the GS removed do not
+             fail a pair (Corollary 2); PDR_state_i per vessel (H4c)
+  DMR        deadline miss ratio: fraction of the fleet steps in which the GS receives after the step, or
+             never, a message that a vessel of M(t) forwards at level 1 or 2 (criterion "count": n < fwd)
+  DMR_hat    fraction of the steps with q_hat(t) > 0 of the backlog recursion (eq. lindley with K_y(t)) and the
+             final a_i of Algorithm 1 replayed on the records with alpha, U and Q(t) = q_hat(t - 1)
+             (fleetdt.outer.dmr_hat_replay; alpha and U: those logged in the records); H3b replays the
+             calibration DTA (emu/analysis/hypotheses.py)
   eta        bytes of the N(t) topics received within the step / bytes of the N(t) topics demanded
-  PDR_i      per vessel i, the byte-weighted delivery ratio of the needed topics of vessel i (eta_i), with
-             Jain's fairness index J and the ratio min_i PDR_i / max_i PDR_i (H5d) over vessels 1 to 3 only
-             (the vessels with the same sources; vessel 4 has no video in the fairness cells)
+  BDR_i      byte delivery ratio of vessel i: sum of r_il(t) over l in N(t) and the steps with i in M(t),
+             divided by the same sum of c_l(x_il(t), n_il(t)) of the content bytes and messages that the
+             sources produced in step t (edge fields src_x and src_n, which emu/analysis/paper_post.py
+             takes from the regulator step log and the vessel log; d_il(t) when a record lacks them, and
+             "BDR_den" says which); Jain's index J (H4d) and the ratio min_i BDR_i / max_i BDR_i over the vessels
+             of fair_vessels (1 to 3: the vessels with the same sources; vessel 4 has no video in the fairness
+             cells); J_all over every vessel
   mu         late messages / (received + late)
   u          measured utilization: sum r_il(t) / sum (K_y(t) + B_ctl_bar), over the steps with y(t)
-  PCR        prefix completeness ratio (C21): mean over the pairs (t, i), i in M(t), |N(t)| >= 1, of the share
-             of N(t) in the longest prefix of sigma_t that vessel i delivers complete within step t
-             (denominator |N(t)|); prefix also holds, for each rank k of sigma_t, the fraction of the pairs
-             in which topics sigma_t(1..k) arrive complete, and the mean prefix length
-  RelMSE     MSE_ES / MSE_alt of the one-step prediction of y(t), C_hat(t) of the run (ES) against the
-             persistence y(t - 1) (alt); H3 tests log RelMSE (rel_mse for other alternatives)
+  PCR        prefix completeness ratio: mean over the pairs (t, i), i in M(t), |N(t)| >= 1, of
+             min(pi_i(t), |N(t)|) / |N(t)|, pi_i(t) the longest prefix of sigma_t whose topics vessel i delivers
+             complete within step t (criterion "count": every message that the sources produced, a topic
+             without messages complete); prefix also holds, for each rank k of sigma_t, the fraction of the
+             pairs in which topics sigma_t(1..k) arrive complete, and the mean prefix length
+  RelMSE     MSE_ES / MSE_alt of the one-step prediction of c_y y(t): C_hat(t) of the run (ES) against the
+             last value c_y y(t - 1); H5 compares ES with alpha* against every predictor of fleetdt.predictors
+             in left-out scenarios (emu/analysis/hypotheses.py)
   fleet      fleet consistency: for each topic l, the fraction of the steps (with a positive demand of l)
              in which l arrives complete from every vessel of M(t)
   unused     share of the cap m(t) b(t) = max(0, U K_hat(t) - Q(t)) granted to vessels of M(t) with a zero demand
              table: sum_t z(t) b(t) / sum_t m(t) b(t)
-  fill       fill ratio f(t) = max_{i in M(t)} a_i(t) / b(t) (a_i of Algorithm 1); a run is valid for E3 and
-             E4 when mean f >= 0.85 (FILL_MIN)
+  fill       fill ratio f(t) = max_{i in M(t)} a_i(t) / b(t) (a_i of Algorithm 1); a cell with rho >= 1.5 enters
+             the IUT of H3 and H4 only when its mean fill ratio reaches 0.85 (FILL_MIN; the hypothesis driver
+             applies the rule per cell, "valid" here is the run-level value)
+  series     (series=True) the per-step values that the pooled statistics of the hypothesis driver need
 
-The full-reception criterion of an edge is explicit (argument `criterion`, required on the command line):
+The full-reception criterion of an edge is explicit (argument `criterion`; the paper uses "count"):
   count  n >= messages forwarded by the vessel regulator (fwd of the regulator log; n_l = ceil(r_l Ts)
-         without the log); for completeness (prefix, fleet) n >= fwd + held, i.e. every message produced
+         without the log); for completeness (prefix, fleet) n >= the messages that the sources produced
+         (src, else fwd + held)
   bytes  r >= d (1 - tol) - 1
 
-Statistics (C20): integrated autocorrelation time tau_int = 1/2 + sum_{k>=1} rho(k) (one run or pooled over
-runs), effective sample size n_eff = n / (2 tau_int), circular block bootstrap (two-sided CI and one-sided
-bounds, blocks inside each run), Clopper-Pearson upper limit with the raw count k of events in n_eff
-trials (for k = 0 it is 1 - 0.05^(1/n_eff) at 95 %; the slack series s(t) = K_y(t) - U K_hat(t) is the
-proxy whose tau_int gives n_eff for the event metrics), the H4a bound on the fleet steps with
-K_y(t) >= U K_hat(t) and Q(t) = 0 (and on non-overlapping 8-step windows, Corollary 1), Diebold-Mariano test (Newey-West variance), one-sided exact
-Wilcoxon signed-rank test with Pratt's treatment of zeros (exact conditional distribution, ties
-included), Holm, the intersection-union test (IUT), the fixed-sequence gatekeeping
-H1 -> H2 -> H4 -> H5 -> H3 -> H6, TOST on the signed run-level differences, and the Hodges-Lehmann estimate.
+Statistics: integrated autocorrelation time tau_int = 1/2 + sum_{k=1}^{W} rho(k) with the automatic window of
+Madras and Sokal (1988), the smallest W with W >= c tau_int(W), c = 5 (method "sokal", the default; "ips":
+initial positive sequence of Geyer), one run or pooled over runs; effective sample size n_eff = n / (2 tau_int);
+circular block bootstrap (two-sided CI and one-sided bounds, blocks inside each run, blocks of ceil(2 tau_int)
+steps), also of the difference of two independent samples (bb_diff_bounds); Clopper-Pearson upper limit with
+the raw count k of events in n_eff trials (for k = 0 it is 1 - 0.05^(1/n_eff) at 95 %); the H3a bound on the
+failed fleet steps with K_y(t) >= U K_hat(t) >= Q(t) (and on groups of 8 steps; Q(t) = 0 as a stratum; catch-up
+and lag steps as failures), tau_int of the slack series K_y(t) - U K_hat(t); logistic regression by Newton
+iterations (H3c); Diebold-Mariano test (Newey-West variance); one-sided exact Wilcoxon signed-rank test with
+Pratt's treatment of zeros (exact conditional distribution, ties included); Holm; the intersection-union test
+(IUT); the fixed sequence H1 -> H2 -> H3 -> H4 -> H5 -> H6 (the first failure ends it); TOST on the signed
+run-level differences; the Hodges-Lehmann estimate.
 
   python -m fleetdt.analysis dta.jsonl [more.jsonl ...] --dtp dtp.json --criterion bytes|count [--c-y C] [--json]
   python -m fleetdt.analysis calibrate RUN [RUN ...] [--json]     c_y, T_m and B_ctl_bar from calibration runs
@@ -76,12 +91,15 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 
 from .as_model import DTP
-from .outer import admitted_bytes, backlog_admitted, backlog_of, load_dta
+from .outer import admitted_bytes, backlog_of, load_dta
 
 CRITERIA = ("bytes", "count")
+PAPER_CRITERION = "count"  # reception criterion of DMR, PCR and H3a in the paper (a message arrives late or never)
 FILL_MIN = 0.85
-FAIR_VESSELS = (1, 2, 3)   # H5d: vessels with the same sources (vessel 4 has no video in the fairness cells)
-HYPOTHESIS_ORDER = ("H1", "H2", "H4", "H5", "H3", "H6")
+FAIR_VESSELS = (1, 2, 3)   # H4d: vessels with the same sources (vessel 4 has no video in the fairness cells)
+HYPOTHESIS_ORDER = ("H1", "H2", "H3", "H4", "H5", "H6")   # fixed sequence of Section VI-E
+TAU_METHOD = "sokal"       # Madras and Sokal (1988), automatic window with c = 5
+TAU_C = 5.0
 
 # --------------------------------------------------------------------------- autocorrelation
 
@@ -96,7 +114,7 @@ def autocorr(x: np.ndarray) -> np.ndarray:
     return acf / acf[0] if acf[0] > 0 else np.r_[1.0, np.zeros(n - 1)]
 
 
-def _tau_from_rho(rho: np.ndarray, method: str = "ips", c: float = 5.0) -> float:
+def _tau_from_rho(rho: np.ndarray, method: str = TAU_METHOD, c: float = TAU_C) -> float:
     if method == "sokal":
         tau = 0.5
         for W in range(1, len(rho)):
@@ -104,6 +122,8 @@ def _tau_from_rho(rho: np.ndarray, method: str = "ips", c: float = 5.0) -> float
             if W >= c * tau:
                 return max(tau, 0.5)
         return max(tau, 0.5)
+    if method != "ips":
+        raise ValueError("tau_int method must be sokal or ips")
     s = 0.0
     for m in range(len(rho) // 2):
         g = rho[2 * m] + rho[2 * m + 1]
@@ -113,10 +133,11 @@ def _tau_from_rho(rho: np.ndarray, method: str = "ips", c: float = 5.0) -> float
     return max(s - 0.5, 0.5)
 
 
-def tau_int(x: Sequence[float], method: str = "ips", c: float = 5.0) -> float:
+def tau_int(x: Sequence[float], method: str = TAU_METHOD, c: float = TAU_C) -> float:
     """Integrated autocorrelation time tau_int = 1/2 + sum_{k>=1} rho_k (tau_int = 1/2 for i.i.d. data).
-    method "ips": initial positive sequence of Geyer (sums of pairs rho_2m + rho_2m+1 while positive);
-    method "sokal": smallest window W with W >= c tau_int(W)."""
+    method "sokal" (default, the paper): sum up to the automatic window of Madras and Sokal, the smallest
+    W with W >= c tau_int(W), c = 5; method "ips": initial positive sequence of Geyer (sums of pairs
+    rho_2m + rho_2m+1 while positive)."""
     x = np.asarray(x, dtype=float)
     x = x[~np.isnan(x)]
     if len(x) < 4 or np.var(x) == 0:
@@ -124,7 +145,7 @@ def tau_int(x: Sequence[float], method: str = "ips", c: float = 5.0) -> float:
     return _tau_from_rho(autocorr(x), method, c)
 
 
-def tau_int_runs(runs: Sequence[Sequence[float]], method: str = "ips", c: float = 5.0) -> float:
+def tau_int_runs(runs: Sequence[Sequence[float]], method: str = TAU_METHOD, c: float = TAU_C) -> float:
     """tau_int pooled over independent runs: each run is centred on its own mean, the lag-k products of
     every run are summed and divided by the total number of steps, rho_k = acov_k / acov_0, and the
     window rule of tau_int applies to that pooled rho. NaN steps are removed inside each run."""
@@ -212,6 +233,61 @@ def block_bootstrap_bounds(runs, stat: Callable[[np.ndarray], float] = np.mean, 
             "value": float(stat(allx)), "n": n}
 
 
+def _block_index(lengths: Sequence[int], block: int):
+    """starts, lengths, run offsets and run lengths of the circular blocks of runs of the given lengths."""
+    starts, lens, obase, olen = [], [], [], []
+    base = 0
+    for m in lengths:
+        starts.append(np.arange(m))
+        lens.append(np.full(m, min(block, m)))
+        obase.append(np.full(m, base))
+        olen.append(np.full(m, m))
+        base += m
+    return tuple(np.concatenate(v) if v else np.zeros(0, int) for v in (starts, lens, obase, olen))
+
+
+def _resample_means(rs: List[np.ndarray], block: int, B: int, rng) -> np.ndarray:
+    """B circular-block-bootstrap means of the steps of the runs rs (1-D arrays, blocks inside each run)."""
+    allx = np.concatenate(rs)
+    n = len(allx)
+    starts, lens, obase, olen = _block_index([len(x) for x in rs], block)
+    nb = int(math.ceil(n / float(block)))
+    ar = np.arange(block)
+    out = np.empty(B)
+    for b in range(B):
+        pick = rng.integers(0, len(starts), nb)
+        idx = obase[pick, None] + (starts[pick, None] + ar[None, :]) % olen[pick, None]
+        idx = idx[ar[None, :] < lens[pick, None]][:n]
+        out[b] = float(np.mean(allx[idx]))
+    return out
+
+
+def bb_diff_bounds(runs_a: Sequence[Sequence[float]], runs_b: Sequence[Sequence[float]], conf: float = 0.95,
+                   B: int = 2000, block_a: Optional[int] = None, block_b: Optional[int] = None,
+                   seed: int = 0) -> Dict:
+    """Block-bootstrap bounds of mean(a) - mean(b) for two independent samples of per-step values, each a
+    list of runs (H3b: the miss indicators of the evaluation runs against those of the backlog recursion on
+    the calibration DTA). Each sample is resampled by its own circular blocks of ceil(2 tau_int) steps
+    (tau_int pooled over its runs, NaN steps removed), independently of the other. Returns {"value",
+    "lower", "upper" (one-sided `conf` bounds), "ci", "block_a", "block_b", "n_a", "n_b"}."""
+    nan = float("nan")
+    ra = [np.asarray(x, float)[~np.isnan(np.asarray(x, float))] for x in runs_a]
+    rb = [np.asarray(x, float)[~np.isnan(np.asarray(x, float))] for x in runs_b]
+    ra, rb = [x for x in ra if len(x)], [x for x in rb if len(x)]
+    if not ra or not rb:
+        return {"value": nan, "lower": nan, "upper": nan, "ci": [nan, nan], "block_a": 0, "block_b": 0,
+                "n_a": int(sum(len(x) for x in ra)), "n_b": int(sum(len(x) for x in rb))}
+    ba = block_a or max(1, int(math.ceil(2.0 * tau_int_runs(ra))))
+    bb = block_b or max(1, int(math.ceil(2.0 * tau_int_runs(rb))))
+    rng = np.random.default_rng(seed)
+    d = _resample_means(ra, ba, B, rng) - _resample_means(rb, bb, B, rng)
+    a = (1.0 - conf) / 2.0
+    return {"value": float(np.mean(np.concatenate(ra)) - np.mean(np.concatenate(rb))),
+            "lower": float(np.quantile(d, 1.0 - conf)), "upper": float(np.quantile(d, conf)),
+            "ci": [float(np.quantile(d, a)), float(np.quantile(d, 1.0 - a))], "block_a": int(ba), "block_b": int(bb),
+            "n_a": int(sum(len(x) for x in ra)), "n_b": int(sum(len(x) for x in rb))}
+
+
 # --------------------------------------------------------------------------- binomial bounds
 
 
@@ -231,7 +307,7 @@ def clopper_pearson_upper(k: float, n: float, conf: float = 0.95, n_eff: Optiona
 def clopper_pearson_upper_eff(k: float, n: float, n_eff: float, conf: float = 0.95, events: str = "raw") -> float:
     """One-sided Clopper-Pearson upper limit with n_eff effective trials (C20), n_eff = n / (2 tau_int).
     events "raw": the k observed events in n_eff trials (conservative; the pre-registered rule of H1 and
-    H4a: an upper limit below 1e-3 needs n_eff >= 2995 with 0 events, 4742 with 1, 6294 with 2; for k = 0
+    H3a: an upper limit below 1e-3 needs n_eff >= 2995 with 0 events, 4742 with 1, 6294 with 2; for k = 0
     the limit is 1 - (1 - conf)^(1/n_eff), 1 - 0.05^(1/n_eff) at 95 %);
     events "scaled": k n_eff / n events in n_eff trials (keeps the observed rate k / n)."""
     from scipy.stats import beta
@@ -367,6 +443,19 @@ def fixed_sequence(p: Dict[str, float], order: Sequence[str] = HYPOTHESIS_ORDER,
     return out
 
 
+def fixed_sequence_verdicts(reject: Dict[str, Optional[bool]], order: Sequence[str] = HYPOTHESIS_ORDER) -> List[Dict]:
+    """Fixed sequence on the verdicts of the hypotheses (the IUT of each hypothesis mixes p-values, bootstrap
+    bounds and Clopper-Pearson limits, so its outcome is a rejection of the null or not): each hypothesis
+    of `order` is tested only when every earlier one was rejected; None (no data) counts as not rejected.
+    Returns one dict per hypothesis: {"id", "tested", "rejected"}."""
+    out, gate = [], True
+    for h in order:
+        rej = bool(gate and reject.get(h) is True)
+        out.append({"id": h, "tested": gate, "rejected": rej})
+        gate = gate and rej
+    return out
+
+
 def tost(d: Sequence[float], margin: Union[float, Tuple[float, float]], alpha: float = 0.05,
          b: Optional[Sequence[float]] = None) -> Dict:
     """Two one-sided t tests (TOST) of equivalence on the signed run-level differences d (one value per
@@ -430,15 +519,66 @@ def jain(x: Sequence[float]) -> float:
 
 
 def min_max_ratio(x: Sequence[float]) -> float:
-    """min_i x_i / max_i x_i over the finite values (H5d with x = PDR_i)."""
+    """min_i x_i / max_i x_i over the finite values (H4d with x = BDR_i)."""
     x = np.asarray([v for v in x if v == v], dtype=float)
     return float(x.min() / x.max()) if len(x) and x.max() > 0 else float("nan")
 
 
+def logistic_fit(x: Sequence[float], y: Sequence[float], max_iter: int = 50, tol: float = 1e-10,
+                 ridge: float = 0.0) -> Dict:
+    """Logistic regression P(y = 1) = 1 / (1 + exp(-(b0 + b1 x))) by Newton iterations (IRLS) on the
+    log-likelihood, with an optional ridge penalty on b1 (0: maximum likelihood). Steps with NaN are
+    dropped. With no event or no non-event, or a constant x, the fit is not identifiable and b1 is NaN.
+    Returns {"b0", "b1", "se_b0", "se_b1", "z_b1", "p_b1" (two-sided Wald), "n", "events", "iter",
+    "converged", "loglik"}."""
+    from scipy.stats import norm
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    ok = ~(np.isnan(x) | np.isnan(y))
+    x, y = x[ok], y[ok]
+    n, k = len(x), float(np.sum(y))
+    nan = float("nan")
+    out = {"n": int(n), "events": int(k), "b0": nan, "b1": nan, "se_b0": nan, "se_b1": nan, "z_b1": nan,
+           "p_b1": nan, "iter": 0, "converged": False, "loglik": nan}
+    if n < 2 or k == 0 or k == n or np.ptp(x) == 0:
+        if n and 0 < k < n:
+            out["b0"] = math.log(k / (n - k))
+        return out
+    X = np.c_[np.ones(n), x]
+    b = np.array([math.log(k / (n - k)), 0.0])
+    pen = np.diag([0.0, ridge])
+    for it in range(1, max_iter + 1):
+        eta = np.clip(X @ b, -35.0, 35.0)
+        p = 1.0 / (1.0 + np.exp(-eta))
+        W = p * (1.0 - p)
+        g = X.T @ (y - p) - pen @ b
+        H = (X * W[:, None]).T @ X + pen
+        try:
+            step = np.linalg.solve(H, g)
+        except np.linalg.LinAlgError:
+            break
+        b = b + step
+        out["iter"] = it
+        if float(np.max(np.abs(step))) < tol:
+            out["converged"] = True
+            break
+    eta = np.clip(X @ b, -35.0, 35.0)
+    p = 1.0 / (1.0 + np.exp(-eta))
+    H = (X * (p * (1.0 - p))[:, None]).T @ X + pen
+    try:
+        cov = np.linalg.inv(H)
+        se = np.sqrt(np.maximum(np.diag(cov), 0.0))
+    except np.linalg.LinAlgError:
+        se = np.array([nan, nan])
+    ll = float(np.sum(y * np.log(np.maximum(p, 1e-300)) + (1 - y) * np.log(np.maximum(1 - p, 1e-300))))
+    z = float(b[1] / se[1]) if se[1] > 0 else nan
+    out.update(b0=float(b[0]), b1=float(b[1]), se_b0=float(se[0]), se_b1=float(se[1]), z_b1=z,
+               p_b1=float(2.0 * norm.sf(abs(z))) if z == z else nan, loglik=ll)
+    return out
+
+
 def rel_mse(y: Sequence[float], pred_es: Sequence[float], pred_alt: Sequence[float]) -> Dict:
-    """RelMSE = MSE_ES / MSE_alt (Hyndman and Koehler 2006) of two one-step predictions of y over the steps
-    where y and both predictions are defined; H3 tests log RelMSE (< 0: ES better). Returns {"value",
-    "log", "MSE_ES", "MSE_alt", "n"}."""
+    """RelMSE = MSE_ES / MSE_alt of two one-step predictions of y over the steps where y and both predictions
+    are defined; H5 tests log RelMSE - log 1.05 < 0. Returns {"value", "log", "MSE_ES", "MSE_alt", "n"}."""
     y, a, b = (np.asarray(v, dtype=float) for v in (y, pred_es, pred_alt))
     ok = ~(np.isnan(y) | np.isnan(a) | np.isnan(b))
     nan = float("nan")
@@ -472,12 +612,12 @@ def _received_all(e: Dict, criterion: str, tol: float, n_expected: Dict[int, int
 def _edge_complete(e: Optional[Dict], criterion: str, tol: float, n_expected: Dict[int, int]) -> bool:
     """Complete arrival of an edge within the step, whatever its level (prefix completeness, fleet
     consistency): a topic with zero demand (or no edge) is complete; with "count", n >= the messages the
-    source produced (src, else fwd + held of the regulator log, else n_l = ceil(r_l Ts)); with "bytes",
-    r >= d (1 - tol) - 1."""
+    source produced (src_n or src, else fwd + held of the regulator log, else n_l = ceil(r_l Ts)); with
+    "bytes", r >= d (1 - tol) - 1."""
     if e is None or e.get("d", 0) <= 0:
         return True
     if criterion == "count":
-        want = e.get("src")
+        want = e.get("src_n") if e.get("src_n") is not None else e.get("src")
         if want is None and e.get("fwd") is not None and e.get("held") is not None:
             want = int(e["fwd"]) + int(e["held"])
         if want is None:
@@ -528,13 +668,38 @@ def margin_series(records: Sequence[Dict], dtp: DTP, c_y: Optional[float] = None
     return np.asarray(out, dtype=float)
 
 
+def produced(e: Dict, n_expected: Dict[int, int]) -> Optional[int]:
+    """Messages of step t that the source of the edge produced: src_n (or src) of the regulator step log
+    ("rx"), else fwd + held, else fwd, else n_l = ceil(f_l Ts) of the DTP (None without a rate)."""
+    for k in ("src_n", "src"):
+        if e.get(k) is not None:
+            return int(e[k])
+    if e.get("fwd") is not None and e.get("held") is not None:
+        return int(e["fwd"]) + int(e["held"])
+    if e.get("fwd") is not None:
+        return int(e["fwd"])
+    return n_expected.get(e["l"])
+
+
 def _state_ok(e: Dict, n_expected: Dict[int, int]) -> bool:
-    """C8: the GS applications receive every state message forwarded in step t exactly once within step t:
-    n_rx == n_fwd (fwd of the regulator log; without it, n_l = ceil(r_l Ts)) and no duplicate."""
-    want = e.get("fwd")
+    """Definition of Fidelity: the GS applications receive within step t, exactly once, every message of topic
+    state of step t of vessel i. n counts the first copies within the step (the VE deduplicates by vessel,
+    topic, step and sequence number), so a pair holds when n equals the messages that the source produced;
+    the duplicates that the GS removed do not fail the pair (Corollary 2)."""
+    want = produced(e, n_expected)
     if want is None:
-        want = n_expected.get(e["l"], 1)
-    return int(e.get("n", 0)) == int(want) and int(e.get("dup", 0)) == 0
+        want = 1
+    return int(e.get("n", 0)) == int(want)
+
+
+def bdr_denominator(e: Dict, dtp: DTP) -> Tuple[float, bool]:
+    """Denominator term of BDR_i for one edge: c_l(x, n) of the content bytes x and the messages n that the
+    sources produced in step t (edge fields src_x and src_n, DTP.message_bytes), or d_il(t) when the edge
+    lacks them. Returns (bytes, True when the source counts were used)."""
+    if e.get("src_n") is not None and e.get("src_x") is not None:
+        n = int(e["src_n"])
+        return (float(dtp.message_bytes(int(e["l"]), int(e["src_x"]), n)) if n else 0.0), True
+    return float(e.get("d", 0) or 0), False
 
 
 def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e-6, c_y: Optional[float] = None,
@@ -549,7 +714,8 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
     default_order = [dtp.index(n) for n in dtp.order] if dtp.order else list(range(1, L + 1))
     out = {"t": [], "ase": [], "cover": [], "phi": [], "delta": [], "delta_fail": [], "eta": [], "mu": [], "nu": [],
            "margin": [], "eta_i": {}, "eta_rows": [], "prefix": [], "pcr": [], "fleet": [], "unused": [], "fill": [],
-           "order": [], "A": [], "y": [], "C_hat": [], "K_y": [], "K_hat": [], "Q": [], "U": []}
+           "order": [], "A": [], "y": [], "C_hat": [], "K_y": [], "K_hat": [], "Q": [], "U": [], "m": [],
+           "state_i": [], "catchup": [], "lag": [], "w1": [], "w2": [], "bdr_src": None}
     prev_t, prev_y = None, None
     for g in recs:
         t, y, C = int(g["t"]), g.get("y"), g.get("C_hat")
@@ -563,6 +729,12 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
         by = {(e["i"], e["l"]): e for e in edges}
         out["t"].append(t)
         out["order"].append(sigma)
+        out["m"].append(len(Mlist))
+        # emulator flags of the step (emu/analysis/paper_post.py): catch-up and lag above the run limit
+        out["catchup"].append(float(bool(g["catchup"])) if g.get("catchup") is not None else np.nan)
+        out["lag"].append(float(bool(g["lag"])) if g.get("lag") is not None else np.nan)
+        out["w1"].append(float(g["w1"]) if g.get("w1") is not None else np.nan)
+        out["w2"].append(float(g["w2"]) if g.get("w2") is not None else np.nan)
         # fidelity: C_hat(t) against c_y y(t); coverage and slack in bytes of phase 3
         if y is not None and C is not None and prev_y is not None and prev_t == t - 1:
             out["ase"].append([abs(cy * y - C), cy * abs(y - prev_y)])     # MASE rows: error, last-value error
@@ -583,25 +755,31 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
         adm = [e for e in inM if (e.get("p") or 0) > 0]
         out["phi"].append(float(all(_received_all(e, criterion, tol, n_expected) for e in adm)) if M else np.nan)
         ok = pairs = 0
+        st = {}
         if state is not None and state in N:
             for e in adm:
                 if e["l"] == state:
                     pairs += 1
-                    ok += int(_state_ok(e, n_expected))
+                    v = _state_ok(e, n_expected)
+                    ok += int(v)
+                    st[int(e["i"])] = bool(v)
         out["delta"].append((ok, pairs))
         out["delta_fail"].append(float(ok < pairs) if pairs else np.nan)
+        out["state_i"].append(st)
         num = den = 0
         row = {}
         for e in inM:
             if e["l"] in N:
+                dd, src = bdr_denominator(e, dtp)
+                out["bdr_src"] = src if out["bdr_src"] is None else (out["bdr_src"] and src)
                 num += e.get("r", 0)
                 den += e.get("d", 0)
                 vi = out["eta_i"].setdefault(e["i"], [0, 0])
                 vi[0] += e.get("r", 0)
-                vi[1] += e.get("d", 0)
+                vi[1] += dd
                 ri = row.setdefault(e["i"], [0, 0])
                 ri[0] += e.get("r", 0)
-                ri[1] += e.get("d", 0)
+                ri[1] += dd
         out["eta"].append((num, den))
         out["eta_rows"].append(row)
         late = sum(e.get("late", 0) for e in edges)
@@ -617,7 +795,7 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
             while k < len(sigma) and comp[i][k]:
                 k += 1
             pre[i] = k
-            if N:   # C21: share of N(t) in the complete prefix, denominator |N(t)|
+            if N:   # min(pi_i(t), |N(t)|) / |N(t)| (the topics of N(t) come first in sigma_t)
                 pcr[i] = len(N.intersection(sigma[:k])) / float(len(N))
         out["prefix"].append(pre)
         out["pcr"].append(pcr)
@@ -687,7 +865,7 @@ def _summary(x: np.ndarray, stat, ci: bool, B: int, conf: float, seed: int, even
             k, m = float(np.sum(1.0 - x)) if x.ndim == 1 else float(np.sum(x[:, 0] < x[:, 1])), n
         ne = n_eff(m, t) if m else 0.0
         out["violations"] = k
-        # C20: the raw count k in n_eff trials (the rule of H4a); "viol_upper_scaled" keeps k n_eff / n
+        # C20: the raw count k in n_eff trials (the rule of H1 and H3a); "viol_upper_scaled" keeps k n_eff / n
         out["viol_upper"] = clopper_pearson_upper_eff(k, m, ne, conf=conf, events="raw") if m else 1.0
         out["viol_upper_scaled"] = clopper_pearson_upper_eff(k, m, ne, conf=conf, events="scaled") if m else 1.0
     return out
@@ -737,38 +915,67 @@ def _eta_minmax(rows: np.ndarray) -> float:
     return min_max_ratio(eta)
 
 
-def picp_ground_truth(s: Dict, dtp: DTP, C_gt: Dict[int, float], B_ctl: Optional[Dict[int, float]] = None) -> Dict:
+def picp_ground_truth(s: Dict, dtp: DTP, C_gt: Dict[int, float], B_ctl: Optional[Dict[int, float]] = None,
+                      U: Optional[float] = None, ci: bool = False, B: int = 2000, conf: float = 0.95,
+                      seed: int = 0) -> Dict:
     """PICP_C(U): fraction of the steps of step_rows with K(t) - B_ctl(t) >= U K_hat(t), K(t) = C(t) (T3 - T_m)/Ts,
     C(t) of the ground truth (subset replays) and B_ctl(t) the control bytes outside the data bridges in phase 3
-    (0 when not given), over the steps with C(t) and C_hat(t)."""
+    (0 when not given), over the steps with C(t) and C_hat(t). U: the logged U of each step, or the given value
+    for every step (U* in H2). "K_C" holds K(t) - B_ctl(t) per step of s (NaN without C(t)), and "diff" the
+    difference PICP(U) - PICP_C(U) on the steps with both, with its one-sided block-bootstrap bounds when ci
+    (blocks of ceil(2 tau_int) steps of the per-step difference; H2 tests the upper bound < 0.005)."""
     r = dtp.T3m / dtp.Ts
-    hits = []
-    for t, Ch, U in zip(s["t"], s["C_hat"], s["U"]):
+    hits, d, KC = [], [], []
+    for t, Ch, Ul, Ky in zip(s["t"], s["C_hat"], s["U"], s["K_y"]):
         C = C_gt.get(t)
-        if C is None or Ch != Ch:
+        if C is None:
+            KC.append(np.nan)
             continue
+        kc = float(C) * r - float((B_ctl or {}).get(t, 0.0))
+        KC.append(kc)
+        if Ch != Ch:
+            continue
+        u = float(Ul) if U is None else float(U)
         # K(t) - B_ctl(t) >= U K_hat(t), compared in units of C (divided by (T3 - T_m)/Ts)
-        hits.append(float(float(C) - float((B_ctl or {}).get(t, 0.0)) / r >= U * Ch))
-    return {"value": float(np.mean(hits)) if hits else float("nan"), "n": len(hits)}
+        hc = float(float(C) - float((B_ctl or {}).get(t, 0.0)) / r >= u * Ch)
+        hits.append(hc)
+        if Ky == Ky:
+            hy = float(Ky / r >= u * Ch)           # K_y(t) >= U K_hat(t)
+            d.append(hy - hc)
+    out = {"value": float(np.mean(hits)) if hits else float("nan"), "n": len(hits), "K_C": KC}
+    dd = np.asarray(d, float)
+    diff = {"value": float(dd.mean()) if len(dd) else float("nan"), "n": int(len(dd))}
+    if ci and len(dd):
+        bb = block_bootstrap_bounds([dd], np.mean, conf=conf, B=B, seed=seed)
+        diff.update(lower=bb["lower"], upper=bb["upper"], block=bb["block"])
+    out["diff"] = diff
+    return out
+
+
+def _nanlist(x) -> List[Optional[float]]:
+    return [None if (v is None or v != v) else float(v) for v in np.asarray(x, float).tolist()]
 
 
 def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float = 1e-6, ci: bool = True,
                 B: int = 2000, conf: float = 0.95, seed: int = 0, c_y: Optional[float] = None,
                 kappa: Optional[float] = None, C_gt: Optional[Dict[int, float]] = None,
-                B_ctl: Optional[Dict[int, float]] = None, fair_vessels: Optional[Sequence[int]] = FAIR_VESSELS) -> Dict:
-    """Metrics of one run (Section VI) with an explicit full-reception criterion ("bytes" or "count").
-    The event metrics (PICP, DMR, PDR_state) take tau_int from the slack series s(t) = K_y(t) - U K_hat(t)
-    and the fleet step as the unit (n_eff = steps / (2 tau_int), no factor of messages per step).
+                B_ctl: Optional[Dict[int, float]] = None, fair_vessels: Optional[Sequence[int]] = FAIR_VESSELS,
+                series: bool = False) -> Dict:
+    """Metrics of one run (Section VI) with an explicit full-reception criterion ("bytes" or "count"; the paper
+    uses "count"). The event metrics (PICP, DMR, PDR_state) take tau_int from the slack series
+    s(t) = K_y(t) - U K_hat(t) and the fleet step as the unit (n_eff = steps / (2 tau_int)).
     c_y (default: the DTP; alias kappa, its old name) enters K_y and the MASE; C_gt (t -> C(t)) and B_ctl
-    (t -> B_ctl(t)) give PICP_C; the H5d ratio min_i PDR_i / max_i PDR_i takes the vessels of fair_vessels
-    (None: every vessel). The output holds the names of the paper and, for one release, the names of earlier
-    versions (module docstring)."""
+    (t -> B_ctl(t)) give PICP_C; J and the ratio min_i BDR_i / max_i BDR_i take the vessels of fair_vessels
+    (None: every vessel). series: also the per-step values of the hypothesis driver ("series"). The output
+    holds the names of the paper and, for one release, the names of earlier versions (module docstring)."""
+    from .outer import dmr_hat_replay
     _check_criterion(criterion)
     cy = _cy(c_y, kappa, dtp.c_y)
     s = step_rows(records, dtp, criterion, tol, cy)
     mean = lambda z: float(np.mean(z))
     res = {"steps": len(s["t"]), "t_first": s["t"][0] if s["t"] else None, "t_last": s["t"][-1] if s["t"] else None,
-           "criterion": criterion, "c_y": cy, "kappa": cy, "T_m": dtp.T_m, "B_ctl_bar": dtp.B_ctl_bar}
+           "criterion": criterion, "c_y": cy, "kappa": cy, "T_m": dtp.T_m, "B_ctl_bar": dtp.B_ctl_bar,
+           "T3m_Ts": dtp.T3m / dtp.Ts}
     mg = np.asarray(s["margin"], float)
     tau_m = tau_int(mg) if np.any(~np.isnan(mg)) else 0.5
     res["tau_margin"] = tau_m
@@ -777,7 +984,7 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
     res["PICP"] = res["gamma"] = _summary(np.asarray(s["cover"], float), mean, ci, B, conf, seed, event=True,
                                           tau=tau_m)
     if C_gt:
-        res["PICP_C"] = picp_ground_truth(s, dtp, C_gt, B_ctl)
+        res["PICP_C"] = picp_ground_truth(s, dtp, C_gt, B_ctl, ci=ci, B=B, conf=conf, seed=seed)
     phi = np.asarray(s["phi"], float)
     miss = np.where(np.isnan(phi), np.nan, 1.0 - phi)
     res["DMR"] = _summary(miss, mean, ci, B, conf, seed, event=True, tau=tau_m, fail=miss)
@@ -790,18 +997,31 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
         else:
             res[k] = _summary(rows, _ratio, ci, B, conf, seed)
     res["PDR_state"], res["u"] = res["delta"], res["nu"]
-    # C5: DMR predicted from the admitted bytes A(t) of the run and K_y(t)
-    q, ok = backlog_admitted(np.asarray(s["y"], float), np.asarray(s["A"], float), dtp.T3m / dtp.Ts, c_y=cy,
-                             B_ctl_bar=dtp.B_ctl_bar, Q=np.asarray(s["Q"], float))
-    res["DMR_hat"] = {"value": float(np.mean(q[ok] > 0.0)) if ok.any() else float("nan"), "n": int(ok.sum()),
-                      "c_y": cy}
-    # RelMSE of the ES prediction C_hat(t) of the run against persistence y(t - 1)
-    yv = np.asarray(s["y"], float)
-    res["RelMSE"] = dict(rel_mse(yv, np.asarray(s["C_hat"], float), np.r_[np.nan, yv[:-1]]), alt="persistence")
+    # PDR_state per vessel (H4c: vessels 2 to 4)
+    num_i, den_i = {}, {}
+    for st in s["state_i"]:
+        for i, v in st.items():
+            den_i[i] = den_i.get(i, 0) + 1
+            num_i[i] = num_i.get(i, 0) + int(v)
+    res["PDR_state_i"] = {int(i): num_i[i] / den_i[i] for i in sorted(den_i)}
+    # DMR-hat: backlog recursion with K_y(t) and Algorithm 1 replayed on these records with the logged alpha and U
+    recs = sorted(records, key=lambda r: int(r["t"]))
+    a_log = next((float(r["alpha"]) for r in recs if r.get("alpha") is not None), dtp.alpha)
+    U_log = next((float(r["U"]) for r in recs if r.get("U") is not None), dtp.U)
+    dh = dmr_hat_replay(recs, dtp, alpha=a_log, U=U_log, c_y=cy)
+    res["DMR_hat"] = {"value": dh["value"], "n": dh["n"], "c_y": cy, "alpha": a_log, "U": U_log,
+                      "source": "replay of Algorithm 1 on this DTA"}
+    # RelMSE of the ES prediction C_hat(t) of the run against the last value c_y y(t - 1), both against c_y y(t)
+    z = cy * np.asarray(s["y"], float)
+    res["RelMSE"] = dict(rel_mse(z, np.asarray(s["C_hat"], float), np.r_[np.nan, z[:-1]]), alt="last value",
+                         target="c_y y")
     eta_i = {int(i): (v[0] / v[1] if v[1] > 0 else float("nan")) for i, v in sorted(s["eta_i"].items())}
-    res["PDR_i"] = res["eta_vessel"] = eta_i
-    res["J"] = jain(list(eta_i.values()))
+    res["BDR_i"] = res["PDR_i"] = res["eta_vessel"] = eta_i
+    res["BDR_den"] = "source" if s["bdr_src"] else "demand"
     fair = {i: v for i, v in eta_i.items() if fair_vessels is None or i in fair_vessels}
+    res["J"] = jain(list(fair.values()))
+    res["J_vessels"] = sorted(fair)
+    res["J_all"] = jain(list(eta_i.values()))
     res["eta_minmax"] = {"value": min_max_ratio(list(fair.values())), "vessels": sorted(fair)}
     if ci and len(fair) >= 2:
         rows, _ = _eta_ratio_rows(s, None if fair_vessels is None else list(fair_vessels))
@@ -817,6 +1037,23 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
     f = f[~np.isnan(f)]
     res["fill"] = {"mean": float(f.mean()) if len(f) else float("nan"), "min": float(f.min()) if len(f) else float("nan"),
                    "n": int(len(f)), "valid": bool(len(f) and f.mean() >= FILL_MIN), "threshold": FILL_MIN}
+    cu = np.asarray(s["catchup"], float)
+    lg = np.asarray(s["lag"], float)
+    res["catchup_steps"] = int(np.nansum(cu)) if np.any(~np.isnan(cu)) else None
+    res["lag_steps"] = int(np.nansum(lg)) if np.any(~np.isnan(lg)) else None
+    if series:
+        nu = np.asarray(s["nu"], float).reshape(-1, 2)
+        res["series"] = {
+            "t": [int(v) for v in s["t"]], "y": _nanlist(s["y"]), "C_hat": _nanlist(s["C_hat"]), "U": _nanlist(s["U"]),
+            "K_y": _nanlist(s["K_y"]), "K_hat": _nanlist(s["K_hat"]), "Q": _nanlist(s["Q"]), "m": list(s["m"]),
+            "miss": _nanlist(miss), "cover": _nanlist(s["cover"]), "fill": _nanlist(s["fill"]),
+            "catchup": _nanlist(cu), "lag": _nanlist(lg), "w1": _nanlist(s["w1"]), "w2": _nanlist(s["w2"]),
+            "u_num": _nanlist(nu[:, 0]), "u_den": _nanlist(nu[:, 1]), "miss_hat": _nanlist(dh["miss"]),
+        }
+        if C_gt:
+            res["series"]["K_C"] = _nanlist(res["PICP_C"]["K_C"])
+    if C_gt:
+        res["PICP_C"].pop("K_C", None)
     return res
 
 
@@ -836,72 +1073,122 @@ def analyze(records: Sequence[Dict], dtp: DTP, criterion: Optional[str] = None, 
     return res
 
 
-# --------------------------------------------------------------------------- H4a over pooled runs
+# --------------------------------------------------------------------------- H3a over pooled runs
+
+STRATA = ("general", "Q0")
+
+
+def condition_arrays(K_y, K_hat, U, Q, miss, catchup=None, lag=None, margin=None, buf_empty=None,
+                     lag_fails: bool = True, catchup_fails: bool = True) -> Dict[str, np.ndarray]:
+    """Per fleet step: slack s(t) = K_y(t) - U K_hat(t) ("margin", given or computed); the condition of
+    Proposition 2 as measured, cond(t): K_y(t) >= U K_hat(t) >= Q(t) with m(t) >= 1 (miss defined);
+    cond_Q0(t): the stratum Q(t) = 0 of cond(t); fail(t): a message of level 1 or 2 forwarded by a vessel
+    of M(t) arrives late or never (miss), or the emulator flags the step as catch-up (catchup_fails) or
+    with a lag above the run limit (lag_fails); NaN flags count as no flag. buf_empty (optional) adds the
+    empty send buffers at the start of phase 3 to both conditions."""
+    Ky, Kh, Uv, Qv, ms = (np.asarray(v, float) for v in (K_y, K_hat, U, Q, miss))
+    mg = Ky - Uv * Kh if margin is None else np.asarray(margin, float)
+    known = ~(np.isnan(mg) | np.isnan(Kh) | np.isnan(ms))
+    ok = known & (np.nan_to_num(mg, nan=-1.0) >= 0) & (Uv * np.nan_to_num(Kh) >= np.nan_to_num(Qv, nan=np.inf))
+    if buf_empty is not None:
+        ok = ok & np.asarray(buf_empty, bool)
+    flag = lambda v: np.zeros(len(ms), bool) if v is None else (np.nan_to_num(np.asarray(v, float), nan=0.0) > 0)
+    fail = (np.nan_to_num(ms, nan=0.0) > 0)
+    if catchup_fails:
+        fail = fail | flag(catchup)
+    if lag_fails:
+        fail = fail | flag(lag)
+    return {"margin": mg, "cond": ok, "cond_Q0": ok & (np.nan_to_num(Qv, nan=1.0) == 0), "fail": fail}
 
 
 def condition_steps(records: Sequence[Dict], dtp: DTP, criterion: str, c_y: Optional[float] = None,
-                    tol: float = 1e-6, lag_fails: bool = True, kappa: Optional[float] = None) -> Dict[str, np.ndarray]:
-    """Per fleet step of one run (sorted by t): slack s(t) = K_y(t) - U K_hat(t); cond(t) = s(t) >= 0 (that is
-    K_y(t) >= U K_hat(t)), the backlog Q(t) = 0 of the demand tables of M(t), the send buffers empty at the start
-    of phase 3 (record field "buf_empty", taken as true when absent) and m(t) >= 1; fail(t) = not every
-    message of level 1 or 2 of M(t) received within the step (criterion), or, with lag_fails, an emulator lag
-    flagged in the record ("lag" true: worst case)."""
+                    tol: float = 1e-6, lag_fails: bool = True, kappa: Optional[float] = None,
+                    catchup_fails: bool = True, require_buf_empty: bool = False) -> Dict[str, np.ndarray]:
+    """condition_arrays of one run from its G(t) records (sorted by t): the slack of the records (exact sign),
+    Q(t) of the records (Q_i over M(t) plus Qbar_i outside), the miss of the criterion and the step flags
+    "catchup" and "lag" that emu/analysis/paper_post.py writes from emu/steplag.csv. require_buf_empty also
+    needs the record field "buf_empty" (true when absent) in the condition."""
     _check_criterion(criterion)
     s = step_rows(records, dtp, criterion, tol, _cy(c_y, kappa, dtp.c_y))
     recs = sorted(records, key=lambda r: int(r["t"]))
-    mg = np.asarray(s["margin"], float)
     phi = np.asarray(s["phi"], float)
-    Q = np.asarray(s["Q"], float)
-    buf = np.asarray([bool(r.get("buf_empty", True)) for r in recs])
-    lag = np.asarray([bool(r.get("lag", False)) for r in recs])
-    cond = (~np.isnan(mg)) & (np.nan_to_num(mg, nan=-1.0) >= 0) & (Q == 0) & buf & ~np.isnan(phi)
-    fail = (phi == 0.0) | (lag & bool(lag_fails))
-    return {"margin": mg, "cond": cond, "fail": fail, "buf_known": np.asarray(["buf_empty" in r for r in recs]),
-            "Q_known": np.asarray([r.get("Q") is not None or bool(r.get("vertices")) for r in recs])}
+    buf = np.asarray([bool(r.get("buf_empty", True)) for r in recs]) if require_buf_empty else None
+    c = condition_arrays(s["K_y"], s["K_hat"], s["U"], s["Q"], np.where(np.isnan(phi), np.nan, 1.0 - phi),
+                         s["catchup"], s["lag"], margin=s["margin"], buf_empty=buf, lag_fails=lag_fails,
+                         catchup_fails=catchup_fails)
+    c["buf_known"] = np.asarray(["buf_empty" in r for r in recs])
+    c["Q_known"] = np.asarray([r.get("Q") is not None or bool(r.get("vertices")) for r in recs])
+    return c
+
+
+def condition_from_series(sr: Dict, lag_fails: bool = True, catchup_fails: bool = True) -> Dict[str, np.ndarray]:
+    """condition_arrays of one run from the "series" of run_metrics (the hypothesis driver)."""
+    f = lambda k: np.asarray([np.nan if v is None else v for v in sr.get(k) or [None] * len(sr["t"])], float)
+    return condition_arrays(f("K_y"), f("K_hat"), f("U"), f("Q"), f("miss"), f("catchup"), f("lag"),
+                            lag_fails=lag_fails, catchup_fails=catchup_fails)
 
 
 def _windows(c: Dict[str, np.ndarray], w: int) -> Dict[str, np.ndarray]:
-    """Non-overlapping windows of w steps (Corollary 1): a window meets the condition when every step
-    does (buffers empty at the window start are part of the condition of its first step); it fails when
-    any step fails; its margin is the smallest margin of its steps."""
+    """Non-overlapping groups of w steps from the start of the run: a group meets the condition when every
+    step does; it fails when any step fails; its slack is the smallest slack of its steps."""
     n = (len(c["cond"]) // w) * w
     if n == 0:
-        return {"margin": np.zeros(0), "cond": np.zeros(0, bool), "fail": np.zeros(0, bool)}
+        return {"margin": np.zeros(0), "cond": np.zeros(0, bool), "cond_Q0": np.zeros(0, bool),
+                "fail": np.zeros(0, bool)}
     mg = c["margin"][:n].reshape(-1, w)
     wm = np.where(np.isnan(mg).any(axis=1), np.nan, np.min(np.nan_to_num(mg, nan=0.0), axis=1))
-    return {"margin": wm,
-            "cond": c["cond"][:n].reshape(-1, w).all(axis=1), "fail": c["fail"][:n].reshape(-1, w).any(axis=1)}
+    return {"margin": wm, "cond": c["cond"][:n].reshape(-1, w).all(axis=1),
+            "cond_Q0": c["cond_Q0"][:n].reshape(-1, w).all(axis=1), "fail": c["fail"][:n].reshape(-1, w).any(axis=1)}
 
 
-def h4a_bound(runs: Sequence[Sequence[Dict]], dtp: DTP, criterion: str, c_y: Optional[float] = None, window: int = 1,
-              conf: float = 0.95, tol: float = 1e-6, lag_fails: bool = True, kappa: Optional[float] = None) -> Dict:
-    """H4a pooled over runs: P(failure of the fleet step | condition of Proposition 2: K_y(t) >= U K_hat(t) and
-    Q(t) = 0) with window = 1, or P(failure of an 8-step window | condition in every step of the window) with
-    window = 8 (Corollary 1, non-overlapping windows). tau_int comes from the slack series K_y(t) - U K_hat(t)
-    (window minimum for windows), pooled over the runs; n_eff = condition units / (2 tau_int). upper:
-    Clopper-Pearson with the raw events in n_eff trials (pre-registered, conservative; C20); upper_scaled:
-    with k n_eff / n events. c_y has the alias kappa (old name); default: the c_y of the DTP."""
-    cy = _cy(c_y, kappa, dtp.c_y)
+def h3a_pool(conds: Sequence[Dict[str, np.ndarray]], window: int = 1, stratum: str = "general",
+             conf: float = 0.95) -> Dict:
+    """H3a pooled over runs from their condition_arrays: P(failure | condition) of the fleet steps (window 1)
+    or of the groups of `window` steps, for the stratum "general" (K_y >= U K_hat >= Q) or "Q0" (Q(t) = 0).
+    tau_int comes from the slack series (group minimum for groups), pooled over the runs; n_eff = condition
+    units / (2 tau_int); upper: Clopper-Pearson with the raw events in n_eff trials (1 - 0.05^(1/n_eff) for
+    0 events); upper_scaled: with k n_eff / n events."""
+    if stratum not in STRATA:
+        raise ValueError("stratum must be one of %s" % (STRATA,))
+    key = "cond" if stratum == "general" else "cond_Q0"
     margins, n_cond, k = [], 0, 0
+    for c in conds:
+        if window > 1:
+            c = _windows(c, window)
+        margins.append(c["margin"])
+        n_cond += int(c[key].sum())
+        k += int((c[key] & c["fail"]).sum())
+    tau = tau_int_runs(margins) if margins else 0.5
+    ne = n_eff(n_cond, tau)
+    return {"window": window, "stratum": stratum, "n_cond": n_cond, "failures": k, "tau_margin": tau, "n_eff": ne,
+            "estimate": k / n_cond if n_cond else float("nan"),
+            "upper": clopper_pearson_upper_eff(k, n_cond, ne, conf=conf, events="raw") if n_cond else 1.0,
+            "upper_scaled": clopper_pearson_upper_eff(k, n_cond, ne, conf=conf, events="scaled") if n_cond else 1.0,
+            "conf": conf, "runs": len(margins)}
+
+
+def h3a_bound(runs: Sequence[Sequence[Dict]], dtp: DTP, criterion: str, c_y: Optional[float] = None, window: int = 1,
+              conf: float = 0.95, tol: float = 1e-6, lag_fails: bool = True, kappa: Optional[float] = None,
+              stratum: str = "general", catchup_fails: bool = True, require_buf_empty: bool = False) -> Dict:
+    """H3a pooled over runs of G(t) records (h3a_pool of their condition_steps). c_y has the alias kappa (old
+    name); default: the c_y of the DTP."""
+    cy = _cy(c_y, kappa, dtp.c_y)
+    conds = []
     buf_known = Q_known = True
     for recs in runs:
         if not recs:
             continue
-        c = condition_steps(recs, dtp, criterion, cy, tol, lag_fails)
+        c = condition_steps(recs, dtp, criterion, cy, tol, lag_fails, catchup_fails=catchup_fails,
+                            require_buf_empty=require_buf_empty)
         buf_known = buf_known and bool(c["buf_known"].all())
         Q_known = Q_known and bool(c["Q_known"].all())
-        if window > 1:
-            c = _windows(c, window)
-        margins.append(c["margin"])
-        n_cond += int(c["cond"].sum())
-        k += int((c["cond"] & c["fail"]).sum())
-    tau = tau_int_runs(margins) if margins else 0.5
-    ne = n_eff(n_cond, tau)
-    return {"window": window, "n_cond": n_cond, "failures": k, "tau_margin": tau, "n_eff": ne,
-            "upper": clopper_pearson_upper_eff(k, n_cond, ne, conf=conf, events="raw") if n_cond else 1.0,
-            "upper_scaled": clopper_pearson_upper_eff(k, n_cond, ne, conf=conf, events="scaled") if n_cond else 1.0,
-            "conf": conf, "c_y": cy, "kappa": cy, "criterion": criterion, "buffers_known": buf_known,
-            "backlog_known": Q_known, "runs": len(margins)}
+        conds.append(c)
+    out = h3a_pool(conds, window, stratum, conf)
+    out.update(c_y=cy, kappa=cy, criterion=criterion, buffers_known=buf_known, backlog_known=Q_known)
+    return out
+
+
+h4a_bound = h3a_bound   # name of earlier versions (H4a was the guarantee before the renumbering)
 
 
 # --------------------------------------------------------------------------- calibration of c_y, T_m, B_ctl_bar
@@ -998,15 +1285,15 @@ def format_table(name: str, res: Dict) -> str:
         lo, hi = m.get("ci", [None, None])
         lines.append("%-6s %s %s %s %8.2f %9.1f %11s" % (k, f(m["value"]), f(lo), f(hi), m["tau_int"] if m["n"] else float("nan"),
                                                           m["n_eff"], ("%.5f" % m["viol_upper"]) if "viol_upper" in m else "-"))
-    lines.append("PDR_i: " + ", ".join("b%d %.5f" % (i, v) for i, v in res["PDR_i"].items()))
-    lines.append("Jain J = %.5f" % res["J"] if res["J"] == res["J"] else "Jain J = -")
+    lines.append("BDR_i (%s): " % res["BDR_den"] + ", ".join("b%d %.5f" % (i, v) for i, v in res["BDR_i"].items()))
+    lines.append(("Jain J (vessels %s) = %.5f" % (res["J_vessels"], res["J"])) if res["J"] == res["J"] else "Jain J = -")
     mm = res["eta_minmax"]
-    lines.append("min/max PDR_i = %s%s" % (f(mm["value"]).strip(), (", lower %.5f" % mm["lower"]) if "lower" in mm else ""))
+    lines.append("min/max BDR_i = %s%s" % (f(mm["value"]).strip(), (", lower %.5f" % mm["lower"]) if "lower" in mm else ""))
     pf = res["prefix"]
     lines.append("PCR %s (%d pairs); complete prefix: mean length %.3f of %d; by rank %s" % (
         f(pf["PCR"]).strip(), pf["pcr_pairs"], pf["mean_len"], len(pf["by_rank"]),
         " ".join("%.3f" % v for v in pf["by_rank"])))
-    lines.append("DMR_hat %s (c_y %g); RelMSE (ES / persistence) %s" % (
+    lines.append("DMR_hat %s (c_y %g); RelMSE (ES / last value) %s" % (
         f(res["DMR_hat"]["value"]).strip(), res["c_y"], f(res["RelMSE"]["value"]).strip()))
     lines.append("fleet consistency: " + ", ".join("%s %.4f" % kv for kv in res["fleet_consistency"].items()))
     lines.append("unused share %s; fill ratio mean %s min %s (valid: %s)" % (
@@ -1056,7 +1343,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     ap.add_argument("--B", type=int, default=2000, help="bootstrap resamples")
     ap.add_argument("--conf", type=float, default=0.95)
     ap.add_argument("--no-ci", action="store_true")
-    ap.add_argument("--h4a", action="store_true", help="also the pooled H4a bounds (steps and 8-step windows)")
+    ap.add_argument("--h3a", "--h4a", dest="h3a", action="store_true",
+                    help="also the pooled H3a bounds (steps and groups of 8 steps; --h4a: old name)")
     a = ap.parse_args(argv)
     dtp = DTP.load(a.dtp)
     out = {}
@@ -1065,16 +1353,16 @@ def main(argv: Optional[List[str]] = None) -> None:
         runs[path] = load_dta(path)
         out[path] = run_metrics(runs[path], dtp, criterion=a.criterion, tol=a.tol, ci=not a.no_ci, B=a.B, conf=a.conf,
                                 c_y=a.c_y)
-    if a.h4a:
-        out["_h4a"] = {"steps": h4a_bound(list(runs.values()), dtp, a.criterion, a.c_y, 1, a.conf, a.tol),
-                       "windows8": h4a_bound(list(runs.values()), dtp, a.criterion, a.c_y, 8, a.conf, a.tol)}
+    if a.h3a:
+        out["_h3a"] = {"steps": h3a_bound(list(runs.values()), dtp, a.criterion, a.c_y, 1, a.conf, a.tol),
+                       "groups8": h3a_bound(list(runs.values()), dtp, a.criterion, a.c_y, 8, a.conf, a.tol)}
     if a.json:
         print(json.dumps(out, indent=1))
     else:
         print("\n\n".join(format_table(p, r) for p, r in out.items() if not p.startswith("_")))
-        if a.h4a:
-            for k, v in out["_h4a"].items():
-                print("H4a %s: %d units with the condition, %d failures, tau_int %.2f, n_eff %.0f, upper %.2e" % (
+        if a.h3a:
+            for k, v in out["_h3a"].items():
+                print("H3a %s: %d units with the condition, %d failures, tau_int %.2f, n_eff %.0f, upper %.2e" % (
                     k, v["n_cond"], v["failures"], v["tau_margin"], v["n_eff"], v["upper"]))
 
 
