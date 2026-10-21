@@ -64,6 +64,14 @@ and the experiment's `vars`. Between runs an idle emulator (no ground truth) kee
 Offline (no VMs, not in real time), e.g. for validation:
 `ns3.48-fdt-emu-optimized --scenario=S --outdir=D --vms=0 --rt=none --monitor=none --selftest=RATE_BPS,SIZE --duration=T`.
 
+### Progress page
+
+`python3 emu/tools/progress_web.py --manifest DIR [--manifest DIR2 ...] [--log NAME=PATH ...] [--bind ADDR]
+[--port 8765]` serves a read-only page with, for each runner directory, the runs per status, the runs in
+progress (slot, elapsed time), the last finished runs (duration, lag p99 and maximum, share of the steps above
+1 ms), an estimate of the remaining time, the load, memory and free disk of the host, and the last lines of
+each `--log`. The page reloads its data every 10 s and starts nothing. Tests: `tests/test_progress_web.py`.
+
 ## Paper stack (`fleet.py --stack paper`, the default)
 
 `emu/run.py run EXP.json [--stack paper|as2]` runs a fleet experiment on the stack of `--stack`, else on

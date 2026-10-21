@@ -6,6 +6,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `emu/tools/progress_web.py`: read-only progress page of a campaign (runner manifests, lag of the finished
+  runs, remaining time, host load, log tails)
 - outer-loop variants O1 to O5 of Table S4 (`fleetdt/outer_variants.py`, `fleetdt.as_service --outer-variant`):
   fixed (alpha_0, U_0), fixed (alpha*, U*) of a calibration file, recomputation from the DTA of each window of
   N_w = 480 steps, coverage feedback on U (+/- 0.05 per window, clamped to [0.30, 1.2]), and the regime oracle;
