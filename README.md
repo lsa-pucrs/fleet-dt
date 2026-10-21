@@ -72,13 +72,17 @@ python -m fleetdt.analysis run1.jsonl run2.jsonl --dtp dtp.json --criterion coun
 ```
 
 The outputs use the metric names of the paper: PICP (steps with K_y(t) >= U K_hat(t), K_y(t) =
-c_y y(t) (T3 - T_m)/Ts - B_ctl_bar, K_hat(t) = C_hat(t) (T3 - T_m)/Ts), DMR (deadline miss ratio, 1 -
-full-delivery fraction), DMR_hat (backlog predictor q_hat(t) = max(0, q_hat(t-1) + A(t) - K_y(t)) with the
-admitted bytes A(t) of the AS log), PDR_state, PDR_i (min/max ratio of H5d over vessels 1 to 3), PCR
-(denominator |N(t)|), u (sum r_il / (K_y + B_ctl_bar)), MASE (of C_hat against c_y y, scaled by the last-value predictor), c_y and RelMSE;
+c_y y(t) (T3 - T_m)/Ts - B_ctl_bar, K_hat(t) = C_hat(t) (T3 - T_m)/Ts), DMR (deadline miss ratio: a forwarded
+message of level 1 or 2 arrives late or never, criterion count), DMR_hat (backlog recursion q_hat(t) =
+max(0, q_hat(t-1) + sum_i a_i(t) - K_y(t)) with the final a_i of Algorithm 1 replayed with alpha, U and Q(t) =
+q_hat(t-1)), PDR_state (exactly once after the deduplication) and PDR_state_i, BDR_i (denominator c_l(x, n) of
+the bytes and messages the sources produced) with Jain's index J over vessels 1 to 3, PCR (denominator
+|N(t)|), u (sum r_il / (K_y + B_ctl_bar)), MASE (of C_hat against c_y y, scaled by the last-value predictor),
+c_y and RelMSE (against c_y y); tau_int follows Madras and Sokal (automatic window, c = 5);
 the subcommand `calibrate RUN` of fleetdt.analysis computes c_y (and T_m, B_ctl_bar when measured) for the
-DTP; the names of earlier versions (gamma, phi, delta, eta_vessel, Pi, nu, kappa; --kappa) stay as aliases
-for one release.
+DTP; the names of earlier versions (gamma, phi, delta, eta_vessel, PDR_i, Pi, nu, kappa; --kappa) stay as aliases
+for one release. `emu/analysis/hypotheses.py` computes the components H1a to H6b of the Table of hypotheses
+from a campaign (emu/README.md, "Hypothesis driver"); `fleetdt/predictors.py` holds the predictors of H5.
 
 ```bash
 python -m fleetdt.gsconf gs --vessel 1=192.168.1.99 --vessel 2=192.168.1.98 > gs.conf
