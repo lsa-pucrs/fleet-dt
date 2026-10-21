@@ -469,13 +469,13 @@ def test_decision_logs_the_admitted_bytes():
     assert dec["p"] == [2, 2, 0, 1]
     assert dec["a"] == {"1": 100 + 600 + 200, "2": 100 + 500 + 250} and dec["A"] == 1750
     assert dec["A"] <= dec["K_hat"]
-    b7 = AS(small_dtp(), epoch=0.0, policy="b7")
-    b7.on_demand(1, 0, D1, at=0.01)
-    b7.on_demand(2, 0, D2, at=0.02)
-    d7 = b7.close_phase1(0)
-    assert d7["a"] == {str(i): sum(v for v, lev in zip(D, d7["p_by"][i]) if lev > 0)
+    b6 = AS(small_dtp(), epoch=0.0, policy="b6")
+    b6.on_demand(1, 0, D1, at=0.01)
+    b6.on_demand(2, 0, D2, at=0.02)
+    d6 = b6.close_phase1(0)
+    assert d6["a"] == {str(i): sum(v for v, lev in zip(D, d6["p_by"][i]) if lev > 0)
                        for i, D in ((1, D1), (2, D2))}
-    assert d7["A"] == sum(d7["a"].values())
+    assert d6["A"] == sum(d6["a"].values())
     dtp = small_dtp()
     asm = Assembler(dtp, StepClock(dtp.Ts, 0.0, now=lambda: 0.0))
     asm.on_message("boat/b1/demand", encode_demand(0, D1), at=0.01)

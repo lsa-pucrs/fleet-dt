@@ -21,8 +21,10 @@ Two stacks (emu/run.py run EXP.json --stack paper|as2; default: the "stack" of t
          polices holds the jitter allowance.
 
          "method" (paper stack) sets the AS policy, the regulator mode, the data bridges and the fleet
-         feedback (PAPER_METHODS, design Section 5): fleetdt, B1, B2, B3, B4, B5a, B5b, B7, B8, B9, B10.
-         B4 needs "as": {"C_ref": bytes per step}; B8 takes its U from "feedback": {"U"} (else "as"."U").
+         feedback (PAPER_METHODS, Table S3 of the paper): fleetdt, B1, B2, B3, B4, B5a, B5b, B6, B7, B8, B9.
+         B4 needs "as": {"C_ref": bytes per step}; B7 takes its U from "feedback": {"U"} (else "as"."U").
+         The labels are those of Table S3; the code named B6 to B9 B7 to B10 before, and the label "B10",
+         which no paper baseline uses, fails with the name of its paper label (PAPER_RENAMED).
 
          The emulator runs with --phaseLag and --abortLagUs ("abort_lag_us", default 1000 us; a lag abort
          fails the run) and --stepBytes, with --pcap for "pcap": true (E0); "clock": {"inject": true}
@@ -434,23 +436,26 @@ PAPER_EMU_OWN = ("--phaseLag=", "--abortLagUs=", "--stepBytes=", "--pcap=")
 CLOCK_SCHEDULE = "/etc/fleetdt/clock-schedule.json"
 CLOCK_LOG = "/var/log/fdt-clockerr.jsonl"
 CLOCK_KEYS = ("ramp_ppm", "ramp_s", "hold_s", "loss_n", "loss_s", "loss_windows", "warm_s")
-# method -> (AS policy, None: no AS; regulator mode; data bridges; fleet feedback), design Section 5.
+# method -> (AS policy, None: no AS; regulator mode; data bridges; fleet feedback), Table S3 of the paper.
 # The AS runs only where the method takes priority tables; fdt_dti runs for every method, so the DTA
 # holds M(t) and D_i(t) for the metrics. The paper_* modes and b8 are the baselines of the paper core
-# (vessel/regulator/fdt_reg_paper.h).
+# (vessel/regulator/fdt_reg_paper.h). Every method with the AS uses the single data bridge b<i>-data, whose
+# state resets Qbar_i in the AS (fleetdt.as_service.BRIDGE_STATE_RE); B2 and B9 run without the AS.
 PAPER_METHODS = {
     "fleetdt": ("alg1", "paper", "single", False),
-    "B1": (None, "paper_b1", "single", False),          # DCF, one bridge, no regulator
-    "B2": (None, "paper_b2", "b2", False),              # EDCA, one bridge per access category
+    "B1": (None, "paper_b1", "single", False),          # forward at arrival, one data bridge in AC_BE
+    "B2": (None, "paper_b2", "b2", False),              # B1 with one data bridge per EDCA access category
     "B3": (None, "paper_b3", "single", True),           # strict priority in sigma_t, no phases 1 and 2
     "B4": ("b4", "paper", "single", False),             # Algorithm 1 with C_hat = C_ref constant
     "B5a": ("alg1", "paper_nopolice", "single", False),  # regulator without policing
-    "B5b": ("alg1", "paper_noeos", "single", False),    # regulator without the end-of-step rule
-    "B7": ("b7", "paper", "single", False),             # per-vessel grants with redistribution
-    "B8": (None, "b8", "single", True),                 # LIMERIC/DCC-like rate control from y(t)
-    "B9": (None, "paper_tdma", "single", True),         # overlay TDMA
-    "B10": (None, "paper_b1", "per_topic", False),      # one data bridge per topic
+    "B5b": ("alg1", "paper_noeos", "single", False),    # regulator without the end-of-step cutoff
+    "B6": ("b6", "paper", "single", False),             # one table per vessel, IPACT limited service + excess
+    "B7": (None, "b8", "single", True),                 # DCC-like rate control from y(t-1)
+    "B8": (None, "paper_tdma", "single", True),         # equal slots of phase 3 above the MAC
+    "B9": (None, "paper_b1", "per_topic", False),       # B1 with one data bridge per uplink topic
 }
+# labels of the code before the paper labels that no paper label reuses: refused with the new label
+PAPER_RENAMED = {"B10": "B9"}
 _METHOD_KEY = {k.lower(): k for k in PAPER_METHODS}
 _PLUGIN_METHOD = {"paper": "fleetdt", "paper_nopolice": "B5a", "paper_noeos": "B5b"}
 
@@ -526,6 +531,11 @@ def paper_method(spec):
         m = _PLUGIN_METHOD.get(pm or "paper")
         if m is None:
             raise SystemExit("plugin_mode %s needs the \"method\" of the baseline" % pm)
+    old = {k.lower(): v for k, v in PAPER_RENAMED.items()}.get(str(m).lower())
+    if old is not None:
+        raise SystemExit("method %s: the baseline labels follow Table S3 of the paper; the former %s (one data "
+                         "bridge per uplink topic) is now %s (and the former B7, B8, B9 are B6, B7, B8)"
+                         % (m, m, old))
     key = _METHOD_KEY.get(str(m).lower())
     if key is None:
         raise SystemExit("method %s: one of %s" % (m, ", ".join(PAPER_METHODS)))
@@ -625,7 +635,7 @@ def paper_plugin_mode(spec):
 
 def paper_as_cmd(spec):
     """AS of the paper (Algorithm 1) with the outer loop on the DTA (fleetdt.outer); B4: --alpha 0 and
-    --C0 C_ref without the outer loop; B7: --policy b7. None for a method without the AS."""
+    --C0 C_ref without the outer loop; B6: --policy b6. None for a method without the AS."""
     key, cfg = paper_method(spec)
     if cfg["as"] is None:
         return None
@@ -642,8 +652,8 @@ def paper_as_cmd(spec):
         c += ["--alpha", repr(float(a["alpha"]))]
     if a.get("C0") is not None:
         c += ["--C0", repr(float(a["C0"]))]
-    if cfg["as"] == "b7":
-        c += ["--policy", "b7"]
+    if cfg["as"] == "b6":
+        c += ["--policy", "b6"]
     o = spec.get("outer") or {}
     if o.get("every"):
         c += ["--outer-dta", RUN + ("/outer_dta.jsonl" if o.get("dta_file") else "/dta.jsonl"),
@@ -655,7 +665,9 @@ def paper_as_cmd(spec):
 
 
 def paper_feedback_cmd(spec):
-    """fleet feedback of the GS (fleetdt.feedback) for paper_b3, b8 and paper_tdma; None otherwise"""
+    """fleet feedback of the GS (fleetdt.feedback) for B3 (paper_b3), B7 (b8) and B8 (paper_tdma); None
+    otherwise. "feedback": {"U"} sets the U of the budget of B7 (else "as"."U", else the DTP) and {"m"} fixes
+    m (default: m(t) = |M(t)|, the vessels whose demand table reached the GS in phase 1)."""
     _, cfg = paper_method(spec)
     if not cfg["feedback"]:
         return None
@@ -1103,7 +1115,7 @@ def run_fleet_paper(R, spec, a):
         if paper_outq_enabled(spec):
             for h in range(1, M + 1):
                 bg(R, h, paper_outq_cmd(spec, S0, steps, bridges), "outq")
-        # GS: VE (writes the DTA), JMCS stub, fleet feedback (B3, B8, B9), AS (methods with tables);
+        # GS: VE (writes the DTA), JMCS stub, fleet feedback (B3, B7, B8), AS (methods with tables);
         # vessels: DTI program and sources
         bg(R, 0, paper_ve_cmd(spec), "ve")
         bg(R, 0, paper_jmcs_cmd(spec, S0), "jmcs")

@@ -1,7 +1,8 @@
-"""Baselines of the paper stack (design Section 5): the configuration of every method in emu/fleet.py,
-the per-vessel grants of B7 in the AS, the fleet feedback of B3, B8 and B9, the bridges of B2 and B10, and
-short end-to-end runs of the regulator modes paper_b1 (B10, per-topic bridges), paper_b3, b8 and
-paper_tdma, and of the AS in policy b7, on the local patched Mosquitto (as tests/test_paper_stack.py)."""
+"""Baselines of the paper stack (Table S3 of the paper): the configuration of every method in emu/fleet.py,
+the per-vessel grants of B6 in the AS, the fleet feedback of B3, B7 and B8, the bridges of B2 and B9, and
+short end-to-end runs of the regulator modes paper_b1 (B9, per-topic bridges), paper_b3 (B3), b8 (B7) and
+paper_tdma (B8), and of the AS in policy b6 (B6), on the local patched Mosquitto (as
+tests/test_paper_stack.py)."""
 import json
 import math
 import os
@@ -22,8 +23,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "emu"))
 
 import fleet  # noqa: E402
-from fleetdt.as_model import DTP, admission, admission_b7  # noqa: E402
-from fleetdt.as_service import AS  # noqa: E402
+from fleetdt.as_model import DTP, admission, admission_b6  # noqa: E402
+from fleetdt.as_service import AS, BRIDGE_STATE_RE  # noqa: E402
 from fleetdt.feedback import FeedbackCore, decode_feedback, encode_feedback  # noqa: E402
 from fleetdt.gsconf import bridge_count, gs_conf, vessel_conf  # noqa: E402
 from fleetdt.model import decode_levels, decode_step_header, encode_demand, encode_levels  # noqa: E402
@@ -42,10 +43,10 @@ EXPECT = {
     "B4": ("b4", "paper", "", False),
     "B5a": ("alg1", "paper_nopolice", "", False),
     "B5b": ("alg1", "paper_noeos", "", False),
-    "B7": ("b7", "paper", "", False),
-    "B8": (None, "b8", "--feedback", True),
-    "B9": (None, "paper_tdma", "--feedback", True),
-    "B10": (None, "paper_b1", "--per-topic /tmp/fdt-run/dtp.json", False),
+    "B6": ("b6", "paper", "", False),
+    "B7": (None, "b8", "--feedback", True),
+    "B8": (None, "paper_tdma", "--feedback", True),
+    "B9": (None, "paper_b1", "--per-topic /tmp/fdt-run/dtp.json", False),
 }
 
 
@@ -84,14 +85,14 @@ def test_method_configuration(tmp_path, method):
     else:
         assert len(as_cmds) == 1
         a = as_cmds[0]
-        assert ("--policy b7" in a) == (policy == "b7")
+        assert ("--policy b6" in a) == (policy == "b6")
         if policy == "b4":
             assert "--alpha 0.0 --C0 250000.0" in a and "--outer-dta" not in a
         else:
             assert "--alpha 0.0" not in a and "--outer-every 480" in a
     # every method keeps the DTI program (M(t) and D_i(t) of the DTA) and the layered source
     assert sum("/dti.log" in c for c in started) == 2 and sum("fdt_source.py" in c for c in started) == 2
-    nb = {"B2": 2 * 4, "B10": 2 * (1 + 22)}.get(method, 2 * 2)
+    nb = {"B2": 2 * 4, "B9": 2 * (1 + 22)}.get(method, 2 * 2)
     assert res["bridges"]["n"] == nb
     wait = next(c[2] for c in ssh if "wait_bridges.py" in c[2])
     assert "--n %d " % nb in wait
@@ -104,17 +105,57 @@ def test_method_names_and_checks(tmp_path):
     with pytest.raises(SystemExit, match="does not match"):
         fleet.paper_method({"method": "B1", "plugin_mode": "paper"})
     with pytest.raises(SystemExit, match="one of"):
-        fleet.paper_method({"method": "B6"})
+        fleet.paper_method({"method": "B10a"})
     with pytest.raises(SystemExit, match="C_ref"):
         fleet.paper_method({"method": "B4", "as": {"U": 0.7}})
     with pytest.raises(SystemExit, match="needs"):
         fleet.paper_method({"plugin_mode": "b8"})
-    f = fleet.paper_feedback_cmd({"method": "B8", "dtp": {"Ts": 0.125}, "feedback": {"U": 0.6, "m": 4}})
+    f = fleet.paper_feedback_cmd({"method": "B7", "dtp": {"Ts": 0.125}, "feedback": {"U": 0.6, "m": 4}})
     assert "fleetdt.feedback" in f and "--U 0.6" in f and "--m 4" in f
+    f = fleet.paper_feedback_cmd({"method": "B7", "dtp": {"Ts": 0.125}})
+    assert "--m" not in f.split() and fleet.paper_feedback_cmd({"method": "B6", "dtp": {"Ts": 0.125}}) is None
 
 
-def test_b9_old_core_tdma_reads_the_layered_dtp_v2():
-    """The tdma mode of the older core (as2 stack) loads dtp_v2.json (L = 22); the paper stack runs B9 with
+def test_paper_labels_of_table_s3():
+    """The labels are those of Table S3: B6 the per-vessel tables of IPACT, B7 the DCC-like rate control,
+    B8 the equal slots of phase 3, B9 one data bridge per uplink topic; the label B10 of the code before the
+    paper labels fails with its paper label."""
+    assert set(fleet.PAPER_METHODS) == {"fleetdt", "B1", "B2", "B3", "B4", "B5a", "B5b", "B6", "B7", "B8", "B9"}
+    assert fleet.PAPER_METHODS["B6"] == ("b6", "paper", "single", False)
+    assert fleet.PAPER_METHODS["B7"] == (None, "b8", "single", True)
+    assert fleet.PAPER_METHODS["B8"] == (None, "paper_tdma", "single", True)
+    assert fleet.PAPER_METHODS["B9"] == (None, "paper_b1", "per_topic", False)
+    for old in ("B10", "b10"):
+        with pytest.raises(SystemExit, match="now B9"):
+            fleet.paper_method({"method": old})
+    dtp = DTP(topics=["a"], Ts=1.0, T1=0.25, T2=0.25)
+    with pytest.raises(ValueError, match="now b6"):
+        AS(dtp, epoch=0.0, policy="b7")
+    r = subprocess.run([sys.executable, "-m", "fleetdt.as_service", "--dtp", "x.json", "--policy", "b7"],
+                       cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    assert r.returncode == 2 and "now b6" in r.stderr
+    sys.path.insert(0, str(ROOT / "emu" / "experiments"))
+    import conformance
+    with pytest.raises(SystemExit, match="now B9"):
+        conformance.method_key("B10")
+    assert conformance.method_key("b6") == "B6" and "B6" in conformance.TABLE_METHODS
+    assert conformance.method_key("b9") == "B9" and "B7" not in conformance.TABLE_METHODS
+
+
+def test_qbar_reset_bridges():
+    """BRIDGE_STATE_RE takes the single data bridge b<i>-data, the bridge of every method with the AS; the
+    per-class (B2) and per-topic (B9) bridges belong to methods without the AS, so no Qbar_i depends on them."""
+    assert BRIDGE_STATE_RE.match("fleet/bridge/b3-data/state").group(1) == "3"
+    assert BRIDGE_STATE_RE.match("$SYS/broker/connection/b12-data/state").group(1) == "12"
+    for name in ("b1-data-ef", "b1-data-state", "b1-ctl"):
+        assert not BRIDGE_STATE_RE.match("fleet/bridge/%s/state" % name)
+    for k, (policy, mode, bridges, fb) in fleet.PAPER_METHODS.items():
+        if bridges != "single":
+            assert policy is None, k
+
+
+def test_old_core_tdma_reads_the_layered_dtp_v2():
+    """The tdma mode of the older core (as2 stack) loads dtp_v2.json (L = 22); the paper stack runs B8 with
     paper_tdma, because the older core uses the 1-based clock, JSON tables and logs and the QoS of the DTP v2."""
     from fleetdt.as2.dtp import DTP as DTP2
     d = DTP2.from_dict(json.loads((ROOT / "dtp_v2.json").read_text()))
@@ -122,14 +163,14 @@ def test_b9_old_core_tdma_reads_the_layered_dtp_v2():
     assert fleet.METHODS["tdma"] == ("tdma", "tdma")
 
 
-# --------------------------------------------------------------------------- B7 in the AS
+# --------------------------------------------------------------------------- B6 in the AS
 
 
-def test_b7_redistributes_the_unused_grant():
+def test_b6_redistributes_the_unused_grant():
     D = {1: [475, 1187, 9971, 6920], 2: [100, 100, 30000, 30000], 3: [100, 100, 30000, 30000]}
     order, needed = [1, 2, 3, 4], [1]
     b = 30400.0
-    p_by, g = admission_b7(D, order, needed, b)
+    p_by, g = admission_b6(D, order, needed, b)
     assert p_by[1] == [2, 1, 1, 1] and g[1] == sum(D[1])          # fully admitted: keeps what it uses
     excess = b - sum(D[1])
     assert g[2] == pytest.approx(b + excess / 2) and g[3] == pytest.approx(b + excess / 2)
@@ -138,14 +179,14 @@ def test_b7_redistributes_the_unused_grant():
     # Algorithm 1 with the same b gives one table for the fleet
     assert admission(D, order, needed, b) == [2, 1, 1, 0]
     # every vessel fully admitted or none: nothing moves
-    p_by, g = admission_b7({1: [10, 10], 2: [20, 20]}, [1, 2], [], 100.0)
+    p_by, g = admission_b6({1: [10, 10], 2: [20, 20]}, [1, 2], [], 100.0)
     assert g == {1: 100.0, 2: 100.0} and p_by == {1: [1, 1], 2: [1, 1]}
 
 
-def test_as_policy_b7_publishes_one_table_per_vessel():
+def test_as_policy_b6_publishes_one_table_per_vessel():
     dtp = DTP(topics=["a", "b", "c", "d"], Ts=1.0, T1=0.25, T2=0.25, alpha=0.5, U=1.0, C0=121600.0,
               order=["a", "b", "c", "d"], needed=["a"])
-    a = AS(dtp, epoch=0.0, policy="b7")
+    a = AS(dtp, epoch=0.0, policy="b6")
     a.on_demand(1, 0, [475, 1187, 9971, 6920], at=0.01)
     a.on_demand(2, 0, [100, 100, 30000, 30000], at=0.01)
     dec = a.close_phase1(0)
@@ -176,16 +217,43 @@ def test_feedback_payload_and_core():
     assert len(p) == 18 + 3 and decode_feedback(p) == (7, 123456.5, pytest.approx(0.6), 4, [3, 1, 2])
     assert decode_feedback(encode_feedback(7, None, 0.6, 4, [1]))[1] is None
     dtp = DTP.from_dict(json.loads((ROOT / "dtp.json").read_text()))
-    c = FeedbackCore(dtp, U=0.5)
-    assert c.m == 2 and c.sigma == list(range(1, 23))
-    assert c.payload(3, 1.0) is not None and c.payload(3, 2.0) is None    # once per step
+    c = FeedbackCore(dtp, U=0.5, epoch=100.0)
+    assert c.m_fixed is None and c.sigma == list(range(1, 23))
+    pay, rec = c.close(3)
+    assert c.close(3) is None                                              # once per step
+    assert rec["m"] == 0 and rec["M"] == [] and rec["y"] is None
     rev = list(reversed(dtp.topics))
     assert c.on_order(rev) and not c.on_order(rev[:-1])
-    t, y, U, m, sig = decode_feedback(c.payload(4, None))
-    assert sig == list(range(22, 0, -1)) and y is None and U == pytest.approx(0.5)
+    t, y, U, m, sig = decode_feedback(c.close(4)[0])
+    assert t == 4 and sig == list(range(22, 0, -1)) and y is None and U == pytest.approx(0.5)
 
 
-def test_bridges_of_b2_and_b10():
+def test_feedback_carries_y_of_the_last_step_and_m_of_the_step():
+    """The feedback of step t (at start(t) + T1) carries y(t - 1) when it arrived before start(t) + T1 and
+    m(t) = |M(t)|, the vessels whose demand table of step t arrived before start(t) + T1 (the rule of the AS)."""
+    dtp = DTP(topics=["a", "b"], Ts=1.0, T1=0.25, T2=0.25, U=0.8, vessels=[1, 2, 3])
+    c = FeedbackCore(dtp, epoch=0.0)
+    assert c.deadline(5) == 5.25
+    assert c.on_throughput(4, 9000.0, at=5.001)
+    assert c.on_demand(1, 5, 2, at=5.002) and c.on_demand(3, 5, 2, at=5.2)
+    assert not c.on_demand(2, 5, 2, at=5.25)               # at start(t) + T1: outside M(t)
+    assert not c.on_demand(2, 5, 3, at=5.01)               # L differs from the DTP
+    assert not c.on_demand(2, 7, 2, at=5.01)               # more than one step ahead
+    assert c.on_demand(2, 6, 2, at=5.9)                    # a table of the next step counts in M(6)
+    pay, rec = c.close(5)
+    assert rec["M"] == [1, 3] and rec["m"] == 2 and rec["y"] == 9000.0 and rec["y_t"] == 4
+    assert decode_feedback(pay)[:4] == (5, 9000.0, pytest.approx(0.8), 2)
+    assert not c.on_throughput(5, 7000.0, at=6.25)         # y(5) after start(6) + T1: late
+    assert not c.on_demand(1, 5, 2, at=5.1)                # step 5 is closed
+    pay, rec = c.close(6)
+    assert rec["M"] == [2] and rec["y"] is None and decode_feedback(pay)[1] is None
+    # --m fixes m
+    f = FeedbackCore(dtp, m=4, epoch=0.0)
+    f.on_demand(1, 0, 2, at=0.01)
+    assert f.close(0)[1]["m"] == 4
+
+
+def test_bridges_of_b2_and_b9():
     names = [t["name"] for t in json.loads((ROOT / "dtp.json").read_text())["topics"]]
     conf = gs_conf({1: "10.0.0.1", 2: "10.0.0.2"}, per_topic=names, feedback=True)
     conns = re.findall(r"^connection (\S+)$", conf, re.M)
@@ -199,8 +267,36 @@ def test_bridges_of_b2_and_b10():
     assert len(re.findall(r"^connection ", b2, re.M)) == bridge_count(1, b2=True) == 4
     v = vessel_conf(1, "/x.json", mode="paper_b2")
     assert "plugin_opt_mode paper_b2" in v
+    assert "plugin_opt_data_ports 1884,1885,1886" in v and "listener 1885" in v and "listener 1886" in v
     with pytest.raises(ValueError):
         gs_conf({1: "a"}, b2=True, per_topic=names)
+
+
+def test_b2_classes_map_to_the_access_categories():
+    """B2 (Table S3): the class ef of the topic state crosses in AC_VO, af41 (other telemetry) in AC_VI, be
+    (video stripes) in AC_BE. Each class has its port (gsconf B2_PORTS); system/nftables-fdt.nft sets the
+    skb->priority 256 + UP and the DSCP by port in both directions, and the emulator maps the DSCP to the same UP
+    (emu/scenarios/gen.py PRIO). UP -> AC of IEEE 802.11 (Table 10-1): 0 BE, 5 VI, 6 VO."""
+    from fleetdt.gsconf import B2_PORTS
+    sys.path.insert(0, str(ROOT / "emu" / "scenarios"))
+    import gen
+    ac = {0: "AC_BE", 4: "AC_VI", 5: "AC_VI", 6: "AC_VO", 7: "AC_VO"}
+    nft = (ROOT / "system" / "nftables-fdt.nft").read_text()
+    defs = dict(re.findall(r"^define (\S+) = (\S+)$", nft, re.M))
+    want = {"be": "AC_BE", "af41": "AC_VI", "ef": "AC_VO"}
+    dscp = {"af41": 34, "ef": 46}
+    for cls, port in B2_PORTS.items():
+        if cls == "be":
+            assert port == 1884 and "1884" not in nft.split("table inet")[1]   # the data port stays unmarked
+            continue
+        var = {p: k for k, p in defs.items()}[str(port)]                     # FDT_B2_<CLS>_PORT
+        prio = defs[var.replace("_PORT", "_PRIO")]
+        up = int(prio.split(":")[1], 16) - 0x100
+        assert ac[up] == want[cls], (cls, prio)
+        for d in ("sport", "dport"):
+            assert "tcp %s $%s meta priority set $%s" % (d, var, var.replace("_PORT", "_PRIO")) in nft
+            assert "meta nfproto ipv4 tcp %s $%s ip dscp set %s" % (d, var, cls) in nft
+        assert ac[gen.PRIO["dscp"][str(dscp[cls])]] == want[cls]
 
 
 # --------------------------------------------------------------------------- end to end on the local broker
@@ -376,7 +472,7 @@ def log_reasons(tmp):
 
 
 @e2e
-def test_b10_per_topic_bridges_paper_b1(tmp_path):
+def test_b9_per_topic_bridges_paper_b1(tmp_path):
     st = bring_up(tmp_path, "paper_b1", bridges="per_topic")
     src = Sources(st["ctl"])
     time.sleep(RUN_S)
@@ -438,7 +534,7 @@ def test_b3_strict_priority_in_sigma(tmp_path):
 
 
 @e2e
-def test_b8_budget_from_y(tmp_path):
+def test_b7_budget_from_y(tmp_path):
     st = bring_up(tmp_path, "b8", feedback=True)
     fb = py(tmp_path, "-m", "fleetdt.feedback", "--dtp", str(tmp_path / "dtp.json"), "--broker",
             "127.0.0.1:%d" % st["gs_port"], "--U", "0.5", "--m", "1", "--log", str(tmp_path / "fb.jsonl"))
@@ -475,7 +571,7 @@ def test_b8_budget_from_y(tmp_path):
 
 
 @e2e
-def test_b9_paper_tdma_slot(tmp_path):
+def test_b8_paper_tdma_slot(tmp_path):
     st = bring_up(tmp_path, "paper_tdma", feedback=True, vessels=(1, 2))
     src = Sources(st["ctl"])
     time.sleep(RUN_S)
@@ -500,14 +596,14 @@ def test_b9_paper_tdma_slot(tmp_path):
 
 
 @e2e
-def test_b7_tables_per_vessel(tmp_path):
+def test_b6_tables_per_vessel(tmp_path):
     """Vessel 1 (regulator in mode paper, demand of fdt_dti) and the demand table of a heavy vessel 2
-    published at the GS: with policy b7 the light vessel 1 gets a table that admits bulk, vessel 2 gets
+    published at the GS: with policy b6 the light vessel 1 gets a table that admits bulk, vessel 2 gets
     the excess of vessel 1 and a table that holds bulk, and the regulator of vessel 1 forwards bulk under
     its own table (Algorithm 1 would hold bulk for both)."""
     st = bring_up(tmp_path, "paper", vessels=(1, 2), C0=100000)
     a = py(tmp_path, "-m", "fleetdt.as_service", "--dtp", str(tmp_path / "dtp.json"), "--broker",
-           "127.0.0.1:%d" % st["gs_port"], "--log", str(tmp_path / "as.jsonl"), "--policy", "b7",
+           "127.0.0.1:%d" % st["gs_port"], "--log", str(tmp_path / "as.jsonl"), "--policy", "b6",
            "--alpha", "0", "--U", "0.8")
     v2 = tps.client("fdt-bl-v2-%d" % os.getpid())
     v2.connect("127.0.0.1", st["gs_port"], 10)

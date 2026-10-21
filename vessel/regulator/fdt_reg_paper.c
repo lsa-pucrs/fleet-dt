@@ -41,20 +41,29 @@ int fdt_pmode_table(int mode)
 	return mode == FDT_PMODE_PAPER || mode == FDT_PMODE_NOPOLICE || mode == FDT_PMODE_NOEOS;
 }
 
+/* B2 (Table S3): state in AC_VO (ef), the other telemetry topics in AC_VI (af41), the video stripes in AC_BE (be) */
 int fdt_pclass(const struct fdt_pdtp *d, int l)
 {
-	if (d->topic[l].required || (d->n_required == 0 && d->L > 0 && d->order[0] == l))
+	int state = -1;
+	for (int k = 0; k < d->L; k++)
+		if (!strcmp(d->topic[k].name, "state")) {
+			state = k;
+			break;
+		}
+	if (state < 0 && d->L > 0)
+		state = d->order[0];
+	if (l == state)
 		return 2;
 	return d->topic[l].video ? 0 : 1;
 }
 
-/* paper_b1, paper_b2: forwarded when the raw message arrives */
+/* paper_b1 (B1, B9), paper_b2 (B2): forwarded when the raw message arrives */
 static int immediate(const struct fdt_preg *r)
 {
 	return r->mode == FDT_PMODE_B1 || r->mode == FDT_PMODE_B2;
 }
 
-/* paper_b3, b8, paper_tdma: strict priority in sigma_t at v(t), without the table */
+/* paper_b3 (B3), b8 (B7), paper_tdma (B8): strict priority in sigma_t at v(t), without the table */
 static int prio_mode(const struct fdt_preg *r)
 {
 	return r->mode == FDT_PMODE_B3 || r->mode == FDT_PMODE_B8 || r->mode == FDT_PMODE_TDMA;
@@ -639,8 +648,9 @@ static void fwd_msg(struct fdt_preg *r, struct fdt_pstep *s, int l, int k, int q
 	m->buf = NULL;
 }
 
-/* paper_tdma: releases the messages of the step of the open slot while the unsent bytes of the data
- * bridge plus the bytes released in this tick stay below lw_bytes */
+/* paper_tdma (B8): releases the messages of the step of the open slot while the unsent bytes of the data
+ * bridge (SIOCOUTQNSD of its socket plus the bytes that the broker holds for the bridge client and has not
+ * written to the socket, bq) plus the PUBLISH bytes released in this tick stay below lw_bytes */
 static void tdma_release(struct fdt_preg *r, int64_t now_us)
 {
 	const struct fdt_pdtp *d = r->d;
@@ -653,7 +663,7 @@ static void tdma_release(struct fdt_preg *r, int64_t now_us)
 		memset(&sk, 0, sizeof sk);
 		r->io.sock(r->io.ctx, &sk);
 		for (int k = 0; k < sk.n && k < FDT_DATA_MAX; k++)
-			unsent += sk.s[k].nsd > 0 ? sk.s[k].nsd : 0;
+			unsent += (sk.s[k].nsd > 0 ? sk.s[k].nsd : 0) + (sk.s[k].bq > 0 ? sk.s[k].bq : 0);
 	}
 	int64_t rel = 0;
 	for (int j = 0; j < d->L && unsent + rel < r->lw_bytes; j++) {
@@ -664,7 +674,8 @@ static void tdma_release(struct fdt_preg *r, int64_t now_us)
 			struct fdt_pmsg *m = &q->m[k];
 			if (!m->buf || m->t != r->gate_t || m->reason != FDT_PR_SLOT)
 				continue;
-			rel += FDT_STEP_HEADER + (int64_t)m->len;
+			/* the packet of the data bridge: QoS 0 (the bridge subscribes with QoS 0) on boat/b<i>/tx/<topic> */
+			rel += (int64_t)fdt_p_publish_len(strlen(r->tx_topic[l]), 0, FDT_STEP_HEADER + (size_t)m->len);
 			m->reason = FDT_PR_FWD;
 			fwd_msg(r, s, l, k, 1);
 			r->gate_left--;
@@ -675,7 +686,8 @@ static void tdma_release(struct fdt_preg *r, int64_t now_us)
 	}
 }
 
-/* paper_b3, b8, paper_tdma at v(t): the messages of step t in sigma_t, each topic in order of reception */
+/* paper_b3 (B3), b8 (B7), paper_tdma (B8) at v(t): the messages of step t in sigma_t, each topic in order of
+ * reception */
 static void do_v_prio(struct fdt_preg *r, int64_t t, struct fdt_pstep *s, int64_t now_us)
 {
 	const struct fdt_pdtp *d = r->d;

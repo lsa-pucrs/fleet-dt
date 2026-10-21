@@ -7,7 +7,7 @@ The script checks the run against the model of the paper from the logs that emu/
 
   alg1        offline replay of the AS: eq. (2) from the C_hat of the previous step and the y(t - 1) that
               the AS used (equal to the y(t - 1) that the channel monitor published), the grant limit
-              b(t) = max(0, U K_hat(t) - Q(t)) / m(t) with the logged Q(t), Algorithm 1 (B7: the per-vessel
+              b(t) = max(0, U K_hat(t) - Q(t)) / m(t) with the logged Q(t), Algorithm 1 (B6: the per-vessel
               grants) from the logged D_i(t), sigma_t and N(t) gives the published p(t) in every step; the
               tables equal the D_i(t) that each regulator policed and the p(t) that it received; sigma_t and
               N(t) equal the mode of the JMCS stub of step t
@@ -50,11 +50,12 @@ ROOT = os.path.dirname(os.path.dirname(HERE))
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "emu"))
 
-from fleetdt.as_model import DTP, admission, admission_b7, grant_limit, smooth  # noqa: E402
+from fleetdt.as_model import DTP, admission, admission_b6, grant_limit, smooth  # noqa: E402
 
 REASONS = {"no_table", "no_demand", "level0", "police", "overflow", "resync", "eos", "shutdown", "budget", "slot"}
-TABLE_METHODS = {"fleetdt", "B4", "B5a", "B5b", "B7"}
-POLICING_METHODS = {"fleetdt", "B4", "B5b", "B7"}
+TABLE_METHODS = {"fleetdt", "B4", "B5a", "B5b", "B6"}
+POLICING_METHODS = {"fleetdt", "B4", "B5b", "B6"}
+OTHER_METHODS = {"B1", "B2", "B3", "B7", "B8", "B9"}
 MAX_EXAMPLES = 8
 
 
@@ -85,9 +86,16 @@ def load_jsonl(p):
     return out
 
 
+# labels of the code before the paper labels of Table S3 that no paper label reuses (emu/fleet.py PAPER_RENAMED)
+RENAMED = {"b10": "B9"}
+
+
 def method_key(m):
     m = str(m or "fleetdt")
-    for k in TABLE_METHODS | {"B1", "B2", "B3", "B8", "B9", "B10"}:
+    if m.lower() in RENAMED:
+        raise SystemExit("method %s: the baseline labels follow Table S3 of the paper; the former %s is now %s "
+                         "(and the former B7, B8, B9 are B6, B7, B8)" % (m, m, RENAMED[m.lower()]))
+    for k in TABLE_METHODS | OTHER_METHODS:
         if k.lower() == m.lower():
             return k
     return m
@@ -162,7 +170,7 @@ class Run(object):
 
     def table_of(self, i, t):
         """levels that vessel i applied in step t: the p of its step log, else the table of the AS
-        (B7: the table of the vessel); None when the vessel had no table"""
+        (B6: the table of the vessel); None when the vessel had no table"""
         st = self.steps_log.get(i)
         if st is not None:
             r = st.get(t)
@@ -258,10 +266,10 @@ def check_alg1(run):
             c.ok(False, {"t": t, "why": "grant limit", "b": r.get("b"), "replay": b})
             continue
         if r.get("p_by"):
-            p_by, _ = admission_b7(D, sigma, N, b)
+            p_by, _ = admission_b6(D, sigma, N, b)
             got = {int(i): list(v) for i, v in r["p_by"].items()}
             good = all(got.get(i) == p_by[i] for i in M)
-            c.ok(good, None if good else {"t": t, "why": "B7 grants", "p_by": got, "replay": p_by})
+            c.ok(good, None if good else {"t": t, "why": "B6 grants", "p_by": got, "replay": p_by})
         else:
             p = admission(D, sigma, N, b)
             good = list(r["p"]) == p
