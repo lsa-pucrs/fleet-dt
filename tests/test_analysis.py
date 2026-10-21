@@ -671,9 +671,12 @@ def test_calibration_of_c_y_and_margins(tmp_path):
     cal = A.calibrate_c_y({0: 90.0, 1: 120.0, 2: 50.0, 3: 10.0}, {0: 100.0, 1: 100.0, 2: 0.0})
     assert cal == {"c_y": 0.9, "n": 2, "t_min": 0}
     assert A.calibrate_c_y({0: 130.0}, {0: 100.0})["c_y"] == 1.0       # capped: c_y in (0, 1]
+    m = A.calibrate_margins([0.0004, 0.0012], [0.0015, 0.003], [800, 2100], [0.0002, 0.0005])
+    assert m["eps"] == pytest.approx(2 * 0.0012 + 0.001 + 0.0005) and m["delta_GS"] == 0.003
+    assert m["T_m"] == pytest.approx(0.0039 + 0.003) and m["B_ctl_bar"] == 2100 and m["todo"] == []
+    # without the delay of the regulator, eps leaves out that term and says so
     m = A.calibrate_margins([0.0004, 0.0012], [0.0015, 0.003], [800, 2100])
-    assert m["eps"] == pytest.approx(2 * 0.0012 + 0.001) and m["delta_GS"] == 0.003
-    assert m["T_m"] == pytest.approx(0.0034 + 0.003) and m["B_ctl_bar"] == 2100 and m["todo"] == []
+    assert m["eps"] == pytest.approx(2 * 0.0012 + 0.001) and len(m["todo"]) == 1
     none = A.calibrate_margins()
     assert none["T_m"] is None and none["B_ctl_bar"] is None and len(none["todo"]) == 3
     # a run directory with the subset replays and the monitor log, without the margin measurements

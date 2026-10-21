@@ -150,6 +150,7 @@ struct fdt_pstep {
 	uint32_t d[FDT_L_MAX];
 	uint8_t p[FDT_L_MAX];
 	int64_t p_at, late_p1, late_v, outq, nsd;
+	int64_t p_late_at;             /* arrival of a table after v(t), before the end of the step (-1: none) */
 	int have_Q;                    /* Q_i(t) computed at the start of phase 1 */
 	uint32_t Q;                    /* backlog Q_i(t) of the demand table */
 	int64_t bo, bn;                /* its o_i(t) and n_i(t) (-1: no data-bridge socket) */

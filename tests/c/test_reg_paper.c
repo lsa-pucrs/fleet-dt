@@ -1130,6 +1130,64 @@ static void test_tdma(void)
 	free(lb);
 }
 
+/* calibration (Section VI-E of the paper): the step log gives the arrival of p(t) on the vessel clock,
+ * microseconds after start(t) (p_rx_us), or the arrival of a table after v(t) (p_late_us) */
+static double step_field(const char *text, int64_t t, const char *key, int *is_null)
+{
+	char head[48];
+	snprintf(head, sizeof head, "{\"t\":%lld,", (long long)t);
+	const char *line = text ? strstr(text, head) : NULL;
+	*is_null = -1;
+	if (!line)
+		return NAN;
+	const char *e = strchr(line, '\n');
+	cJSON *o = cJSON_ParseWithLength(line, e ? (size_t)(e - line) : strlen(line));
+	double v = NAN;
+	const cJSON *x = o ? cJSON_GetObjectItem(o, key) : NULL;
+	if (x) {
+		*is_null = cJSON_IsNull(x);
+		if (cJSON_IsNumber(x))
+			v = x->valuedouble;
+	}
+	cJSON_Delete(o);
+	return v;
+}
+
+static void test_table_arrival(void)
+{
+	struct fdt_preg r;
+	struct fdt_preg_opts o;
+	char *sb = NULL;
+	size_t sl = 0;
+	fdt_preg_opts_default(&o);
+	o.step_log = memlog(&sb, &sl);
+	start_at(&r, &o, 40);
+	uint8_t p[FDT_L_MAX] = {2, 1, 1, 0};
+	fdt_preg_tick(&r, S(40));
+	/* step 40: the table arrives 23.5 ms after start(40), before v(40) */
+	CHECK(levels(&r, 40, p, D.L, S(40) + 23500) == 0);
+	fdt_preg_tick(&r, V(40));
+	fdt_preg_tick(&r, S(41));
+	/* step 41: the table arrives 2 ms after v(41) and is withheld; a second late copy keeps the first time */
+	fdt_preg_tick(&r, V(41));
+	CHECK(levels(&r, 41, p, D.L, V(41) + 2000) == 1);
+	CHECK(levels(&r, 41, p, D.L, V(41) + 5000) == 1);
+	fdt_preg_tick(&r, S(42));
+	/* step 42: no table */
+	fdt_preg_tick(&r, S(43));
+	fflush(o.step_log);
+	int nul;
+	CHECK(step_field(sb, 40, "p_rx_us", &nul) == 23500 && nul == 0);
+	CHECK(isnan(step_field(sb, 40, "p_late_us", &nul)) && nul == 1);
+	CHECK(isnan(step_field(sb, 41, "p_rx_us", &nul)) && nul == 1);
+	CHECK(step_field(sb, 41, "p_late_us", &nul) == (double)(V(41) + 2000 - S(41)) && nul == 0);
+	CHECK(isnan(step_field(sb, 42, "p_rx_us", &nul)) && nul == 1);
+	CHECK(isnan(step_field(sb, 42, "p_late_us", &nul)) && nul == 1);
+	fdt_preg_free(&r);
+	fclose(o.step_log);
+	free(sb);
+}
+
 int main(void)
 {
 	test_dtp();
@@ -1150,6 +1208,7 @@ int main(void)
 	test_b3();
 	test_b8();
 	test_tdma();
+	test_table_arrival();
 	if (failures) {
 		fprintf(stderr, "test_reg_paper: %d of %d checks failed\n", failures, checks);
 		return 1;

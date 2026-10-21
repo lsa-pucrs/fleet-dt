@@ -25,6 +25,18 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   sequence S1, S3, S1 of E5 (`gen.make_paper_sequence`, `"regimes"` in the scenario)
 - `"session"` of a paper-stack experiment (CPU quota, clock injector, probe period), checked against the
   session that is up; `run.py up --probe-period`; `qualify.py manifest --bare-session`
+- calibration Cal of Section VI-E: `emu/experiments/calibrate_paper.py compute` writes calibration.json with T1,
+  T2, eps, delta_GS, T_m and B_ctl_bar per M, the global c_y, C_ref per (M, scenario) and alpha*, U* per (M,
+  left-out scenario) from the logs of the calibration runs (`fleetdt/calibration.py`); `calibrate_paper.py dtp`
+  writes these constants into the DTP of an evaluation run
+- AS log: `d_at` (arrival of each demand table, seconds after start(t)) in each decision and `demand_late` lines
+  for the tables after start(t) + T1 (w1(t))
+- regulator step log: `p_rx_us` and `p_late_us`, the arrival of p(t) on the vessel clock (w2(t))
+- `emu/tools/chrony_sampler.py`: the error bound of chrony (|System time| + root dispersion + root delay / 2)
+  once per step on every host of a run (`chrony.jsonl`)
+- GS broker plugin `fdt_gsstamp.so` (`mosquitto/plugins/`, `fleetdt.gsconf gs --stamp`): the delivery time of
+  each uplink message of the data bridges, per step (`gsdelivery.jsonl`), and its C unit test
+- `fleetdt.outer._calibrate(refine=False)`: alpha* on the grid 0.01..1 only
 
 ### Changed
 
@@ -36,6 +48,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `"catchup_us"`); the sources release the telemetry topics with the jitter J = 2 ms of the regulator
 - paper scenarios on channel 6 (`"channel_number"`; the emulator ran on the ns-3 default channel 1), and the
   two-ray models of S5 and S7 at 2.437 GHz; the files `emu/scenarios/P-*.json` regenerated
+- eps of `fleetdt.analysis.calibrate_margins` adds the largest delay of the vessel regulator at a phase boundary
 - fidelity: the mean absolute scaled error (MASE, Hyndman and Koehler 2006) replaces the MAPE; the scale is
   the error of the last-value predictor c_y y(t-1) over the same steps, so smoothing with alpha = 1 gives 1
 - control bridges: demand, levels, goals and fleet/feedback with QoS 0 (no MQTT retransmission; clean session),
