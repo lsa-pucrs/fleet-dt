@@ -123,7 +123,7 @@ def main() -> None:
         "per_topic": per_topic,
         "metrics": {k: (v.get("value") if isinstance(v, dict) else v)
                     for k, v in analyze(rec, dtp, criterion="count", ci=False).items()
-                    if k in ("MAPE", "gamma", "delta", "phi", "eta", "mu", "nu", "J")} if rec else {},
+                    if k in ("MASE", "gamma", "delta", "phi", "eta", "mu", "nu", "J")} if rec else {},
     }
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     print(json.dumps(summary, indent=1))

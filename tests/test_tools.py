@@ -56,7 +56,7 @@ def test_analysis_on_synthetic_fleet():
     sim = FleetSim(M=3, seed=5)
     recs = [g.to_dict() for g in sim.graphs(600)]
     res = analyze(recs, sim.dtp, criterion="bytes", B=100)
-    assert 0 <= res["MAPE"]["value"] < 1
+    assert 0 < res["MASE"]["value"] < 10
     assert 0 < res["gamma"]["value"] <= 1
     assert res["J"] > 0.9
     for k in ("gamma", "phi"):

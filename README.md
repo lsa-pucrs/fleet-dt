@@ -75,7 +75,7 @@ The outputs use the metric names of the paper: PICP (steps with K_y(t) >= U K_ha
 c_y y(t) (T3 - T_m)/Ts - B_ctl_bar, K_hat(t) = C_hat(t) (T3 - T_m)/Ts), DMR (deadline miss ratio, 1 -
 full-delivery fraction), DMR_hat (backlog predictor q_hat(t) = max(0, q_hat(t-1) + A(t) - K_y(t)) with the
 admitted bytes A(t) of the AS log), PDR_state, PDR_i (min/max ratio of H5d over vessels 1 to 3), PCR
-(denominator |N(t)|), u (sum r_il / (K_y + B_ctl_bar)), MAPE (of C_hat against c_y y), c_y and RelMSE;
+(denominator |N(t)|), u (sum r_il / (K_y + B_ctl_bar)), MASE (of C_hat against c_y y, scaled by the last-value predictor), c_y and RelMSE;
 the subcommand `calibrate RUN` of fleetdt.analysis computes c_y (and T_m, B_ctl_bar when measured) for the
 DTP; the names of earlier versions (gamma, phi, delta, eta_vessel, Pi, nu, kappa; --kappa) stay as aliases
 for one release.

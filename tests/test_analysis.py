@@ -573,9 +573,9 @@ def _rev_dtp(**kw):
     return DTP(**base)
 
 
-def test_picp_mape_and_u_with_K_y():
+def test_picp_mase_and_u_with_K_y():
     """PICP(U) = fraction of the steps with K_y(t) >= U K_hat(t), K_y = c_y y (T3 - T_m)/Ts - B_ctl_bar,
-    K_hat = C_hat (T3 - T_m)/Ts; MAPE of C_hat against c_y y; u = sum r / (K_y + B_ctl_bar)."""
+    K_hat = C_hat (T3 - T_m)/Ts; MASE of C_hat against c_y y; u = sum r / (K_y + B_ctl_bar)."""
     d = _rev_dtp()
     r = (0.095 - 0.005) / 0.125
     y = np.array([100_000.0, 95_000.0, 90_000.0, 80_000.0])
@@ -587,7 +587,8 @@ def test_picp_mape_and_u_with_K_y():
     assert want == pytest.approx(0.5)          # 0.9 y - 1000 / r >= 80000: 90000 - 1389 and 85500 - 1389
     assert res["PICP"]["value"] == pytest.approx(want)
     assert res["c_y"] == 0.9 and res["T_m"] == 0.005 and res["B_ctl_bar"] == 1000.0
-    assert res["MAPE"]["value"] == pytest.approx(np.mean(np.abs(0.9 * y - C) / (0.9 * y)))
+    # MASE: error of C_hat over the error of the last-value predictor, both over the steps t >= 1
+    assert res["MASE"]["value"] == pytest.approx(np.sum(np.abs(0.9 * y[1:] - C[1:])) / np.sum(0.9 * np.abs(np.diff(y))))
     assert res["u"]["value"] == pytest.approx(200 * 4 / np.sum(Ky + 1000.0))
     # the slack series is K_y - U K_hat
     assert A.margin_series(recs, d).tolist() == pytest.approx((Ky - 0.8 * C * r).tolist())
@@ -723,3 +724,22 @@ def test_backlog_with_qbar_in_h4a_and_dmr_hat():
     assert np.all(q0 == 0)
     q1, _ = O.backlog_admitted(yy, A_, 0.72, c_y=0.9, Q=np.array([0.0, 100.0, 0.0, 0.0]))
     assert q1.tolist() == pytest.approx([0.0, 52.0, 4.0, 0.0])
+
+
+def test_mase_last_value_predictor_and_zero_increments():
+    """MASE = 1 for the last-value predictor (C_hat(t) = c_y y(t-1), smoothing with alpha = 1); the steps with
+    y(t) = y(t-1) stay in both sums; a constant series leaves the MASE undefined."""
+    d = _rev_dtp()
+    y = np.array([100_000.0, 100_000.0, 90_000.0, 90_000.0, 95_000.0])
+    C = np.concatenate([[100_000.0], 0.9 * y[:-1]])
+    res = A.run_metrics(_records(y, C, U=0.8), d, criterion="bytes", ci=False)
+    assert res["MASE"]["value"] == pytest.approx(1.0)
+    assert res["MASE"]["n"] == 4
+    C2 = np.full(5, 0.9 * 95_000.0)
+    res2 = A.run_metrics(_records(y, C2, U=0.8), d, criterion="bytes", ci=False)
+    want = np.sum(np.abs(0.9 * y[1:] - C2[1:])) / np.sum(0.9 * np.abs(np.diff(y)))
+    assert res2["MASE"]["value"] == pytest.approx(want)
+    # a constant series has no scale: the MASE is undefined
+    yc = np.full(4, 100_000.0)
+    res3 = A.run_metrics(_records(yc, np.full(4, 90_000.0), U=0.8), d, criterion="bytes", ci=False)
+    assert res3["MASE"]["value"] != res3["MASE"]["value"]

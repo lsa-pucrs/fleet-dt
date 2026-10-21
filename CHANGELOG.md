@@ -2,6 +2,13 @@
 
 Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- fidelity: the mean absolute scaled error (MASE, Hyndman and Koehler 2006) replaces the MAPE; the scale is
+  the error of the last-value predictor c_y y(t-1) over the same steps, so smoothing with alpha = 1 gives 1
+
 ## [2.0.0] - 2026-10-14
 
 The repository now implements the network digital twin with dynamic bandwidth allocation of the

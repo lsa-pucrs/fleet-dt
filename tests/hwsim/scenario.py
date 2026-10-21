@@ -154,7 +154,7 @@ def main() -> None:
                                       for g in gs if g.vessels) / max(1, sum(1 for g in gs if g.vessels))),
             "metrics": {m: v.get("value") if isinstance(v, dict) else v
                         for m, v in analyze(rec, dtp, criterion="count", ci=False).items()
-                        if m in ("MAPE", "gamma", "delta", "phi", "eta", "mu", "nu")} if rec else {},
+                        if m in ("MASE", "gamma", "delta", "phi", "eta", "mu", "nu")} if rec else {},
         }
     (out / "summary.json").write_text(json.dumps(summary, indent=1))
     (out / "metrics.json").write_text(json.dumps(analyze([g.to_dict() for g in steady], dtp, criterion="count", B=500),

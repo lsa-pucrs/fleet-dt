@@ -14,7 +14,7 @@ statistics of the analysis count such steps as failures (worst case), which the 
 from the pooled runs.
 
 Output (JSON): "stack": "paper", "n_steps" (steps in the metrics), "lag_discarded", "lag_steps" (their
-indices), "warm_steps", "criterion", "metrics" (fleetdt.analysis.run_metrics: MAPE, gamma, phi, delta, eta,
+indices), "warm_steps", "criterion", "metrics" (fleetdt.analysis.run_metrics: MASE, gamma, phi, delta, eta,
 mu, nu, prefix completeness, fleet consistency, unused share, fill ratio), "use" (per topic: received
 channel bytes r_il over the declared d_il of the admitted edges, the ratio of forwarded bytes to demand),
 "aborted" (emulator lag abort) and "status" of the run. emu/experiments/runner.py reads "n_steps" and

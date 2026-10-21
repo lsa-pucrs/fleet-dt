@@ -5,8 +5,10 @@ release: gamma = PICP, delta = PDR_state, eta_vessel = PDR_i, Pi = PCR, nu = u, 
 full-delivery fraction 1 - DMR):
   K_hat(t) = C_hat(t) (T3 - T_m)/Ts (predicted capacity of phase 3) and K_y(t) = c_y y(t) (T3 - T_m)/Ts - B_ctl_bar
   (measured capacity); c_y, T_m and B_ctl_bar come from the DTP (c_y can be overridden).
-  MAPE       mean of |c_y y(t) - C_hat(t)| / (c_y y(t)) over the steps with y(t) > 0 (fidelity, Definition of the
-             paper)
+  MASE       mean absolute scaled error (Hyndman and Koehler 2006): sum of |c_y y(t) - C_hat(t)| divided by the
+             sum of c_y |y(t) - y(t-1)| (the error of the last-value predictor, which is (3) with alpha = 1), both
+             over the steps t with y(t), y(t-1) and C_hat(t) defined (fidelity, Definition of the paper); the
+             steps with y(t) = y(t-1) stay in both sums
   PICP       prediction interval coverage probability: fraction of the steps of S (y(t) and C_hat(t)
              defined) with K_y(t) >= U K_hat(t) (C13)
   PICP_C     the same with the ground truth K(t) - B_ctl(t) in place of K_y(t), K(t) = C(t) (T3 - T_m)/Ts (C(t) of
@@ -545,9 +547,10 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
     state = dtp.index("state") if "state" in dtp.topics else None
     n_expected = {k + 1: int(math.ceil(s.rate * dtp.Ts - 1e-9)) for k, s in enumerate(dtp.specs) if s.rate}
     default_order = [dtp.index(n) for n in dtp.order] if dtp.order else list(range(1, L + 1))
-    out = {"t": [], "ape": [], "cover": [], "phi": [], "delta": [], "delta_fail": [], "eta": [], "mu": [], "nu": [],
+    out = {"t": [], "ase": [], "cover": [], "phi": [], "delta": [], "delta_fail": [], "eta": [], "mu": [], "nu": [],
            "margin": [], "eta_i": {}, "eta_rows": [], "prefix": [], "pcr": [], "fleet": [], "unused": [], "fill": [],
            "order": [], "A": [], "y": [], "C_hat": [], "K_y": [], "K_hat": [], "Q": [], "U": []}
+    prev_t, prev_y = None, None
     for g in recs:
         t, y, C = int(g["t"]), g.get("y"), g.get("C_hat")
         U = g.get("U") if g.get("U") is not None else dtp.U
@@ -561,7 +564,11 @@ def step_rows(records: Sequence[Dict], dtp: DTP, criterion: str, tol: float = 1e
         out["t"].append(t)
         out["order"].append(sigma)
         # fidelity: C_hat(t) against c_y y(t); coverage and slack in bytes of phase 3
-        out["ape"].append(abs(cy * y - C) / (cy * y) if y is not None and C is not None and y > 0 else np.nan)
+        if y is not None and C is not None and prev_y is not None and prev_t == t - 1:
+            out["ase"].append([abs(cy * y - C), cy * abs(y - prev_y)])     # MASE rows: error, last-value error
+        else:
+            out["ase"].append([np.nan, np.nan])
+        prev_t, prev_y = t, (float(y) if y is not None else None)
         sl = slack(g, dtp, cy, U)
         out["cover"].append(float(sl >= 0) if sl == sl else np.nan)          # K_y(t) >= U K_hat(t)
         out["margin"].append(sl)
@@ -638,8 +645,14 @@ def _ratio(rows: np.ndarray) -> float:
     return float(s[0] / s[1]) if s[1] > 0 else float("nan")
 
 
+def _ratio_of_sums(z: np.ndarray) -> float:
+    """Sum of the first column divided by the sum of the second (nan for a zero denominator)."""
+    den = float(np.sum(z[:, 1]))
+    return float(np.sum(z[:, 0])) / den if den > 0 else float("nan")
+
+
 def _summary(x: np.ndarray, stat, ci: bool, B: int, conf: float, seed: int, event: bool = False,
-             tau: Optional[float] = None, fail: Optional[np.ndarray] = None) -> Dict:
+             tau: Optional[float] = None, fail: Optional[np.ndarray] = None, zero_den: bool = False) -> Dict:
     """Value, bootstrap CI, tau_int and n_eff of a per-step series (rows for ratios). With `tau` (tau_int
     of the margin series, for the event metrics), n_eff = n / (2 tau) with the fleet step as the unit.
     With `event`, viol_upper is the Clopper-Pearson upper limit of the per-step violation probability
@@ -649,6 +662,10 @@ def _summary(x: np.ndarray, stat, ci: bool, B: int, conf: float, seed: int, even
         keep = ~np.isnan(x)
         x = x[keep]
         per_step = x
+    elif zero_den:                       # ratio of sums whose rows may have a zero denominator (MASE)
+        keep = ~np.isnan(x).any(axis=1)
+        x = x[keep]
+        per_step = x[:, 0]
     else:
         keep = ~np.isnan(x).any(axis=1) & (x[:, 1] > 0)
         x = x[keep]
@@ -742,7 +759,7 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
     """Metrics of one run (Section VI) with an explicit full-reception criterion ("bytes" or "count").
     The event metrics (PICP, DMR, PDR_state) take tau_int from the slack series s(t) = K_y(t) - U K_hat(t)
     and the fleet step as the unit (n_eff = steps / (2 tau_int), no factor of messages per step).
-    c_y (default: the DTP; alias kappa, its old name) enters K_y and the MAPE; C_gt (t -> C(t)) and B_ctl
+    c_y (default: the DTP; alias kappa, its old name) enters K_y and the MASE; C_gt (t -> C(t)) and B_ctl
     (t -> B_ctl(t)) give PICP_C; the H5d ratio min_i PDR_i / max_i PDR_i takes the vessels of fair_vessels
     (None: every vessel). The output holds the names of the paper and, for one release, the names of earlier
     versions (module docstring)."""
@@ -755,7 +772,8 @@ def run_metrics(records: Sequence[Dict], dtp: DTP, *, criterion: str, tol: float
     mg = np.asarray(s["margin"], float)
     tau_m = tau_int(mg) if np.any(~np.isnan(mg)) else 0.5
     res["tau_margin"] = tau_m
-    res["MAPE"] = _summary(np.asarray(s["ape"], float), mean, ci, B, conf, seed)
+    res["MASE"] = _summary(np.asarray(s["ase"], float).reshape(-1, 2), _ratio_of_sums, ci, B, conf, seed,
+                           zero_den=True)
     res["PICP"] = res["gamma"] = _summary(np.asarray(s["cover"], float), mean, ci, B, conf, seed, event=True,
                                           tau=tau_m)
     if C_gt:
@@ -967,7 +985,7 @@ def calibrate_run(run_dir: str) -> Dict:
 
 # --------------------------------------------------------------------------- report
 
-METRICS = ("MAPE", "PICP", "PDR_state", "DMR", "eta", "mu", "u")
+METRICS = ("MASE", "PICP", "PDR_state", "DMR", "eta", "mu", "u")
 
 
 def format_table(name: str, res: Dict) -> str:
@@ -1032,7 +1050,7 @@ def main(argv: Optional[List[str]] = None) -> None:
                     help="full reception of an admitted edge (pre-registered): n >= messages forwarded by the vessel "
                          "regulator (count; n_l = ceil(r_l Ts) without the regulator log) or r >= d (1 - tol) - 1 (bytes)")
     ap.add_argument("--c-y", "--kappa", dest="c_y", type=float, default=None,
-                    help="c_y of K_y(t) = c_y y (T3 - T_m)/Ts - B_ctl_bar and of the MAPE (calibration minimum of C/y; "
+                    help="c_y of K_y(t) = c_y y (T3 - T_m)/Ts - B_ctl_bar and of the MASE (calibration minimum of C/y; "
                          "default: the DTP; --kappa: old name)")
     ap.add_argument("--tol", type=float, default=1e-6)
     ap.add_argument("--B", type=int, default=2000, help="bootstrap resamples")
