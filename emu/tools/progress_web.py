@@ -83,8 +83,9 @@ def host_status(disk):
     for p in os.listdir("/proc"):
         if p.isdigit():
             try:
-                with open("/proc/%s/comm" % p) as f:
-                    n += f.read().startswith("qemu-system")
+                with open("/proc/%s/cmdline" % p, "rb") as f:
+                    argv0 = f.read().split(b"\0", 1)[0]
+                n += os.path.basename(argv0).startswith(b"qemu-system")
             except OSError:
                 pass
     out["qemu_processes"] = n

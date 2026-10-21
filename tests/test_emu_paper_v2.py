@@ -422,7 +422,7 @@ def test_replay_tool_short_run(tmp_path):
         assert set(x["C_S"]) == {"1", "2", "3"} and x["C"] > 0
         assert x["saturated"] == bool(x["t"] % 2)
     rep = json.load(open(rd / "csub" / "replay.json"))
-    assert rep["M"] == 2 and rep["saturated_steps"] == 12 and rep["h_W"] == 150
+    assert rep["M"] == 2 and rep["saturated_steps"] == 12 and rep["h_W"] == json.load(open(rd / "dtp.json"))["h_W"]
     # single-vessel saturation throughput near the 802.11g figure (about 19 Mb/s with h_W per frame)
     c1 = [x["C_S"]["1"] * 8 / 0.125 / 1e6 for x in lines]
     assert 12.0 < sum(c1) / len(c1) < 22.0
