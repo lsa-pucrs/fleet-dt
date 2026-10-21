@@ -8,7 +8,7 @@
  * Step t (vessel clock): start(t) = epoch + t Ts, phase 3 at v(t) = start(t) + T1 + T2, end at start(t+1).
  * A raw message of topic l belongs to step t when it reaches the regulator in [v(t-1), v(t)).
  *
- *  start(t) + off  demand table D_i(t) = t:u32, L:u8, Q_i:u32, d_1..d_L:u32 on boat/b<i>/demand (QoS 1),
+ *  start(t) + off  demand table D_i(t) = t:u32, L:u8, Q_i:u32, d_1..d_L:u32 on boat/b<i>/demand (QoS 0),
  *                  with d_l = ceil(c_b (x_l + 6 n_l) + c_m,l n_l), n_l = ceil(r_l (Ts + J_l)), x_l = n_l s_l
  *                  (the jitter allowance J_l is inside d_l), and d_l = 0 for a topic with no raw message
  *                  in the last `idle` steps. off = 0 by default (no phase-1 offset). With demand

@@ -93,11 +93,11 @@ Prefix `boat/b<i>/` with the vessel index i (1..M). All binary fields in network
 | Topic | Broker where published | Publisher | QoS | Payload |
 |---|---|---|---|---|
 | `boat/b<i>/raw/<topic>` | vessel | publishers | 0 | content of the message (≤ `bound` bytes); no bridge forwards `raw/#` |
-| `boat/b<i>/demand` | vessel (control bridge → GS) | DTI program (Q_i written by the vessel regulator) | 1 | `t:u32, L:u8, Q_i:u32, d_1..d_L:u32`; Q_i = backlog of vessel i at the start of phase 1 (Section 5) |
-| `boat/b<i>/levels` | GS (control bridge → vessel) | AS | 1 | `t:u32, L:u8, p_1..p_L:u8` (p ∈ {0,1,2}) |
-| `boat/b<i>/goals` | GS (control bridge → vessel) | operation control software | 1 | JSON `{"t":…, "lat":…, "lon":…, "speed":…}` |
+| `boat/b<i>/demand` | vessel (control bridge → GS) | DTI program (Q_i written by the vessel regulator) | 0 | `t:u32, L:u8, Q_i:u32, d_1..d_L:u32`; Q_i = backlog of vessel i at the start of phase 1 (Section 5) |
+| `boat/b<i>/levels` | GS (control bridge → vessel) | AS | 0 | `t:u32, L:u8, p_1..p_L:u8` (p ∈ {0,1,2}) |
+| `boat/b<i>/goals` | GS (control bridge → vessel) | operation control software | 0 | JSON `{"t":…, "lat":…, "lon":…, "speed":…}` |
 | `boat/b<i>/tx/<topic>` | vessel (data bridge → GS) | vessel regulator | 0 (levels 2 and 1; level 2 leaves first in phase 3) | `t:u32, s:u16` + content; s = sequence number of the message in its topic and step, from 0; no MQTT acknowledgment crosses the channel; the GS removes repeated copies by (t, s) |
-| `fleet/order` | GS | operation control software | 1 | JSON `{"t":…, "order":[names], "needed":[names]}` |
+| `fleet/order` | GS | operation control software | 0 | JSON `{"t":…, "order":[names], "needed":[names]}` |
 | `fleet/throughput` | GS (from the GS radio) | channel monitor | 0 | JSON `{"t":…, "y":bytes, "Tb":s, "To":s}` |
 | `fleet/as` | GS | AS | 0 | JSON `{"t":…, "C_hat":…, "K_hat":…, "cap":…, "b":…, "U":…, "alpha":…, "m":…, "p":[…], "M":[…], "order":[…], "needed":[…], "a":{…}, "A":…, "Q":…, "Q_M":…, "Q_out":…, "Qi":{…}, "Qbar":{…}}` (topic indices from 1) |
 | `boat/b<i>/regulator` | vessel (control bridge → GS) | vessel regulator | 0 | JSON log of step t, published at start(t+1) + 1 ms (phase 1): `{"t", "have_d", "have_p", "late_us", "outq", "Q", "o", "bq", "n", "p":[…], "d":[…], "rx":[…], "fwd":[…], "held":[…], "drop":[…], "x":[…]}`; per topic: raw messages of the step, forwarded, withheld, dropped over the queue capacity, forwarded bytes with the step header; `late_us` = delay of phase 3 after start(t) + T1 + T2; `outq` = unsent bytes of the data bridge socket at that instant (-1 unknown); `Q`, `o`, `bq`, `n` = Q_i(t) of the demand table and the o_i(t), its part in the output queue of the broker (-1 unknown) and n_i(t) behind it (-1: no data-bridge socket; `Q` null without a table) |

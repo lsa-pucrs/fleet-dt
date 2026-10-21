@@ -19,7 +19,7 @@ even k and for t < S0, the other one for odd k. The order of step t leaves at st
 (default 2 ms, before the end of phase 1 at start(t) + T1), so the AS, which takes the last fleet/order
 received before start(t) + T1, uses the mode of step t. Steps are 0-based: start(t) = epoch + t Ts.
 
-Payload (JSON, QoS 1): {"t": t, "mode": "survey", "order": [names], "needed": [names]}.
+Payload (JSON, QoS 0): {"t": t, "mode": "survey", "order": [names], "needed": [names]}.
 With --log, one JSON line per publication: {"t", "mode", "pub"} (pub: Unix time of the publication).
 
   jmcs_stub.py --dtp dtp.json --broker 127.0.0.1:1883 --s0 S0 [--epoch E] [--period-s 10]

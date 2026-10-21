@@ -93,7 +93,7 @@ def gs_conf(vessels: Dict[int, str], listen: str = "0.0.0.0:1883", ctl_port: int
             b2: bool = False, per_topic: Optional[Sequence[str]] = None, feedback: bool = False,
             data_qos: int = 0) -> str:
     """Configuration of the GS broker. data_qos is the QoS of the subscriptions of the data bridges: 0 for the
-    paper stack (both levels with QoS 0, SPEC.md Section 4), 2 for the as2 stack; the control bridges keep QoS 1."""
+    paper stack (both levels with QoS 0, SPEC.md Section 4), 2 for the as2 stack; the control bridges use QoS 0."""
     if b2 and per_topic:
         raise ValueError("--b2 and --per-topic exclude each other")
     if data_qos not in (0, 1, 2):

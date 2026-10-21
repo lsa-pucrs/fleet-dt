@@ -5,7 +5,7 @@ C_hat(t-1) when y(t-1) did not arrive in phase 1), K_hat(t) = C_hat(t) (T3 - T_m
 b(t) = max(0, U K_hat(t) - Q(t)) / m(t) (eq. 3, Q(t) = sum of the backlogs Q_i(t) of the demand tables of M(t)
 plus, for each vessel outside M(t), Qbar_i(t) = Q_i(s_i) + a_i(s_i) of its last step s_i in M (BacklogBook);
 c_y and T_m from the DTP), runs Algorithm 1 over sigma_t and N(t), publishes (t, p(t)) on boat/b<i>/levels
-(QoS 1) for every i in M(t) and the JSON summary on fleet/as. The decision (log line and fleet/as) holds D (the demand tables of M(t)),
+(QoS 0) for every i in M(t) and the JSON summary on fleet/as. The decision (log line and fleet/as) holds D (the demand tables of M(t)),
 the table, and the admitted bytes a_i(t) of each vessel ("a") with their sum A(t) ("A"), which the backlog
 predictor of the outer loop replays (C5). The optional outer loop (fleetdt.outer, contribution (iv)) updates
 U and alpha from the DTA every `outer_every` steps; it runs in a child process (fleetdt.outer.run_job,
