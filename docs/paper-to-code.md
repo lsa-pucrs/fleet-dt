@@ -52,7 +52,7 @@ mismatch, and this table gets re-checked.
 | WeBots module running δ | the DTI inside the VE | controller `main` | [`fdt_controller.c`](../adapters/webots/controllers/fdt_controller/fdt_controller.c) |
 | 3D model in a WeBots world | the VE of Section III | `DEF PINTADO`, `DEF TILAPIA` | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
 | fluid simulator | sharing the DTE | `Fluid` node | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
-| DTE with parallel simulations | one tick, many simulations | `fdt_dte_t` | [`dte.h`](../include/fleet_dt/dte.h) |
+| DTE with parallel simulations | one tick, many simulations, one thread each | `fdt_dte_t`, `fdt_dte_start_parallel` | [`dte.h`](../include/fleet_dt/dte.h) |
 | MCS | out of scope, per Section IV | goal source in `fdt_plan_fn` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 
 ## Section V, the validation
