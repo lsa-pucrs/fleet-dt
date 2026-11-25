@@ -49,11 +49,11 @@ with the paper's own wording, is [`docs/claim-map.md`](claim-map.md).
 | C21 | no notable MQTT latency, no stuttering | V-A | `results/jitter.txt` |
 | C22 | WeBots CPU: 10 % then under 1 % | V-A | `tools/bench/bench_webots_cpu.c` |
 | C23 | delta feasible, actuation still late | V-A | `results/latency.txt` |
-| C24 | state range enabling MPC-like operation | V-A | `examples/daemon.c` |
+| C24 | state range enabling MPC-like operation | V-A | `src/predict.c` |
 | C25 | under 1 % CPU per added DTI | V-B | `results/scale.txt` |
 | C26 | injector-bound ceiling near 25 boats | V-B | `tools/injector/injector.c` |
 | C27 | partial and double frame updates | V-B | `src/framesync.c` |
-| C28 | Kalman for the operator, raw for actuation | V-A | `examples/two_paths.c` |
+| C28 | Kalman for the operator, raw for actuation | V-A | `src/kalman.c` |
 | D1 | no formal input-to-delta connection | VI | `Section VI names it future work` |
 | D2 | fluid and ML simulations in the model | VI | `Section VI names it future work` |
 | D3 | MQTT inside the firmware | VI | `Section VI names it future work` |

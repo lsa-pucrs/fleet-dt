@@ -77,7 +77,7 @@ static const claim_t CLAIMS[] = {
     { "C23", "delta feasible, actuation still late", "V-A",
       "results/latency.txt", ST_ARTEFACT },
     { "C24", "state range enabling MPC-like operation", "V-A",
-      "examples/daemon.c", ST_ARTEFACT },
+      "src/predict.c", ST_ARTEFACT },
     { "C25", "under 1 % CPU per added DTI", "V-B",
       "results/scale.txt", ST_ARTEFACT },
     { "C26", "injector-bound ceiling near 25 boats", "V-B",
@@ -85,7 +85,7 @@ static const claim_t CLAIMS[] = {
     { "C27", "partial and double frame updates", "V-B",
       "src/framesync.c", ST_ARTEFACT },
     { "C28", "Kalman for the operator, raw for actuation", "V-A",
-      "examples/two_paths.c", ST_ARTEFACT },
+      "src/kalman.c", ST_ARTEFACT },
 
     { "D1",  "no formal input-to-delta connection", "VI",
       "Section VI names it future work", ST_FUTURE },

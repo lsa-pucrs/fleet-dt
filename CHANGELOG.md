@@ -5,6 +5,18 @@ this project adheres to [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `fdt_predict` (`include/fleet_dt/predict.h`): the time-series estimator
+  x̂ₖ₊d = f(xₖ, …, xₖ₋ₙ₊₁) of Section IV and backup slide 6, a least-squares
+  polynomial of degree 0 to 2 per field of `Bᵗ`, angles unwrapped.
+  `examples/daemon.c` steers on x̂ₖ₊d with d = 2 instead of storing a yaw
+  trend in `pitch_deg`.
+- `fdt_kf_t` (`include/fleet_dt/kalman.h`): the operator's Kalman filter of
+  Section V-A, generating `Bᵗ` from `Iᵗ` (GPS position and velocity, gravity,
+  gyro, tilt-compensated magnetometer with declination).
+  `examples/two_paths.c` uses it; `π` stays on the raw path.
+
 ### Changed
 
 - The WeBots controller drives up to 64 vessels instead of 8, discovered by
