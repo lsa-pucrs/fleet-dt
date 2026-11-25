@@ -199,7 +199,7 @@ DEF PINTADO Robot {
       children [
         CadShape {
           url [
-            "../3d_models/drone_boat/full_model/boat_model.obj"
+            "../3d_models/tilapia/tilapia.obj"
           ]
         }
       ]
@@ -255,7 +255,7 @@ DEF TILAPIA Robot {
       children [
         CadShape {
           url [
-            "../3d_models/drone_boat/full_model/boat_model.obj"
+            "../3d_models/tilapia/tilapia.obj"
           ]
         }
       ]

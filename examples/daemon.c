@@ -5,8 +5,10 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <fleet_dt/coordinator.h>
+#include <fleet_dt/db.h>
 #include <fleet_dt/dte.h>
 #include <fleet_dt/feasibility.h>
+#include <fleet_dt/predict.h>
 #include <fleet_dt/tick.h>
 
 #include <fleet_dt/geo.h>
@@ -20,6 +22,12 @@
 #define FRAMES     40
 #define FDT_WINDOW 4
 
+/**
+ * Horizon d of the estimator, in ticks: how late a command computed now
+ * reaches the boat (talk, backup slide 6: d >= 1).
+ */
+#define HORIZON_D 2
+
 /** Radians to degrees, for crossing the mixed units of Table I. */
 #define RAD2DEG 57.2957795f
 
@@ -27,6 +35,13 @@ static fdt_state_t g_queues[NBOATS][QUEUE_CAP];
 static fdt_state_t g_bt_slots[NBOATS];
 static fdt_twin_t  g_twins[NBOATS];
 static fdt_feas_t  g_feas;
+
+/** Per-vessel context: x̂_{k+d}, which delta^e estimates and pi acts on. */
+typedef struct {
+    fdt_state_t xhat;
+} vessel_ctx_t;
+
+static vessel_ctx_t g_vctx[NBOATS];
 
 /**
  * c^t: the inter-vessel distance Section IV gives as its example, and how
@@ -42,25 +57,24 @@ typedef struct {
 static fleet_ctx_t g_ctx_hist[QUEUE_CAP];
 
 /**
- * delta^e over the n most recent states.
+ * delta^e over the n most recent states. Besides B^t it estimates
+ * x̂_{k+d} from the window (include/fleet_dt/predict.h), the state the boat
+ * will be in when this tick's command lands.
  */
 static void demo_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
                          const fdt_goal_t *g_prev, fdt_state_t *out,
                          void *ctx, void *fleet_ctx)
 {
     (void)g_prev;
-    (void)ctx;
     (void)fleet_ctx;
 
     const fdt_state_t *newest = fdt_window_at(q, n, 0);
-    const fdt_state_t *oldest = fdt_window_at(q, n, n - 1);
     *out = (newest != NULL) ? *newest : (fdt_state_t){0};
 
     const float rate = (in != NULL) ? in->wz_rps : 0.0f;
     const float dt_s = (float)FDT_TICK_NS / 1e9f;
 
     out->yaw_rate_rps = rate;
-
     out->yaw_deg += rate * dt_s * RAD2DEG;
 
     /* Sail at surge along the new yaw. The fleet sits near the equator,
@@ -71,20 +85,23 @@ static void demo_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
     out->lon_deg += (float)(d * sin(psi) /
                             fdt_geo_m_per_deg_lon((double)out->lat_deg));
 
-    /* The term depth buys: mean yaw change per frame across the window. */
-    if (newest != NULL && oldest != NULL && n > 1) {
-        out->pitch_deg = (newest->yaw_deg - oldest->yaw_deg) /
-                         (float)(n - 1);
+    /* The window's newest state is B^{t-1}: B^t is one tick ahead of it,
+     * and the command lands d ticks after B^t. */
+    vessel_ctx_t *vc = (vessel_ctx_t *)ctx;
+    if (vc != NULL && fdt_predict(q, n, HORIZON_D + 1, 1, &vc->xhat) != 0) {
+        vc->xhat = *out;
     }
 }
 
+/** pi on x̂_{k+d}, as in model predictive control (Section IV). */
 static void demo_pi(const fdt_state_t *b, const fdt_goal_t *g_now,
                     fdt_actuation_t *out, void *ctx, void *fleet_ctx)
 {
-    (void)ctx;
+    const vessel_ctx_t *vc = (const vessel_ctx_t *)ctx;
+    const fdt_state_t *x = (vc != NULL) ? &vc->xhat : b;
 
     const fleet_ctx_t *fc = (const fleet_ctx_t *)fleet_ctx;
-    out->cage_rad     = (g_now->yaw_deg - b->yaw_deg) * 0.01f;
+    out->cage_rad     = (g_now->yaw_deg - x->yaw_deg) * 0.01f;
     out->throttle_pct = (fc != NULL) ? fc->throttle_ceiling_pct : 100.0f;
 }
 
@@ -156,7 +173,7 @@ int main(void)
         b0.lat_deg   = (float)(10.0 * (double)k / FDT_M_PER_DEG_LAT);
         b0.surge_mps = 1.0f;
         if (fdt_twin_init(&g_twins[k], g_queues[k], QUEUE_CAP,
-                          demo_delta_e, demo_pi, NULL) != 0) {
+                          demo_delta_e, demo_pi, &g_vctx[k]) != 0) {
             fprintf(stderr, "twin %zu failed to init\n", k);
             return EXIT_FAILURE;
         }
@@ -190,7 +207,8 @@ int main(void)
     fdt_sim_slot_t sim_slots[2];
     fdt_dte_t dte;
     if (fdt_dte_init(&dte, sim_slots, 2) != 0 ||
-        fdt_dte_register(&dte, "fluid", fluid_stub, &fluid_ticks) != 0) {
+        fdt_dte_register(&dte, "fluid", fluid_stub, &fluid_ticks) != 0 ||
+        fdt_dte_start_parallel(&dte) != 0) {
         fprintf(stderr, "DTE wiring failed\n");
         return EXIT_FAILURE;
     }
@@ -206,11 +224,20 @@ int main(void)
 
     fdt_feas_init(&g_feas, FDT_TICK_NS);
 
+    /* Figure 4: states and actuation are stored within a database. */
+    fdt_db_t db = {0};
+    const char *db_path = getenv("FDT_DB");
+    const int logging = (db_path != NULL && db_path[0] != '\0');
+    if (logging && fdt_db_open(&db, db_path) != 0) {
+        fprintf(stderr, "cannot open the database %s\n", db_path);
+        return EXIT_FAILURE;
+    }
+
     fdt_tick_t tk;
     fdt_tick_start(&tk, FDT_TICK_NS);
 
     printf("%-4s %-28s %-28s %8s\n",
-           "k", "boat 0 (yaw / trend / cage)", "boat 1 (yaw / trend / cage)",
+           "k", "boat 0 (yaw / x^k+d / cage)", "boat 1 (yaw / x^k+d / cage)",
            "spacing m / closing m/s");
 
     for (int frame = 0; frame < FRAMES; frame++) {
@@ -226,11 +253,17 @@ int main(void)
 
         (void)fdt_dte_tick(&dte);
 
-        printf("%-4d %7.2f %7.3f %+7.3f      %7.2f %7.3f %+7.3f      %7.2f %+6.2f\n",
+        if (logging &&
+            fdt_db_put_frame(&db, (uint32_t)frame, bs, as, NBOATS) != 0) {
+            fprintf(stderr, "database write failed at frame %d\n", frame);
+            return EXIT_FAILURE;
+        }
+
+        printf("%-4d %7.2f %7.2f %+7.3f      %7.2f %7.2f %+7.3f      %7.2f %+6.2f\n",
                frame,
-               (double)bs[0].yaw_deg, (double)bs[0].pitch_deg,
+               (double)bs[0].yaw_deg, (double)g_vctx[0].xhat.yaw_deg,
                (double)as[0].cage_rad,
-               (double)bs[1].yaw_deg, (double)bs[1].pitch_deg,
+               (double)bs[1].yaw_deg, (double)g_vctx[1].xhat.yaw_deg,
                (double)as[1].cage_rad,
                fc.spacing_m, fc.closing_mps);
 
@@ -247,6 +280,14 @@ int main(void)
            fdt_queue_bytes(QUEUE_CAP));
     printf("DTE ticks=%zu  parallel simulations=%zu  fluid stub ran %u times\n",
            fdt_dte_ticks(&dte), fdt_dte_count(&dte), fluid_ticks);
+    (void)fdt_dte_stop_parallel(&dte);
+
+    if (logging) {
+        printf("database %s: %llu records, %llu B of B^t and A^t\n", db_path,
+               (unsigned long long)db.records,
+               (unsigned long long)db.payload_bytes);
+        (void)fdt_db_close(&db);
+    }
 
     return EXIT_SUCCESS;
 }
