@@ -28,8 +28,9 @@ mismatch, and this table gets re-checked.
 | feasibility | δ inside \|t_k − t_{k−1}\| | `fdt_feas_t` | [`feasibility.h`](../include/fleet_dt/feasibility.h) |
 | `Fᵗ` | fleet, eq. (4) | `fdt_fleet_t` | [`fleet.h`](../include/fleet_dt/fleet.h) |
 | Δ | fleet transition, eq. (5) | `fdt_fleet_step` | [`fleet.c`](../src/fleet.c) |
-| Δᵉ | extended fleet transition, eq. (6) | `fdt_fleet_step` with `n > 1` | [`fleet.c`](../src/fleet.c) |
-| `cᵗ` | fleet context, eq. (4) | `fdt_fleet_t.ctx`, delivered to every δᵉ and every π | [`fleet.h`](../include/fleet_dt/fleet.h) |
+| Δᵉ | extended fleet transition, eq. (6), over [Fᵗ⁻¹; Fᵗ⁻ⁿ] | `fdt_fleet_step` with `n > 1` for `Bᵗ`; `fdt_coord_set_ctx_window` for `cᵗ`, reading `fdt_fleet_state_at` and `fdt_fleet_ctx_at` | [`fleet.h`](../include/fleet_dt/fleet.h), [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| `cᵗ` | fleet context, eq. (4) | `fdt_fleet_t.ctx`, delivered to every δᵉ and every π; its history in `fdt_fleet_keep_history` | [`fleet.h`](../include/fleet_dt/fleet.h) |
+| "inter-vessel distance" | the example `cᵗ` of Section IV | `fdt_store_spacing` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 | `S` | coordinator, Fig. 4 | `fdt_coord_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 | `Bᵗ` store | the newest `Bᵗ` of every vessel, which the coordinator reads | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 | database | the cylinder of Fig. 4: "states and actuation are … stored within a database" | `fdt_db_t`, an append-only file of `Bᵗ`, `Aᵗ`, `gᵗ` per tick | [`db.h`](../include/fleet_dt/db.h) |

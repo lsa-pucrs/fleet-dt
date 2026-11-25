@@ -8,8 +8,11 @@ installed.
     ./examples/daemon
 
 Two boats stepping at 125 ms for 40 frames under a coordinator that computes
-`cᵗ` and distributes `gᵗ`, with a second simulation registered on the same DTE
-tick. The dynamics are a placeholder; the file exists to show the loop and the
+`cᵗ` and distributes `gᵗ`. `cᵗ` is the inter-vessel distance Section IV gives
+as its example, computed over the fleet window of equation (6): the spacing
+from this frame's `Bᵗ` and the closing speed against the oldest `cᵗ` the
+window holds, which set a throttle ceiling. A second simulation shares the
+same DTE tick. The dynamics are a placeholder; the file exists to show the loop and the
 wiring.
 
 Expect `overruns=0` and `feasible=1`. An overrun in a loop this small reports

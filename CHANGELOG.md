@@ -7,6 +7,13 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Added
 
+- Equation (6) over the fleet window: `fdt_fleet_keep_history` keeps past
+  `cᵗ` beside the `Bᵗ` each twin queues; `fdt_fleet_state_at` and
+  `fdt_fleet_ctx_at` read [Fᵗ⁻¹; Fᵗ⁻ⁿ]; `fdt_coord_set_ctx_window` computes
+  `cᵗ` over that window.
+- `fdt_store_spacing`: the inter-vessel distance Section IV gives as the
+  example `cᵗ`. `examples/daemon.c` uses it, with the closing speed over
+  the window, in place of the yaw spread that stood in for it.
 - `fdt_dte_start_parallel` and `fdt_dte_stop_parallel`: the DTE runs its
   simulations in parallel, one POSIX thread each, released together at the
   tick edge and joined before the tick returns, as contribution (ii) of
