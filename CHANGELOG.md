@@ -37,6 +37,13 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Changed
 
+- The MQTT client is the repository's own: MQTT 5.0 over POSIX sockets
+  (`adapters/mqtt/fdt_mqtt_wire.c` encodes and frames the packets,
+  `fdt_mqtt.c` runs the connection: CONNECT, PUBLISH at QoS 0 or 1 with
+  PUBACK, SUBSCRIBE with wildcards, PINGREQ, DISCONNECT). libmosquitto is
+  no longer needed; `make mqtt-test` needs only a `mosquitto` broker, and
+  the MQTT client builds with the other adapters. `tests/test_mqtt_wire.c`
+  checks the packets byte for byte.
 - The WeBots controller drives up to 64 vessels instead of 8, discovered by
   DEF name under the rule of `adapters/webots/fdt_webots_fleet.h`. It times
   the synthetic boats (the in-process injector) apart from the twins and,
