@@ -2,6 +2,7 @@
  * @file two_paths.c
  * @brief The filtered state and the raw actuation path of Section V-A.
  */
+#include <fleet_dt/kalman.h>
 #include <fleet_dt/tick.h>
 #include <fleet_dt/transition.h>
 
@@ -15,16 +16,13 @@
 
 /** Per-vessel context: the filter's state, and the raw input pi decides on. */
 typedef struct {
-    float       estimate_deg;   /**< Kalman posterior for yaw. */
-    float       variance;       /**< Posterior variance. */
-    float       process_var;    /**< Assumed process noise. */
-    float       measure_var;    /**< Assumed measurement noise. */
+    fdt_kf_t    kf;             /**< The operator's Kalman filter. */
     fdt_input_t raw;            /**< The unfiltered I^t of this frame. */
     float       raw_yaw_deg;    /**< Yaw integrated from raw input alone. */
 } vessel_ctx_t;
 
 /**
- * delta^e with a one-dimensional Kalman filter on yaw.
+ * delta^e generating B^t with the Kalman filter of include/fleet_dt/kalman.h.
  */
 static void kalman_delta_e(const fdt_queue_t *q, size_t n,
                            const fdt_input_t *in, const fdt_goal_t *g_prev,
@@ -37,27 +35,14 @@ static void kalman_delta_e(const fdt_queue_t *q, size_t n,
     const fdt_state_t *prev = fdt_window_at(q, n, 0);
     *out = (prev != NULL) ? *prev : (fdt_state_t){0};
 
+    if (in == NULL) {
+        return;
+    }
+    (void)fdt_kf_step(&vc->kf, in, out);
+
     const float dt_s = (float)FDT_TICK_NS / 1e9f;
-    const float rate = (in != NULL) ? in->wz_rps : 0.0f;
-
-    vc->estimate_deg += rate * dt_s * RAD2DEG;
-    vc->variance     += vc->process_var;
-
-    /* Correct: pull toward the heading the magnetometer implies. */
-    if (in != NULL) {
-        const float measured_deg = atan2f(in->my_ut, in->mx_ut) * RAD2DEG;
-        const float gain = vc->variance / (vc->variance + vc->measure_var);
-        vc->estimate_deg += gain * (measured_deg - vc->estimate_deg);
-        vc->variance     *= (1.0f - gain);
-    }
-
-    out->yaw_deg      = vc->estimate_deg;
-    out->yaw_rate_rps = rate;
-
-    if (in != NULL) {
-        vc->raw = *in;
-        vc->raw_yaw_deg += rate * dt_s * RAD2DEG;
-    }
+    vc->raw = *in;
+    vc->raw_yaw_deg += in->wz_rps * dt_s * RAD2DEG;
 }
 
 /**
@@ -81,12 +66,11 @@ int main(void)
 {
     static fdt_state_t queue[QUEUE_CAP];
     fdt_twin_t twin;
-    vessel_ctx_t vc = { .estimate_deg = 0.0f,
-                        .variance     = 1.0f,
-                        .process_var  = 0.05f,
-                        .measure_var  = 4.0f,
-                        .raw          = {0},
-                        .raw_yaw_deg  = 0.0f };
+    static vessel_ctx_t vc;
+    if (fdt_kf_init(&vc.kf, (double)FDT_TICK_NS / 1e9, NULL) != 0) {
+        fprintf(stderr, "filter failed to init\n");
+        return EXIT_FAILURE;
+    }
 
     if (fdt_twin_init(&twin, queue, QUEUE_CAP,
                       kalman_delta_e, raw_path_pi, &vc) != 0) {
@@ -116,10 +100,13 @@ int main(void)
                                         (double)FDT_TICK_NS / 1e9) * RAD2DEG;
         const float noise = (float)(2.5 * sin(t * 2.7) + 1.5 * sin(t * 0.9));
 
+        /* A level hull turning in place: gravity on -z, a 23 uT field
+         * pointing north seen in the body frame, the magnetometer noisy. */
         fdt_input_t in = {0};
-        in.wz_rps = turn_rate;
-        in.mx_ut  = cosf((heading + noise) / RAD2DEG) * 23.0f;
-        in.my_ut  = sinf((heading + noise) / RAD2DEG) * 23.0f;
+        in.wz_rps  = turn_rate;
+        in.az_mps2 = -9.80665f;
+        in.mx_ut   = cosf((heading + noise) / RAD2DEG) * 23.0f;
+        in.my_ut   = -sinf((heading + noise) / RAD2DEG) * 23.0f;
 
         fdt_state_t b;
         fdt_actuation_t a;
