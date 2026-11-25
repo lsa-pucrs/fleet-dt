@@ -27,3 +27,6 @@ tools/worldgen/wbtgen
 
 # Editor and agent scratch
 .idea/
+
+# Scratch file of tests/test_db.c, removed by the test itself.
+fleet_dt_test_db.tmp

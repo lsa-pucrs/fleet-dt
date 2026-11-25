@@ -7,6 +7,12 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Added
 
+- `fdt_db_t` (`include/fleet_dt/db.h`): the database of Figure 4, where
+  states and actuation are stored. An append-only file of `Bᵗ`, `Aᵗ` and
+  `gᵗ` records with a CRC-32 each; the reader keeps everything before a
+  torn tail. It grows by 23,040 B of states per minute per vessel, the
+  figure of Section IV, while the in-memory queue stays bounded.
+  `examples/daemon.c` writes it when `FDT_DB` names a file.
 - `fdt_predict` (`include/fleet_dt/predict.h`): the time-series estimator
   x̂ₖ₊d = f(xₖ, …, xₖ₋ₙ₊₁) of Section IV and backup slide 6, a least-squares
   polynomial of degree 0 to 2 per field of `Bᵗ`, angles unwrapped.

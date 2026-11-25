@@ -5,6 +5,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <fleet_dt/coordinator.h>
+#include <fleet_dt/db.h>
 #include <fleet_dt/dte.h>
 #include <fleet_dt/feasibility.h>
 #include <fleet_dt/predict.h>
@@ -179,6 +180,15 @@ int main(void)
 
     fdt_feas_init(&g_feas, FDT_TICK_NS);
 
+    /* Figure 4: states and actuation are stored within a database. */
+    fdt_db_t db = {0};
+    const char *db_path = getenv("FDT_DB");
+    const int logging = (db_path != NULL && db_path[0] != '\0');
+    if (logging && fdt_db_open(&db, db_path) != 0) {
+        fprintf(stderr, "cannot open the database %s\n", db_path);
+        return EXIT_FAILURE;
+    }
+
     fdt_tick_t tk;
     fdt_tick_start(&tk, FDT_TICK_NS);
 
@@ -198,6 +208,12 @@ int main(void)
         }
 
         (void)fdt_dte_tick(&dte);
+
+        if (logging &&
+            fdt_db_put_frame(&db, (uint32_t)frame, bs, as, NBOATS) != 0) {
+            fprintf(stderr, "database write failed at frame %d\n", frame);
+            return EXIT_FAILURE;
+        }
 
         printf("%-4d %7.2f %7.2f %+7.3f      %7.2f %7.2f %+7.3f      %7.3f\n",
                frame,
@@ -220,6 +236,13 @@ int main(void)
            fdt_queue_bytes(QUEUE_CAP));
     printf("DTE ticks=%zu  parallel simulations=%zu  fluid stub ran %u times\n",
            fdt_dte_ticks(&dte), fdt_dte_count(&dte), fluid_ticks);
+
+    if (logging) {
+        printf("database %s: %llu records, %llu B of B^t and A^t\n", db_path,
+               (unsigned long long)db.records,
+               (unsigned long long)db.payload_bytes);
+        (void)fdt_db_close(&db);
+    }
 
     return EXIT_SUCCESS;
 }

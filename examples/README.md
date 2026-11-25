@@ -25,6 +25,9 @@ boat (talk, backup slide 6), and `π` steers on x̂ₖ₊d rather than on `Bᵗ`
 is therefore seeded four times before the first step, because equation (3)
 needs the queue to already hold `n` states.
 
+`FDT_DB=fleet.db ./examples/daemon` also stores every `Bᵗ` and `Aᵗ` in the
+database of Figure 4 ([`db.h`](../include/fleet_dt/db.h)).
+
 `queue bytes per vessel=768` is `48 × 16`: the `48d` bound of Section IV at
 this example's capacity.
 
