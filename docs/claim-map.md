@@ -82,7 +82,7 @@ present, and writes the coverage table of
 |---|---|---|
 | C20 | "Due to the size of packets (48 KB payload plus camera feed frame), the bandwidth usage increased < 1% for an update window of 125 ms" | `tools/bench/bench_bandwidth.c` |
 | C21 | "MQTT introduced no notable latency, nor did WeBots' visual feedback (3D model) suffer from stuttering" | `tools/bench/bench_jitter.c` |
-| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | `tools/bench/bench_webots_cpu.c` over three worlds that differ only in vessel count |
+| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | `tools/bench/bench_webots_cpu.c` over worlds of 0 to 60 vessels (`make webots-worlds`), one core, rendering off; the slope of a least-squares fit is the cost per added twin, and the synthetic boats' CPU is subtracted |
 | C23 | "Running δ in less than 125 ms is feasible. However, actuation is delivered late to the boat, as it has to travel back through the network" | two measurements: δ time in `feasibility`, round trip in `bench_latency.c` |
 | C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | `examples/daemon.c`, window depth 4 |
 | C25 | "the resources required to add more DTIs to the fleet are negligible (< 1% CPU usage per DTI)" | `tools/bench/bench_scale.c` |
