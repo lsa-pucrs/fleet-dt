@@ -28,10 +28,12 @@ mismatch, and this table gets re-checked.
 | feasibility | δ inside \|t_k − t_{k−1}\| | `fdt_feas_t` | [`feasibility.h`](../include/fleet_dt/feasibility.h) |
 | `Fᵗ` | fleet, eq. (4) | `fdt_fleet_t` | [`fleet.h`](../include/fleet_dt/fleet.h) |
 | Δ | fleet transition, eq. (5) | `fdt_fleet_step` | [`fleet.c`](../src/fleet.c) |
-| Δᵉ | extended fleet transition, eq. (6) | `fdt_fleet_step` with `n > 1` | [`fleet.c`](../src/fleet.c) |
-| `cᵗ` | fleet context, eq. (4) | `fdt_fleet_t.ctx`, delivered to every δᵉ and every π | [`fleet.h`](../include/fleet_dt/fleet.h) |
+| Δᵉ | extended fleet transition, eq. (6), over [Fᵗ⁻¹; Fᵗ⁻ⁿ] | `fdt_fleet_step` with `n > 1` for `Bᵗ`; `fdt_coord_set_ctx_window` for `cᵗ`, reading `fdt_fleet_state_at` and `fdt_fleet_ctx_at` | [`fleet.h`](../include/fleet_dt/fleet.h), [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| `cᵗ` | fleet context, eq. (4) | `fdt_fleet_t.ctx`, delivered to every δᵉ and every π; its history in `fdt_fleet_keep_history` | [`fleet.h`](../include/fleet_dt/fleet.h) |
+| "inter-vessel distance" | the example `cᵗ` of Section IV | `fdt_store_spacing` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 | `S` | coordinator, Fig. 4 | `fdt_coord_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
-| `Bᵗ` database | the cylinder of Fig. 4 | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| `Bᵗ` store | the newest `Bᵗ` of every vessel, which the coordinator reads | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| database | the cylinder of Fig. 4: "states and actuation are … stored within a database" | `fdt_db_t`, an append-only file of `Bᵗ`, `Aᵗ`, `gᵗ` per tick | [`db.h`](../include/fleet_dt/db.h) |
 | Δt | frame period, 125 ms | `FDT_TICK_NS` | [`tick.h`](../include/fleet_dt/tick.h) |
 | φ, λ onto metres | local tangent plane | `fdt_geo_offset` | [`geo.h`](../include/fleet_dt/geo.h) |
 
@@ -51,7 +53,7 @@ mismatch, and this table gets re-checked.
 | WeBots module running δ | the DTI inside the VE | controller `main` | [`fdt_controller.c`](../adapters/webots/controllers/fdt_controller/fdt_controller.c) |
 | 3D model in a WeBots world | the VE of Section III | `DEF PINTADO`, `DEF TILAPIA` | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
 | fluid simulator | sharing the DTE | `Fluid` node | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
-| DTE with parallel simulations | one tick, many simulations | `fdt_dte_t` | [`dte.h`](../include/fleet_dt/dte.h) |
+| DTE with parallel simulations | one tick, many simulations, one thread each | `fdt_dte_t`, `fdt_dte_start_parallel` | [`dte.h`](../include/fleet_dt/dte.h) |
 | MCS | out of scope, per Section IV | goal source in `fdt_plan_fn` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
 
 ## Section V, the validation
@@ -63,7 +65,8 @@ mismatch, and this table gets re-checked.
 | under 1 % CPU per DTI | scaling | [`bench_scale.c`](../tools/bench/bench_scale.c) |
 | bandwidth increase | link budget | [`bench_bandwidth.c`](../tools/bench/bench_bandwidth.c) |
 | δ feasible, actuation late | two measurements | [`bench_latency.c`](../tools/bench/bench_latency.c) |
-| Kalman for `Bᵢᵗ`, raw `Iᵢᵗ` for actuation | two paths | [`examples/two_paths.c`](../examples/two_paths.c) |
+| Kalman for `Bᵢᵗ`, raw `Iᵢᵗ` for actuation | two paths | [`kalman.h`](../include/fleet_dt/kalman.h), [`examples/two_paths.c`](../examples/two_paths.c) |
+| "estimating techniques based on temporal series" (Sec. IV); x̂ₖ₊d (talk, backup slide 6) | the state when the command lands | [`predict.h`](../include/fleet_dt/predict.h), [`examples/daemon.c`](../examples/daemon.c) |
 
 ## Where the API differs in shape from the equations
 
