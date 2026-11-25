@@ -33,7 +33,9 @@ TOOLOBJ = $(TOOLSRC:.c=.o)
 # Adapters with no external dependency: the Ardupilot ingest mapping and the
 # HSDT camera boundary. Those that do need an SDK -- MQTT, WeBots -- live
 # behind their own targets further down.
-ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/rtsp/fdt_rtsp_fake.c
+ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/mavlink/fdt_mavlink_wire.c \
+           adapters/mavlink/fdt_mavlink_udp.c \
+           adapters/rtsp/fdt_rtsp_fake.c
 ADAPTOBJ = $(ADAPTSRC:.c=.o)
 
 TESTSRC = $(wildcard tests/test_*.c)

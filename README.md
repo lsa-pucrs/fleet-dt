@@ -54,7 +54,7 @@ Requires `gcc`, `make`, and glibc. The pacer calls POSIX.1-2008
 | `tools/injector/` | the synthetic telemetry injectors of Section V-B |
 | `tools/bench/` | the measurement campaign |
 | `tools/report/` | the claim map and the results assembly |
-| `adapters/` | Ardupilot ingest, the camera boundary, MQTT, and the WeBots project: world, hull meshes, and the controller running δ |
+| `adapters/` | the Ardupilot link (MAVLink framing and UDP, the repository's own), the camera boundary, MQTT, and the WeBots project: world, hull meshes, and the controller running δ |
 | `config/mosquitto/` | the bridge-mode broker configuration of Section III |
 | `docs/` | the paper-to-code map, the claim map, the generated results |
 
