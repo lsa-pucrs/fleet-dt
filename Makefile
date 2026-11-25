@@ -18,7 +18,8 @@ CC      = gcc
 # exactly like a change that did not work.
 CFLAGS  = -std=c18 -Wall -Wextra -Werror -pedantic-errors -O2 -MMD -MP \
           -Iinclude -Itools -Iadapters
-LDLIBS  = -lm
+# The DTE runs its simulations on POSIX threads (Section I, contribution ii).
+LDLIBS  = -lm -pthread
 
 LIB     = libfleetdt.a
 LIBSRC  = $(wildcard src/*.c)

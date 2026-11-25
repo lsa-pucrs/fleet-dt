@@ -7,6 +7,11 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Added
 
+- `fdt_dte_start_parallel` and `fdt_dte_stop_parallel`: the DTE runs its
+  simulations in parallel, one POSIX thread each, released together at the
+  tick edge and joined before the tick returns, as contribution (ii) of
+  Section I states. `examples/daemon.c` runs its fluid stub that way. The
+  build links `-pthread`.
 - `fdt_db_t` (`include/fleet_dt/db.h`): the database of Figure 4, where
   states and actuation are stored. An append-only file of `Bᵗ`, `Aᵗ` and
   `gᵗ` records with a CRC-32 each; the reader keeps everything before a
