@@ -7,6 +7,15 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Added
 
+- The Ardupilot link of Figure 3, without a MAVLink library:
+  `adapters/mavlink/fdt_mavlink_wire.c` frames MAVLink 1 and 2 (CRC-16
+  with CRC_EXTRA, signed frames, trailing-zero truncation), folds
+  SCALED_IMU2, GPS_RAW_INT, LOCAL_POSITION_NED, SCALED_PRESSURE and
+  BATTERY_STATUS into `Iᵗ`, and encodes `Aᵗ` as RC_CHANNELS_OVERRIDE
+  (Rover: steering on channel 1, throttle on 3) and a ground-station
+  HEARTBEAT. `fdt_mavlink_udp.c` runs it over UDP, answering the address
+  the autopilot spoke from. `tests/test_mavlink_wire.c` checks it against
+  frames pymavlink produced, and over loopback UDP.
 - Equation (6) over the fleet window: `fdt_fleet_keep_history` keeps past
   `cᵗ` beside the `Bᵗ` each twin queues; `fdt_fleet_state_at` and
   `fdt_fleet_ctx_at` read [Fᵗ⁻¹; Fᵗ⁻ⁿ]; `fdt_coord_set_ctx_window` computes

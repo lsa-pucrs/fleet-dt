@@ -31,10 +31,12 @@ LIBOBJ  = $(LIBSRC:.c=.o)
 TOOLSRC = tools/injector/injector.c tools/worldgen/worldgen.c
 TOOLOBJ = $(TOOLSRC:.c=.o)
 
-# Adapters with no external dependency: the Ardupilot ingest mapping and the
-# HSDT camera boundary. Those that do need an SDK -- MQTT, WeBots -- live
-# behind their own targets further down.
-ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/rtsp/fdt_rtsp_fake.c \
+# Adapters with no external dependency: the Ardupilot link (MAVLink framing
+# and UDP), the HSDT camera boundary and the MQTT 5.0 client. WeBots, which
+# needs its SDK, lives behind its own target further down.
+ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/mavlink/fdt_mavlink_wire.c \
+           adapters/mavlink/fdt_mavlink_udp.c \
+           adapters/rtsp/fdt_rtsp_fake.c \
            adapters/mqtt/fdt_mqtt.c adapters/mqtt/fdt_mqtt_wire.c
 ADAPTOBJ = $(ADAPTSRC:.c=.o)
 

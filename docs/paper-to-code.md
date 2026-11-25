@@ -50,6 +50,7 @@ mismatch, and this table gets re-checked.
 | LSDT | small packets on MQTT | `fdt_stream_t` profiles | [`bench_bandwidth.c`](../tools/bench/bench_bandwidth.c) |
 | HSDT | camera feed, off MQTT | `fdt_rtsp_t` | [`fdt_rtsp.h`](../adapters/rtsp/fdt_rtsp.h) |
 | Ardupilot / NAVIO2 | sensor source | `fdt_mav_ingest_t` | [`fdt_mavlink.h`](../adapters/mavlink/fdt_mavlink.h) |
+| Ardupilot link of Fig. 3 | MAVLink in (`Iᵗ`), RC override out (`Aᵗ`) | `fdt_mav_parse`, `fdt_mav_dispatch`, `fdt_mav_enc_rc_override`, over UDP in `fdt_mav_udp_t` | [`fdt_mavlink_wire.h`](../adapters/mavlink/fdt_mavlink_wire.h), [`fdt_mavlink_udp.h`](../adapters/mavlink/fdt_mavlink_udp.h) |
 | WeBots module running δ | the DTI inside the VE | controller `main` | [`fdt_controller.c`](../adapters/webots/controllers/fdt_controller/fdt_controller.c) |
 | 3D model in a WeBots world | the VE of Section III | `DEF PINTADO`, `DEF TILAPIA` | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
 | fluid simulator | sharing the DTE | `Fluid` node | [`jundia_fleet.wbt`](../adapters/webots/worlds/jundia_fleet.wbt) |
