@@ -29,8 +29,10 @@ transition and decision functions, the fleet aggregate, the coordinator, the
 model. The application supplies the dynamics.
 
 The library has no external dependency. `make lib` and `make test` run on a
-bare toolchain. The MQTT and WeBots adapters need an SDK, so each one sits
-behind its own target and prints a notice when the SDK is absent.
+bare toolchain. The MQTT client is the repository's own, over POSIX sockets;
+`make mqtt-test` needs only a `mosquitto` broker to talk to. The WeBots
+adapter needs the simulator's SDK, so it sits behind its own target and
+prints a notice when the SDK is absent.
 
     make            # library, tests, examples, benchmarks, report
     make test       # every published figure of the paper, checked
@@ -39,7 +41,7 @@ behind its own target and prints a notice when the SDK is absent.
     make syntax     # type-check the SDK adapters against stubs
 
     make webots     # the simulation; needs WEBOTS_HOME
-    make mqtt-test  # a round trip through a real broker; needs libmosquitto
+    make mqtt-test  # a round trip through two real brokers; needs mosquitto
 
 Requires `gcc`, `make`, and glibc. The pacer calls POSIX.1-2008
 `clock_nanosleep` with `TIMER_ABSTIME`, which Apple libc does not provide.

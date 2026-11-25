@@ -33,7 +33,8 @@ TOOLOBJ = $(TOOLSRC:.c=.o)
 # Adapters with no external dependency: the Ardupilot ingest mapping and the
 # HSDT camera boundary. Those that do need an SDK -- MQTT, WeBots -- live
 # behind their own targets further down.
-ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/rtsp/fdt_rtsp_fake.c
+ADAPTSRC = adapters/mavlink/fdt_mavlink.c adapters/rtsp/fdt_rtsp_fake.c \
+           adapters/mqtt/fdt_mqtt.c adapters/mqtt/fdt_mqtt_wire.c
 ADAPTOBJ = $(ADAPTSRC:.c=.o)
 
 TESTSRC = $(wildcard tests/test_*.c)
@@ -55,8 +56,6 @@ MQTT_IT_PORT = 18830
 
 # Adapters needing a third-party SDK. Each skips with a notice rather than
 # failing the build, so a reader without the SDK still gets a green tree.
-MOSQ_CFLAGS = $(shell pkg-config --cflags libmosquitto 2>/dev/null)
-MOSQ_LIBS   = $(shell pkg-config --libs libmosquitto 2>/dev/null)
 
 all: lib test examples bench syntax report
 
@@ -93,38 +92,30 @@ bench: $(BENCHBIN)
 # the only thing that can catch a wrong assumption about the API.
 syntax:
 	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
-	  adapters/mqtt/fdt_mqtt.c && echo "syntax ok: adapters/mqtt"
-	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
 	  adapters/webots/controllers/fdt_controller/fdt_controller.c && \
 	  echo "syntax ok: adapters/webots"
-	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only tests/it_mqtt.c && \
+	@$(CC) $(CFLAGS) -fsyntax-only tests/it_mqtt.c && \
 	  echo "syntax ok: tests/it_mqtt.c"
 
-mqtt: $(LIB)
-	@if [ -z "$(MOSQ_LIBS)" ]; then \
-	  echo "libmosquitto not found; skipping the MQTT transport."; \
-	  echo "  install it with: dnf install mosquitto-devel"; \
-	else \
-	  $(CC) $(CFLAGS) $(MOSQ_CFLAGS) -c adapters/mqtt/fdt_mqtt.c \
-	    -o adapters/mqtt/fdt_mqtt.o && \
-	  ar rcs libfleetdt_mqtt.a adapters/mqtt/fdt_mqtt.o && \
-	  echo "built libfleetdt_mqtt.a"; \
-	fi
+# The MQTT client is the repository's own (adapters/mqtt/fdt_mqtt_wire.c and
+# fdt_mqtt.c, over POSIX sockets) and builds with every other adapter. This
+# target stays for the scripts that call it.
+mqtt: $(LIB) $(ADAPTOBJ)
+	@echo "the MQTT client is built with the adapters; no library needed"
 
-# Integration check for the MQTT adapter: needs libmosquitto and a broker.
-# Kept out of `make test` so the unit suite stays dependency-free. It starts
+# Integration check for the MQTT client: needs a mosquitto broker on PATH,
+# the broker the paper names. Kept out of `make test` so the unit suite
+# needs no running service. It starts
 # two brokers, ground and boat, joined by the bridge rules of
 # config/mosquitto/boat.conf, and runs the regulated path across them.
 MQTT_IT_BOAT_PORT = 18831
 
-mqtt-test: mqtt
-	@if [ -z "$(MOSQ_LIBS)" ]; then \
-	  echo "libmosquitto not found; skipping the MQTT integration check."; \
-	elif ! command -v mosquitto >/dev/null 2>&1; then \
+mqtt-test: $(LIB) $(ADAPTOBJ)
+	@if ! command -v mosquitto >/dev/null 2>&1; then \
 	  echo "no mosquitto broker on PATH; skipping the integration check."; \
 	else \
-	  $(CC) $(CFLAGS) $(MOSQ_CFLAGS) tests/it_mqtt.c \
-	    libfleetdt_mqtt.a $(LIB) $(MOSQ_LIBS) $(LDLIBS) -o fleet_dt_it_mqtt && \
+	  $(CC) $(CFLAGS) tests/it_mqtt.c \
+	    $(ADAPTOBJ) $(LIB) $(LDLIBS) -o fleet_dt_it_mqtt && \
 	  { echo "listener $(MQTT_IT_PORT) 127.0.0.1"; \
 	    echo "allow_anonymous true"; \
 	    echo "pid_file /tmp/fleet-dt-it.pid"; } > /tmp/fleet-dt-it.conf && \
@@ -173,8 +164,7 @@ report: tools/report/report
 clean:
 	rm -f $(LIBOBJ:.o=.d) $(TOOLOBJ:.o=.d) $(ADAPTOBJ:.o=.d)
 	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
-	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
-	      adapters/mqtt/fdt_mqtt.o fleet_dt_it_mqtt \
+	      $(BENCHBIN) tools/report/report fleet_dt_it_mqtt \
 	      adapters/webots/controllers/fdt_controller/fdt_controller
 	rm -rf $(RESULTS)/selftest
 # results/ itself is NOT removed. It is committed, so that the charts in

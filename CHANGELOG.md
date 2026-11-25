@@ -7,6 +7,14 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Changed
 
+- The MQTT client is the repository's own: MQTT 5.0 over POSIX sockets
+  (`adapters/mqtt/fdt_mqtt_wire.c` encodes and frames the packets,
+  `fdt_mqtt.c` runs the connection: CONNECT, PUBLISH at QoS 0 or 1 with
+  PUBACK, SUBSCRIBE with wildcards, PINGREQ, DISCONNECT). libmosquitto is
+  no longer needed; `make mqtt-test` needs only a `mosquitto` broker, and
+  the MQTT client builds with the other adapters. `tests/test_mqtt_wire.c`
+  checks the packets byte for byte.
+
 - The bandwidth regulators sit in the data path, in the boat broker where
   Section III and the talk (slides 7, 12 and 13) put them. The autopilot
   publishes every sample on `fleet/<v>/raw/<sensor>`; `fdt_relay_t`, an MQTT
