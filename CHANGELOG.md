@@ -5,6 +5,14 @@ this project adheres to [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `fdt_dte_start_parallel` and `fdt_dte_stop_parallel`: the DTE runs its
+  simulations in parallel, one POSIX thread each, released together at the
+  tick edge and joined before the tick returns, as contribution (ii) of
+  Section I states. `examples/daemon.c` runs its fluid stub that way. The
+  build links `-pthread`.
+
 ### Changed
 
 - The bandwidth regulators sit in the data path, in the boat broker where

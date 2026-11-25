@@ -147,7 +147,8 @@ int main(void)
     fdt_sim_slot_t sim_slots[2];
     fdt_dte_t dte;
     if (fdt_dte_init(&dte, sim_slots, 2) != 0 ||
-        fdt_dte_register(&dte, "fluid", fluid_stub, &fluid_ticks) != 0) {
+        fdt_dte_register(&dte, "fluid", fluid_stub, &fluid_ticks) != 0 ||
+        fdt_dte_start_parallel(&dte) != 0) {
         fprintf(stderr, "DTE wiring failed\n");
         return EXIT_FAILURE;
     }
@@ -204,6 +205,7 @@ int main(void)
            fdt_queue_bytes(QUEUE_CAP));
     printf("DTE ticks=%zu  parallel simulations=%zu  fluid stub ran %u times\n",
            fdt_dte_ticks(&dte), fdt_dte_count(&dte), fluid_ticks);
+    (void)fdt_dte_stop_parallel(&dte);
 
     return EXIT_SUCCESS;
 }

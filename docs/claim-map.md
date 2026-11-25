@@ -52,7 +52,7 @@ present, and writes the coverage table of
 | id | Claim | Where it lives |
 |---|---|---|
 | C6 | "(i) it models fleets as a DTA composed of DTIs per-vessel" | `fdt_fleet_t` over `fdt_twin_t` |
-| C7 | "(ii) it supports running multiple simulations in parallel in the same DTE" | `src/dte.c`, simulations bound to one tick |
+| C7 | "(ii) it supports running multiple simulations in parallel in the same DTE" | `src/dte.c`: one POSIX thread per simulation (`fdt_dte_start_parallel`), released at the tick edge and joined before the tick returns; `tests/test_dte.c` times three 20 ms simulations at 60 ms in sequence and 20 ms in parallel |
 | C8 | "(iii) it provides a near-real-time 3D visual reference for the mission operator" | the WeBots world rendered in `--mode=realtime`, the controller writing pose every 125 ms |
 
 ## C. The architecture of Section III
