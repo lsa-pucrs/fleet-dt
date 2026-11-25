@@ -7,6 +7,16 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Changed
 
+- The WeBots controller drives up to 64 vessels instead of 8, discovered by
+  DEF name under the rule of `adapters/webots/fdt_webots_fleet.h`. It times
+  the synthetic boats (the in-process injector) apart from the twins and,
+  when `FDT_CPU_REPORT` names a file, writes both shares there.
+- `bench_webots_cpu` sweeps 0 to 60 boats as slide 14 does: one core
+  (`FDT_CPU_CORE`), rendering off, the injector's CPU subtracted, and a
+  least-squares slope for the cost per added twin. It prints the worst
+  update of all twins against the 36 µs of slide 14 and writes
+  `results/webots_update.*`.
+
 - The bandwidth regulators sit in the data path, in the boat broker where
   Section III and the talk (slides 7, 12 and 13) put them. The autopilot
   publishes every sample on `fleet/<v>/raw/<sensor>`; `fdt_relay_t`, an MQTT
@@ -39,6 +49,14 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Added
 
+- The TILAPIA hull model (`adapters/webots/3d_models/tilapia/`), exported
+  from the LSA's model of the vessel, replaces the `drone_boat` render mesh
+  in every world; the collision mesh is unchanged. `docs/simulation.jpg`
+  shows it.
+- `tools/worldgen/` and `make webots-worlds`: WeBots worlds with 5 to 60
+  hulls, generated from `jundia_fleet.wbt` for the slide 14 sweep.
+  `tests/test_world.c` checks the naming rule and the generated worlds from
+  1 to 64 vessels.
 - `fdt_relay_t`, the regulator of the boat broker, and `tests/test_relay.c`.
 - `fdt_rx_t`, the twin side of the regulated link: rebuilds `Iᵗ` from the
   per-sensor messages and counts partial, double and stale updates.
