@@ -101,6 +101,12 @@ A benchmark times the machine that runs it, and Section V timed a different
 machine. Each comparison therefore prints three fields: the value measured
 here, the figure the paper publishes, and which of the two the line reports.
 
+Some lines compare against the talk given at ICECS 2026 (Thessaloniki,
+8 to 11 November 2026) instead of the paper. Those lines name the slide
+("slide 13", "backup 8") and mark a match as `[matches slides]`, so a slide
+figure never passes for a paper figure. The slides are not in this
+repository.
+
 ## Origin
 
 Parts of this repository come from `lsa-pucrs/boat-digital-twin` (MIT), by

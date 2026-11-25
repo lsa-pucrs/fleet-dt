@@ -76,21 +76,22 @@ of this repository.
 ```
 == fleet-dt bandwidth regulator bench ==
 fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
-DT rate: 8 Hz   samples per sensor: 20000
+DT rate: 8 Hz   ticks per sensor: 2500 (312.5 s)
+regulator: newest sample held, released at the tick edge (slide 8)
 
 --- per sensor rate ---
-   sensor Hz published Hz   control Hz      saved    verdict
-           1         1.00            1       0.0 %  untouched
-           2         2.00            2       0.0 %  untouched
-           4         4.00            4       0.0 %  untouched
-           8         8.00            8       0.0 %  untouched
-          10         8.00           10      20.0 %  decimated
-          20         8.00           20      60.0 %  decimated
-          50         8.00           50      84.0 %  decimated
-         100         7.99          100      92.0 %  decimated
-         200         8.00          200      96.0 %  decimated
-         400         8.00          400      98.0 %  decimated
-        1000         8.00         1000      99.2 %  decimated
+   sensor Hz published Hz   control Hz      saved  age at edge    verdict
+           1         1.00            1       0.0 %      0.00 ms  untouched
+           2         2.00            2       0.0 %      0.00 ms  untouched
+           4         4.00            4       0.0 %      0.00 ms  untouched
+           8         8.00            8       0.0 %      0.00 ms  untouched
+          10         8.00           10      20.0 %     37.50 ms  decimated
+          20         8.00           20      60.0 %     12.50 ms  decimated
+          50         8.00           50      84.0 %      7.50 ms  decimated
+         100         8.00          100      92.0 %      2.50 ms  decimated
+         200         8.00          200      96.0 %      0.00 ms  decimated
+         400         8.00          400      98.0 %      0.00 ms  decimated
+        1000         8.00         1000      99.2 %      0.00 ms  decimated
 
 --- the two halves of the Section III claim ---
   publication decimated      8.00 Hz from 1000 Hz   paper: drops samples in the MQTT client   [matches paper]
@@ -102,6 +103,9 @@ DT rate: 8 Hz   samples per sensor: 20000
   directly keeps its full rate. A regulator that slowed the sensor
   would buy bandwidth by degrading control, which is the opposite of
   the QoS the abstract claims.
+  At each 125 ms edge the regulator releases the newest sample it
+  holds (slide 8), so the age column is how stale that sample is
+  when it leaves: 0 for a sensor whose samples land on the edge.
 
 artefacts: results/regulator.txt, results/regulator.csv, results/regulator.svg
 artefacts: results/regulator_saved.svg
@@ -150,6 +154,22 @@ link: 100 Mbps nominal (Sec. III)   DT rate: 8 Hz
   vessels within 50 % of the link : 15 (13 once 20 % framing overhead is charged)
   fleet the link supports    15 vessels             paper: 25-boat run was injector-bound     [matches paper]
 
+--- measured on the regulated client, one boat (slide 13) ---
+  sensors: IMU 1000 Hz, barometer 50 Hz, GPS 10 Hz, power 10 Hz; 8 s
+                  msg/s     app (Mbps) MQTT v5 (Mbps)
+  raw              1070         0.4307         0.6282
+  regulated          32         0.0090         0.0150
+  messages per boat          1070 -> 32 msg/s       slide 13: 1070 -> 32 msg/s                [matches slides]
+  message reduction          33.4x fewer            slide 13: 33x fewer messages              [matches slides]
+  traffic per boat           0.628 -> 0.0150 Mbps   slide 13: 0.68 -> 0.012 Mbps              [this host]
+  traffic removed            97.6 % less            slide 13: 98 % less traffic               [matches slides]
+  25 boats, link share       15.7 % -> 0.38 % of link backup 8: 17 % -> 0.3 %                   [this host]
+  The message counts follow from the sensor rates alone, so they
+  land on the slide exactly. The bit rates depend on the bytes
+  per message: this count charges the envelope, the payload and
+  the MQTT v5 PUBLISH header, not TCP, IP or Wi-Fi framing, and
+  the slide measured a byte counter on a Mosquitto bridge.
+
 artefacts: results/bandwidth.txt, results/bandwidth.csv, results/bandwidth.svg
 artefacts: results/bandwidth_fleet.svg
 ```
@@ -169,19 +189,23 @@ frames per size: 200   window depth: 4   queue capacity: 8
 
 --- per fleet size ---
    vessels   delta worst    delta mean     cpu/DTI     inj/frame   feasible
-         1        0.4 us        0.1 us    16.680 %        0.2 us        yes
-         2        0.1 us        0.1 us     9.272 %        0.3 us        yes
-         4        0.2 us        0.1 us     4.083 %        0.6 us        yes
-         8        1.5 us        0.2 us     1.768 %        1.4 us        yes
-        16        0.5 us        0.4 us     0.743 %        3.1 us        yes
-        25        1.3 us        0.5 us     0.445 %        3.7 us        yes
-        32        0.8 us        0.6 us     0.334 %        5.0 us        yes
-        48        1.4 us        1.0 us     0.210 %        9.0 us        yes
-        64        1.8 us        1.3 us     0.128 %       14.4 us        yes
+         1        1.0 us        0.0 us   3.5e-05 %        5.4 us        yes
+         2        0.2 us        0.1 us   2.3e-05 %       10.9 us        yes
+         4        0.2 us        0.1 us   1.9e-05 %       21.4 us        yes
+         8        0.4 us        0.2 us   1.8e-05 %       44.3 us        yes
+        16        0.7 us        0.3 us   1.6e-05 %       89.6 us        yes
+        25        0.6 us        0.5 us   1.7e-05 %      140.5 us        yes
+        32        2.4 us        0.7 us   1.7e-05 %      180.2 us        yes
+        48        3.0 us        1.0 us   1.7e-05 %      271.2 us        yes
+        64        1.4 us        1.3 us   1.6e-05 %      361.8 us        yes
 
 --- DTI side, what Section V-B calls negligible ---
-  cpu per DTI                0.1283 %               paper: < 1 %                              [matches paper]
-  worst delta, 64 vessels    1.8 us                 paper: < 125 ms deadline                  [matches paper]
+  cpu per DTI                1.6e-05 % of a core    paper: < 1 %                              [matches paper]
+  CPU per DTI is delta time per vessel per tick over the 125 ms
+  period: the share of one core a DTI takes at 8 Hz. It counts the
+  model only. Section V-A measured the whole WeBots process, which
+  bench_webots_cpu covers.
+  worst delta, 64 vessels    1.4 us                 paper: < 125 ms deadline                  [matches paper]
   DTI ceiling here           >= 64 vessels          paper: not the paper's 25                 [matches paper]
 
 --- injector side, the ceiling Section V-B reached ---
@@ -200,14 +224,17 @@ frames per size: 200   window depth: 4   queue capacity: 8
   sweep above reports zeros by construction. This row injects the
   two link conditions Section V-B describes: a packet that never
   arrives, and a packet the network stack holds into the following
-  frame.
+  frame. Each boat publishes one message per sensor per tick, so a
+  lost message leaves that boat partially updated, and a held one
+  lands beside the next tick's and updates its sensor twice.
 
-  16 vessels, drop 1 in 61, defer 1 in 43, 200 frames
-    partial frames : 106 of 200
-    double updates : 72
+  16 vessels, drop 1 in 241, defer 1 in 173, 200 frames
+    partial frames : 109 of 200
+    partial boats  : 125 boat-frames missing a sensor
+    double updates : 73 boat-frames with a sensor twice
     stale packets  : 0
     delta worst    : 0.9 us   feasible: yes
-  partial and double updates 106 partial, 72 double paper: some boats, not every frame        [matches paper]
+  partial and double updates 109 partial, 73 double paper: some boats, not every frame        [matches paper]
   Stale packets stay at 0 here, because the deferral preserves
   order: a held packet is delivered at the head of the next poll,
   so it still arrives before the fresher one behind it. It lands in
@@ -236,12 +263,12 @@ fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
 transport: in-process loopback   vessels: 4   frames: 400
 
 --- measurement 1, delta compute time (Section IV) ---
-  p50     0.09 us   p95     0.09 us   p99     0.11 us   worst     0.43 us
+  p50     0.08 us   p95     0.10 us   p99     0.15 us   worst     0.43 us
   delta under the deadline   0.43 us worst          paper: delta in less than 125 ms is feasible [matches paper]
 
 --- measurement 2, actuation round trip (Section V-A) ---
   I^t published -> A^t delivered
-  p50     1.21 us   p95     1.29 us   p99     1.44 us   worst    10.42 us
+  p50     2.35 us   p95     3.63 us   p99     4.93 us   worst    27.10 us
   round trip over a network  not measured here      paper: actuation is delivered late        [external system]
   This run uses the in-process loopback, so the round trip carries
   no network. Section V-A's observation is about a real link, and
@@ -252,7 +279,7 @@ transport: in-process loopback   vessels: 4   frames: 400
 
 --- why they are not one number ---
   delta worst    :     0.43 us  (compute)
-  round trip p50 :     1.21 us  (compute + transport)
+  round trip p50 :     2.35 us  (compute + transport)
   The second contains the first. Adding them would count
   the compute twice.
 
@@ -274,10 +301,10 @@ vessels: 8   frames: 80   period: 125 ms   (about 10 s of wall clock)
 
 --- frame period held under a stepping fleet ---
   mean period      :  125.000 ms
-  |deviation| p50  :    0.016 ms
-  |deviation| p95  :    0.078 ms
-  |deviation| p99  :    0.461 ms
-  |deviation| worst:    0.488 ms
+  |deviation| p50  :    0.001 ms
+  |deviation| p95  :    0.053 ms
+  |deviation| p99  :    0.061 ms
+  |deviation| worst:    0.062 ms
   pacer overruns   :        0
   mean frame period          125.000 ms             paper: 125 ms, 8 Hz (Sec. IV)             [matches paper]
   deadline misses            0                      paper: delta is a hard real-time task     [matches paper]

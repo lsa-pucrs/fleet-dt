@@ -2,11 +2,13 @@
  * @file test_wire.c
  * @brief Codec, envelope, and the partial/double update detector.
  */
+#include <fleet_dt/assembler.h>
 #include <fleet_dt/codec.h>
 #include <fleet_dt/envelope.h>
 #include <fleet_dt/framesync.h>
 
 #include <assert.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -204,9 +206,145 @@ static void test_framesync(void)
            (unsigned long long)fdt_fs_stale_packets(&fs));
 }
 
+/** One message per sensor: the four codecs cover every scalar of I^t. */
+static void test_sensor_codec(void)
+{
+    const fdt_input_t in = {
+        .ax_mps2 = 0.1f, .ay_mps2 = 0.2f, .az_mps2 = -9.8f,
+        .wx_rps = 0.01f, .wy_rps = 0.02f, .wz_rps = 0.15f,
+        .mx_ut = 18.0f, .my_ut = 2.0f, .mz_ut = -14.0f,
+        .gps_lat_deg = -30.05f, .gps_lon_deg = -51.17f, .gps_alt_m = 3.0f,
+        .vn_mps = 1.2f, .ve_mps = 0.4f, .vd_mps = 0.01f,
+        .press_pa = 101325.0f, .temp_c = 22.0f,
+        .vbat_v = 18.5f, .ibat_a = 6.0f,
+    };
+
+    size_t total = 0;
+    fdt_input_t out = {0};
+    for (int s = 0; s < FDT_SENSOR_COUNT; s++) {
+        uint8_t buf[FDT_WIRE_SENSOR_MAX_BYTES];
+        const long n = fdt_enc_sensor(&in, (fdt_sensor_t)s, buf, sizeof buf);
+        assert(n == (long)fdt_sensor_bytes((fdt_sensor_t)s));
+        assert(fdt_enc_sensor(&in, (fdt_sensor_t)s, buf, (size_t)n - 1) == -1);
+        assert(fdt_dec_sensor(buf, (size_t)n - 1, (fdt_sensor_t)s, &out) == -1);
+        assert(fdt_dec_sensor(buf, (size_t)n, (fdt_sensor_t)s, &out) == n);
+        assert(fdt_sensor_name((fdt_sensor_t)s) != NULL);
+        assert(fdt_env_kind_sensor(fdt_env_sensor_kind(s)) == s);
+        total += (size_t)n;
+    }
+    /* 19 floats: every scalar of Table I except the two stereo views. */
+    assert(total == 19 * 4);
+    assert(memcmp(&in, &out, offsetof(fdt_input_t, x_left)) == 0);
+
+    assert(fdt_sensor_bytes(FDT_SENSOR_COUNT) == 0);
+    assert(fdt_sensor_name(FDT_SENSOR_COUNT) == NULL);
+    assert(fdt_env_sensor_kind(FDT_SENSOR_COUNT) == 0);
+    assert(fdt_env_kind_sensor(FDT_ENV_STATE) == -1);
+
+    /* A barometer sample leaves the IMU fields alone. */
+    fdt_input_t partial = { .wz_rps = 7.0f };
+    uint8_t buf[FDT_WIRE_BARO_BYTES];
+    assert(fdt_enc_sensor(&in, FDT_SENSOR_BARO, buf, sizeof buf) == 8);
+    assert(fdt_dec_sensor(buf, sizeof buf, FDT_SENSOR_BARO, &partial) == 8);
+    assert(partial.wz_rps == 7.0f && partial.press_pa == 101325.0f);
+}
+
+/** Wraps one sensor sample of @p vessel at sequence @p seq. */
+static size_t sensor_frame(uint8_t *out, size_t cap, uint16_t vessel,
+                           fdt_sensor_t s, uint32_t seq, float value)
+{
+    fdt_input_t in = {0};
+    in.wz_rps = value;
+    in.gps_lat_deg = value;
+    in.press_pa = value;
+    in.vbat_v = value;
+    uint8_t payload[FDT_WIRE_SENSOR_MAX_BYTES];
+    const long n = fdt_enc_sensor(&in, s, payload, sizeof payload);
+    assert(n > 0);
+    const fdt_env_t env = { .magic = FDT_ENV_MAGIC, .vessel = vessel,
+                            .kind = fdt_env_sensor_kind((int)s),
+                            .flags = 0, .seq = seq,
+                            .payload_len = (uint32_t)n };
+    const long m = fdt_env_encode(&env, payload, (size_t)n, out, cap);
+    assert(m > 0);
+    return (size_t)m;
+}
+
+/** The twin side: stale drops, boat-frame accounting, incomplete frames. */
+static void test_assembler(void)
+{
+    fdt_rx_slot_t   slots[2];
+    uint32_t        seqs[2];
+    uint8_t         hits[2];
+    fdt_framesync_t fs;
+    fdt_rx_t        rx;
+    uint8_t         f[64];
+
+    assert(fdt_rx_init(NULL, slots, 2, &fs) == -1);
+    assert(fdt_rx_init(&rx, slots, 0, &fs) == -1);
+    assert(fdt_fs_init(&fs, seqs, hits, 2) == 0);
+    assert(fdt_rx_init(&rx, slots, 2, &fs) == 0);
+
+    /* Frame 1: vessel 0 sends all four sensors of tick 1; vessel 1 sends
+       only its IMU. */
+    fdt_rx_begin_frame(&rx);
+    for (int s = 0; s < FDT_SENSOR_COUNT; s++) {
+        const size_t n = sensor_frame(f, sizeof f, 0, (fdt_sensor_t)s, 1,
+                                      1.0f);
+        assert(fdt_rx_accept(&rx, f, n) == FDT_FS_FRESH);
+    }
+    size_t n = sensor_frame(f, sizeof f, 1, FDT_SENSOR_IMU, 1, 1.0f);
+    assert(fdt_rx_accept(&rx, f, n) == FDT_FS_FRESH);
+    fdt_rx_end_frame(&rx);
+    assert(fdt_fs_accepted(&fs) == 2);   /* two boat-frames, not five */
+    assert(fdt_rx_incomplete(&rx) == 1); /* vessel 1 lacked 3 sensors */
+    assert(fdt_rx_partial_frames(&rx) == 1);
+    assert(fdt_fs_partial_frames(&fs) == 0);
+
+    /* Frame 2: vessel 0 delivers tick 2, then a late tick 1 IMU (stale),
+       then tick 3 in the same frame (a double update). Vessel 1 is silent. */
+    fdt_rx_begin_frame(&rx);
+    n = sensor_frame(f, sizeof f, 0, FDT_SENSOR_IMU, 2, 2.0f);
+    assert(fdt_rx_accept(&rx, f, n) == FDT_FS_FRESH);
+    /* Stale, and applied: Section V-B's architecture has no drop. */
+    n = sensor_frame(f, sizeof f, 0, FDT_SENSOR_IMU, 1, 9.0f);
+    assert(fdt_rx_accept(&rx, f, n) == FDT_FS_STALE);
+    assert(fdt_rx_input(&rx, 0)->wz_rps == 9.0f);
+    n = sensor_frame(f, sizeof f, 0, FDT_SENSOR_IMU, 3, 3.0f);
+    assert(fdt_rx_accept(&rx, f, n) == FDT_FS_DUPLICATE_IN_FRAME);
+    assert(fdt_rx_input(&rx, 0)->wz_rps == 3.0f);
+    fdt_rx_end_frame(&rx);
+    assert(fdt_rx_stale(&rx) == 1);
+    assert(fdt_rx_doubles(&rx) == 1);    /* the IMU of vessel 0, thrice */
+    assert(fdt_rx_frames(&rx) == 2);
+    assert(fdt_fs_double_updates(&fs) == 1);
+    assert(fdt_fs_partial_frames(&fs) == 1);
+    /* The GPS of vessel 0 kept its tick 1 reading. */
+    assert(fdt_rx_input(&rx, 0)->gps_lat_deg == 1.0f);
+
+    /* With the Section VI drop on, a stale message leaves the model alone. */
+    fdt_rx_set_drop_stale(&rx, 1);
+    n = sensor_frame(f, sizeof f, 0, FDT_SENSOR_IMU, 2, 5.0f);
+    assert(fdt_rx_accept(&rx, f, n) == FDT_FS_STALE);
+    assert(fdt_rx_input(&rx, 0)->wz_rps == 3.0f);
+    assert(fdt_rx_stale(&rx) == 2);
+    fdt_rx_set_drop_stale(&rx, 0);
+
+    /* Malformed, foreign and out-of-range messages are refused. */
+    uint8_t junk[4] = { 1, 2, 3, 4 };
+    assert(fdt_rx_accept(&rx, junk, sizeof junk) == -1);
+    n = sensor_frame(f, sizeof f, 7, FDT_SENSOR_IMU, 1, 1.0f);
+    assert(fdt_rx_accept(&rx, f, n) == -1);
+    assert(fdt_rx_rejected(&rx) == 2);
+    assert(fdt_rx_accept(NULL, f, n) == -1);
+    assert(fdt_rx_input(&rx, 2) == NULL);
+}
+
 int main(void)
 {
     test_wire_widths();
+    test_sensor_codec();
+    test_assembler();
     test_explicit_little_endian();
     test_codec_round_trips();
     test_envelope();

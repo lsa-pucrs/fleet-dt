@@ -41,7 +41,10 @@ mismatch, and this table gets re-checked.
 |---|---|---|---|
 | MQTT clients and brokers | the network seam | `fdt_transport_t` | [`transport.h`](../include/fleet_dt/transport.h) |
 | brokers in bridge mode | store-and-forward across an outage | `boat.conf`, `ground.conf` | [`config/mosquitto/`](../config/mosquitto/) |
-| bandwidth regulators | publication decimated to the DT rate | `fdt_reg_t` | [`regulator.h`](../include/fleet_dt/regulator.h) |
+| bandwidth regulators | newest sample per sensor, released at the tick edge | `fdt_reg_t` | [`regulator.h`](../include/fleet_dt/regulator.h) |
+| regulator in the boat broker | raw samples in, one message per sensor per tick out | `fdt_relay_t` | [`relay.h`](../include/fleet_dt/relay.h) |
+| regulated stage of one vessel | newest sample of each sensor, held to the tick | `fdt_regpub_t` | [`regpub.h`](../include/fleet_dt/regpub.h) |
+| DTI input buffer | `Iᵗ` rebuilt from the sensor messages | `fdt_rx_t` | [`assembler.h`](../include/fleet_dt/assembler.h) |
 | LSDT | small packets on MQTT | `fdt_stream_t` profiles | [`bench_bandwidth.c`](../tools/bench/bench_bandwidth.c) |
 | HSDT | camera feed, off MQTT | `fdt_rtsp_t` | [`fdt_rtsp.h`](../adapters/rtsp/fdt_rtsp.h) |
 | Ardupilot / NAVIO2 | sensor source | `fdt_mav_ingest_t` | [`fdt_mavlink.h`](../adapters/mavlink/fdt_mavlink.h) |

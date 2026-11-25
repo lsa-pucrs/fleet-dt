@@ -1,20 +1,21 @@
 == fleet-dt bandwidth regulator bench ==
 fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
-DT rate: 8 Hz   samples per sensor: 20000
+DT rate: 8 Hz   ticks per sensor: 2500 (312.5 s)
+regulator: newest sample held, released at the tick edge (slide 8)
 
 --- per sensor rate ---
-   sensor Hz published Hz   control Hz      saved    verdict
-           1         1.00            1       0.0 %  untouched
-           2         2.00            2       0.0 %  untouched
-           4         4.00            4       0.0 %  untouched
-           8         8.00            8       0.0 %  untouched
-          10         8.00           10      20.0 %  decimated
-          20         8.00           20      60.0 %  decimated
-          50         8.00           50      84.0 %  decimated
-         100         7.99          100      92.0 %  decimated
-         200         8.00          200      96.0 %  decimated
-         400         8.00          400      98.0 %  decimated
-        1000         8.00         1000      99.2 %  decimated
+   sensor Hz published Hz   control Hz      saved  age at edge    verdict
+           1         1.00            1       0.0 %      0.00 ms  untouched
+           2         2.00            2       0.0 %      0.00 ms  untouched
+           4         4.00            4       0.0 %      0.00 ms  untouched
+           8         8.00            8       0.0 %      0.00 ms  untouched
+          10         8.00           10      20.0 %     37.50 ms  decimated
+          20         8.00           20      60.0 %     12.50 ms  decimated
+          50         8.00           50      84.0 %      7.50 ms  decimated
+         100         8.00          100      92.0 %      2.50 ms  decimated
+         200         8.00          200      96.0 %      0.00 ms  decimated
+         400         8.00          400      98.0 %      0.00 ms  decimated
+        1000         8.00         1000      99.2 %      0.00 ms  decimated
 
 --- the two halves of the Section III claim ---
   publication decimated      8.00 Hz from 1000 Hz   paper: drops samples in the MQTT client   [matches paper]
@@ -26,6 +27,9 @@ DT rate: 8 Hz   samples per sensor: 20000
   directly keeps its full rate. A regulator that slowed the sensor
   would buy bandwidth by degrading control, which is the opposite of
   the QoS the abstract claims.
+  At each 125 ms edge the regulator releases the newest sample it
+  holds (slide 8), so the age column is how stale that sample is
+  when it leaves: 0 for a sensor whose samples land on the edge.
 
 artefacts: results/regulator.txt, results/regulator.csv, results/regulator.svg
 artefacts: results/regulator_saved.svg

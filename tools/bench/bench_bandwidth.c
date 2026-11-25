@@ -3,11 +3,83 @@
  * @brief Link budget over the LSDT and HSDT stream profiles of the paper.
  */
 #include "bench_common.h"
+#include "injector/injector.h"
 
 #include <fleet_dt/linkbudget.h>
 #include <fleet_dt/regulator.h>
 
 #include <stdlib.h>
+#include <string.h>
+
+/** The DT frame rate: 8 Hz, one increment of k per 125 ms. */
+#define DT_HZ 8.0
+
+/** Seconds of telemetry each measured run covers. */
+#define MEASURE_S 8
+
+/** Boats of the fleet figure on slides 13 and apoio 8. */
+#define FLEET_BOATS 25
+
+/**
+ * A transport that only counts what crosses it, standing for the byte
+ * counter on the bridge of slide 13.
+ */
+typedef struct {
+    uint64_t msgs;
+    uint64_t app_bytes;  /**< Envelope + payload. */
+    uint64_t mqtt_bytes; /**< The MQTT v5 PUBLISH packet carrying it. */
+} counter_t;
+
+/** Bytes of a variable-byte-integer encoding of @p v (MQTT 1.5.5). */
+static size_t vbi_bytes(size_t v)
+{
+    size_t n = 1;
+    while (v >= 128u) {
+        v /= 128u;
+        n++;
+    }
+    return n;
+}
+
+/**
+ * Size of the MQTT v5 PUBLISH packet at QoS 1 carrying @p len bytes on
+ * @p topic: topic length (2) + topic + packet id (2) + property length (1,
+ * no properties) + payload, behind the fixed header.
+ */
+static size_t mqtt5_publish_bytes(const char *topic, size_t len)
+{
+    const size_t remaining = 2u + strlen(topic) + 2u + 1u + len;
+    return 1u + vbi_bytes(remaining) + remaining;
+}
+
+static int count_publish(void *self, const char *topic, const uint8_t *buf,
+                         size_t len, int qos)
+{
+    (void)buf;
+    (void)qos;
+    counter_t *c = (counter_t *)self;
+    c->msgs++;
+    c->app_bytes  += len;
+    c->mqtt_bytes += mqtt5_publish_bytes(topic, len);
+    return 0;
+}
+
+/** Runs one boat for MEASURE_S seconds, raw or regulated. */
+static counter_t measure_boat(int raw)
+{
+    static fdt_inj_t inj; /* large; kept off the stack */
+    counter_t c = {0};
+    fdt_transport_t tr = { .publish = count_publish, .self = &c };
+
+    if (fdt_inj_init(&inj, &tr, 1, DT_HZ, 20260817u) != 0 ||
+        fdt_inj_configure(&inj, NULL, raw) != 0) {
+        abort();
+    }
+    for (int k = 0; k < (int)(MEASURE_S * DT_HZ); k++) {
+        (void)fdt_inj_tick(&inj);
+    }
+    return c;
+}
 
 /** Section III: "vs. 100 Mbps of available bandwidth". */
 static const fdt_link_t WIFI = { .capacity_bps = 100e6,
@@ -39,8 +111,6 @@ static const profile_t PROFILES[] = {
 };
 #define NPROFILES ((int)(sizeof PROFILES / sizeof PROFILES[0]))
 
-/** The DT frame rate: 8 Hz, one increment of k per 125 ms. */
-#define DT_HZ 8.0
 
 int main(void)
 {
@@ -71,8 +141,6 @@ int main(void)
                                    .hz = p->sensor_hz,
                                    .vessels = 1 };
 
-        fdt_reg_t reg;
-        fdt_reg_init(&reg, p->sensor_hz, DT_HZ);
         const double pub_hz = (p->sensor_hz <= DT_HZ) ? p->sensor_hz : DT_HZ;
 
         const fdt_stream_t regulated = { .name = p->name,
@@ -160,6 +228,57 @@ int main(void)
     snprintf(buf, sizeof buf, "%u vessels", half);
     bench_compare(&r, "fleet the link supports", buf,
                   "25-boat run was injector-bound", BENCH_MATCH);
+
+    bench_section(&r, "measured on the regulated client, one boat (slide 13)");
+    const counter_t raw = measure_boat(1);
+    const counter_t reg = measure_boat(0);
+    const double raw_msgs = (double)raw.msgs / MEASURE_S;
+    const double reg_msgs = (double)reg.msgs / MEASURE_S;
+    const double raw_mbps = 8.0 * (double)raw.mqtt_bytes / MEASURE_S / 1e6;
+    const double reg_mbps = 8.0 * (double)reg.mqtt_bytes / MEASURE_S / 1e6;
+    bench_say(&r, "  sensors: IMU %.0f Hz, barometer %.0f Hz, GPS %.0f Hz, "
+                  "power %.0f Hz; %d s\n",
+              FDT_INJ_HZ_IMU, FDT_INJ_HZ_BARO, FDT_INJ_HZ_GPS,
+              FDT_INJ_HZ_POWER, MEASURE_S);
+    bench_say(&r, "  %-10s %10s %14s %14s\n", "", "msg/s",
+              "app (Mbps)", "MQTT v5 (Mbps)");
+    bench_say(&r, "  %-10s %10.0f %14.4f %14.4f\n", "raw", raw_msgs,
+              8.0 * (double)raw.app_bytes / MEASURE_S / 1e6, raw_mbps);
+    bench_say(&r, "  %-10s %10.0f %14.4f %14.4f\n", "regulated", reg_msgs,
+              8.0 * (double)reg.app_bytes / MEASURE_S / 1e6, reg_mbps);
+
+    snprintf(buf, sizeof buf, "%.0f -> %.0f msg/s", raw_msgs, reg_msgs);
+    bench_compare_slide(&r, "messages per boat", buf, "slide 13",
+                        "1070 -> 32 msg/s",
+                        (raw.msgs == 1070u * MEASURE_S &&
+                         reg.msgs == 32u * MEASURE_S)
+                            ? BENCH_MATCH : BENCH_HOST);
+    snprintf(buf, sizeof buf, "%.1fx fewer", raw_msgs / reg_msgs);
+    bench_compare_slide(&r, "message reduction", buf, "slide 13",
+                        "33x fewer messages",
+                        (raw_msgs / reg_msgs > 33.0 &&
+                         raw_msgs / reg_msgs < 34.0)
+                            ? BENCH_MATCH : BENCH_HOST);
+    snprintf(buf, sizeof buf, "%.3f -> %.4f Mbps", raw_mbps, reg_mbps);
+    bench_compare_slide(&r, "traffic per boat", buf, "slide 13",
+                        "0.68 -> 0.012 Mbps", BENCH_HOST);
+    snprintf(buf, sizeof buf, "%.1f %% less", 100.0 * (1.0 - reg_mbps /
+                                                       raw_mbps));
+    bench_compare_slide(&r, "traffic removed", buf, "slide 13",
+                        "98 % less traffic",
+                        (reg_mbps / raw_mbps < 0.03) ? BENCH_MATCH
+                                                     : BENCH_HOST);
+    snprintf(buf, sizeof buf, "%.1f %% -> %.2f %% of link",
+             100.0 * FLEET_BOATS * raw_mbps / 100.0,
+             100.0 * FLEET_BOATS * reg_mbps / 100.0);
+    bench_compare_slide(&r, "25 boats, link share", buf, "backup 8",
+                        "17 % -> 0.3 %", BENCH_HOST);
+    bench_say(&r,
+        "  The message counts follow from the sensor rates alone, so they\n"
+        "  land on the slide exactly. The bit rates depend on the bytes\n"
+        "  per message: this count charges the envelope, the payload and\n"
+        "  the MQTT v5 PUBLISH header, not TCP, IP or Wi-Fi framing, and\n"
+        "  the slide measured a byte counter on a Mosquitto bridge.\n");
 
     fdt_plot_t p;
     fdt_plot_init(&p, "Offered load per stream, before and after regulation",

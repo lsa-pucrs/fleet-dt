@@ -32,5 +32,21 @@ link: 100 Mbps nominal (Sec. III)   DT rate: 8 Hz
   vessels within 50 % of the link : 15 (13 once 20 % framing overhead is charged)
   fleet the link supports    15 vessels             paper: 25-boat run was injector-bound     [matches paper]
 
+--- measured on the regulated client, one boat (slide 13) ---
+  sensors: IMU 1000 Hz, barometer 50 Hz, GPS 10 Hz, power 10 Hz; 8 s
+                  msg/s     app (Mbps) MQTT v5 (Mbps)
+  raw              1070         0.4307         0.6282
+  regulated          32         0.0090         0.0150
+  messages per boat          1070 -> 32 msg/s       slide 13: 1070 -> 32 msg/s                [matches slides]
+  message reduction          33.4x fewer            slide 13: 33x fewer messages              [matches slides]
+  traffic per boat           0.628 -> 0.0150 Mbps   slide 13: 0.68 -> 0.012 Mbps              [this host]
+  traffic removed            97.6 % less            slide 13: 98 % less traffic               [matches slides]
+  25 boats, link share       15.7 % -> 0.38 % of link backup 8: 17 % -> 0.3 %                   [this host]
+  The message counts follow from the sensor rates alone, so they
+  land on the slide exactly. The bit rates depend on the bytes
+  per message: this count charges the envelope, the payload and
+  the MQTT v5 PUBLISH header, not TCP, IP or Wi-Fi framing, and
+  the slide measured a byte counter on a Mosquitto bridge.
+
 artefacts: results/bandwidth.txt, results/bandwidth.csv, results/bandwidth.svg
 artefacts: results/bandwidth_fleet.svg

@@ -7,6 +7,7 @@
 #include "bench_common.h"
 #include "injector/injector.h"
 
+#include <fleet_dt/assembler.h>
 #include <fleet_dt/codec.h>
 #include <fleet_dt/coordinator.h>
 #include <fleet_dt/envelope.h>
@@ -31,7 +32,10 @@ static fdt_goal_t      g_gprev[VESSELS];
 static fdt_goal_t      g_gnow[VESSELS];
 static fdt_state_t     g_bs[VESSELS];
 static fdt_actuation_t g_as[VESSELS];
-static fdt_input_t     g_decoded[VESSELS];
+static fdt_rx_slot_t   g_rx_slots[VESSELS];
+static fdt_rx_t        g_rx;
+static fdt_loop_t      g_loop;
+static fdt_inj_t       g_inj;
 
 static double now_ns(void)
 {
@@ -90,15 +94,7 @@ static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
 {
     (void)topic;
     (void)user;
-
-    fdt_env_t env;
-    const uint8_t *payload = NULL;
-    if (fdt_env_decode(buf, len, &env, &payload) < 0 || payload == NULL) {
-        return;
-    }
-    if (env.kind == FDT_ENV_INPUT && env.vessel < VESSELS) {
-        (void)fdt_dec_input(payload, env.payload_len, &g_decoded[env.vessel]);
-    }
+    (void)fdt_rx_accept(&g_rx, buf, len);
 }
 
 static int cmp_double(const void *a, const void *b)
@@ -126,9 +122,7 @@ int main(void)
               VESSELS, FRAMES, (double)FDT_TICK_NS / 1e6,
               (double)FRAMES * (double)FDT_TICK_NS / 1e9);
 
-    fdt_loop_t loop;
-    fdt_transport_t tr = fdt_loop_transport(&loop);
-    fdt_inj_t inj;
+    fdt_transport_t tr = fdt_loop_transport(&g_loop);
     fdt_fleet_t fleet;
     fdt_store_t store;
     fdt_coord_t coord;
@@ -136,7 +130,9 @@ int main(void)
     fdt_tick_t tk;
     const fdt_state_t zero = {0};
 
-    assert(fdt_inj_init(&inj, &tr, VESSELS, 8.0, 20260817u) == 0);
+    assert(fdt_inj_init(&g_inj, &tr, VESSELS, 8.0, 20260817u) == 0);
+    assert(fdt_rx_init(&g_rx, g_rx_slots, VESSELS, NULL) == 0);
+    assert(tr.subscribe(tr.self, FDT_TOPIC_LSDT_ALL, on_lsdt, NULL) == 0);
 
     for (unsigned k = 0; k < VESSELS; k++) {
         assert(fdt_twin_init(&g_twins[k], g_queues[k], CAP,
@@ -144,9 +140,6 @@ int main(void)
         for (int s = 0; s < WINDOW; s++) {
             assert(fdt_twin_seed(&g_twins[k], &zero) == 0);
         }
-        char topic[64];
-        assert(fdt_topic(topic, sizeof topic, FDT_TOPIC_LSDT, k) == 0);
-        assert(tr.subscribe(tr.self, topic, on_lsdt, NULL) == 0);
     }
 
     assert(fdt_fleet_init(&fleet, g_twins, VESSELS, NULL) == 0);
@@ -162,11 +155,11 @@ int main(void)
     double prev = now_ns();
 
     for (int frame = 0; frame < FRAMES; frame++) {
-        assert(fdt_inj_tick(&inj) == VESSELS);
+        assert(fdt_inj_tick(&g_inj) == VESSELS * FDT_SENSOR_COUNT);
         (void)tr.poll(tr.self, 0);
 
         for (unsigned k = 0; k < VESSELS; k++) {
-            g_ins[k] = g_decoded[k];
+            g_ins[k] = *fdt_rx_input(&g_rx, k);
         }
 
         fdt_feas_begin(&feas);

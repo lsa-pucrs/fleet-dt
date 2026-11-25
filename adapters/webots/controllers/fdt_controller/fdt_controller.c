@@ -14,6 +14,7 @@
 
 #include "injector/injector.h"
 
+#include <fleet_dt/assembler.h>
 #include <fleet_dt/codec.h>
 #include <fleet_dt/coordinator.h>
 #include <fleet_dt/envelope.h>
@@ -69,7 +70,8 @@ static size_t g_shot_frame = SHOT_FRAME;
 static fdt_state_t     g_queues[MAX_VESSELS][QUEUE_CAP];
 static fdt_twin_t      g_twins[MAX_VESSELS];
 static fdt_state_t     g_slots[MAX_VESSELS];
-static fdt_input_t     g_decoded[MAX_VESSELS];
+static fdt_rx_slot_t   g_rx_slots[MAX_VESSELS];
+static fdt_rx_t        g_rx;
 static fdt_input_t     g_ins[MAX_VESSELS];
 static fdt_goal_t      g_gprev[MAX_VESSELS];
 static fdt_goal_t      g_gnow[MAX_VESSELS];
@@ -178,24 +180,17 @@ static void webots_plan(const fdt_store_t *bt, const void *fleet_ctx,
     }
 }
 
-/** Telemetry arriving from the boats over MQTT. */
+/**
+ * Telemetry arriving from the boats: one message per sensor per tick, as the
+ * regulated client of each boat publishes it. The assembler rebuilds I^t and
+ * drops stale messages.
+ */
 static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
                     void *user)
 {
     (void)topic;
     (void)user;
-
-    fdt_env_t env;
-    const uint8_t *payload = NULL;
-    if (fdt_env_decode(buf, len, &env, &payload) < 0 || payload == NULL) {
-        return;
-    }
-    if (env.kind != FDT_ENV_INPUT || (size_t)env.vessel >= g_vessels) {
-        return;
-    }
-
-    (void)fdt_fs_accept(&g_fs, &env);
-    (void)fdt_dec_input(payload, env.payload_len, &g_decoded[env.vessel]);
+    (void)fdt_rx_accept(&g_rx, buf, len);
 }
 
 /** Writes one twin's state into the 3D world the operator watches. */
@@ -288,13 +283,12 @@ int main(int argc, char **argv)
         for (int s = 0; s < WINDOW; s++) {
             fdt_twin_seed(&g_twins[k], &zero);
         }
-        char topic[64];
-        fdt_topic(topic, sizeof topic, FDT_TOPIC_LSDT, (unsigned)k);
-        tr.subscribe(tr.self, topic, on_lsdt, NULL);
         fdt_feas_init(&g_feas[k], FDT_TICK_NS);
     }
 
     fdt_fs_init(&g_fs, g_seqs, g_hits, g_vessels);
+    fdt_rx_init(&g_rx, g_rx_slots, g_vessels, &g_fs);
+    tr.subscribe(tr.self, FDT_TOPIC_LSDT_ALL, on_lsdt, NULL);
 
     static fleet_ctx_t fc = { .spread_deg = 0.0f,
                               .throttle_ceiling_pct = 60.0f };
@@ -313,13 +307,13 @@ int main(int argc, char **argv)
     fflush(stdout);
 
     while (wb_robot_step(step_ms) != -1) {
-        fdt_fs_begin_frame(&g_fs);
+        fdt_rx_begin_frame(&g_rx);
         fdt_inj_tick(&inj);
         tr.poll(tr.self, 0);
-        fdt_fs_end_frame(&g_fs);
+        fdt_rx_end_frame(&g_rx);
 
         for (size_t k = 0; k < g_vessels; k++) {
-            g_ins[k] = g_decoded[k];
+            g_ins[k] = *fdt_rx_input(&g_rx, k);
         }
 
         fdt_feas_begin(&g_feas[0]);
@@ -389,8 +383,8 @@ int main(int argc, char **argv)
                    (double)fc.spread_deg,
                    (double)fdt_feas_worst_ns(&g_feas[0]) / 1e3,
                    fdt_feas_ok(&g_feas[0]),
-                   (unsigned long long)fdt_fs_partial_frames(&g_fs),
-                   (unsigned long long)fdt_fs_double_updates(&g_fs),
+                   (unsigned long long)fdt_rx_partial_frames(&g_rx),
+                   (unsigned long long)fdt_rx_doubles(&g_rx),
                    pos0 != NULL ? pos0[0] : 0.0,
                    pos0 != NULL ? pos0[1] : 0.0,
                    pos0 != NULL ? pos0[2] : 0.0);
