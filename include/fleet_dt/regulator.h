@@ -6,53 +6,85 @@
 /**
  * @file regulator.h
  * @brief The bandwidth regulators of Section III.
+ *
+ * One regulator watches one sensor. The sensor offers every sample it takes,
+ * at its own rate, and the control path on the boat reads every one of them.
+ * The regulator holds only the newest sample. At the edge of each 125 ms DT
+ * tick the pacer calls ::fdt_reg_capture, and the regulator releases the
+ * sample it holds to the link. A newer sample replaces an older one before
+ * the tick, and the replaced sample counts as dropped.
+ *
+ * The link therefore carries at most one sample per sensor per tick, the
+ * reduction M_i = f_i * T of the presentation, slide 8. A sensor slower than
+ * the tick is never decimated: a tick that finds no new sample publishes
+ * nothing, and no sample is repeated.
  */
 typedef struct {
-    double   sensor_hz;  /**< Rate the sensor samples at, positive. */
-    double   publish_hz; /**< Rate publication is decimated to, positive. */
-    double   step;       /**< Publication credit per sample. */
-    double   acc;        /**< Accumulated credit, in [0, 1). */
-    uint64_t sampled;    /**< Samples offered, published plus dropped. */
-    uint64_t published;  /**< Samples admitted to the link. */
-    uint64_t dropped;    /**< Samples the regulator withheld. */
+    double   sensor_hz; /**< Rate the sensor samples at, positive. */
+    int      held;      /**< Non-zero while a sample waits for the tick. */
+    uint64_t sampled;   /**< Samples offered: published + dropped + held. */
+    uint64_t published; /**< Samples released to the link at a tick edge. */
+    uint64_t dropped;   /**< Samples a newer one replaced before the tick. */
+    uint64_t empty;     /**< Tick edges that found no new sample. */
 } fdt_reg_t;
 
 /**
  * @brief Arms a regulator.
- * @param sensor_hz   Rate the sensor samples at; must be positive.
- * @param publish_hz  Target publication rate, normally the DT rate of 8 Hz;
- *                    must be positive.
- * @return 0 on success, -1 when either rate is zero or negative.
- *
- * @note A sensor slower than the DT is never decimated: the regulator cannot
- *       invent samples, and must not hide the ones that exist.
+ * @param sensor_hz  Rate the sensor samples at; must be positive. The tick
+ *                   rate is the pacer's, not the regulator's.
+ * @return 0 on success, -1 when @p r is NULL or the rate is not positive.
  */
-int fdt_reg_init(fdt_reg_t *r, double sensor_hz, double publish_hz);
+int fdt_reg_init(fdt_reg_t *r, double sensor_hz);
 
 /**
- * @brief Offers one sample to the link.
- * @return 1 when the sample should be published, 0 when it is dropped.
+ * @brief Offers one sample, which becomes the newest one held.
+ *
+ * The caller stores the sample itself; the regulator decides only whether a
+ * sample waits for the tick. When one already waits, the older one is
+ * dropped.
  */
-int fdt_reg_admit(fdt_reg_t *r);
+void fdt_reg_offer(fdt_reg_t *r);
 
-/** @brief Samples offered so far, published plus dropped. */
+/**
+ * @brief The edge of a DT tick.
+ * @return 1 when the newest sample must be published now, 0 when no sample
+ *         arrived since the previous edge.
+ */
+int fdt_reg_capture(fdt_reg_t *r);
+
+/**
+ * @brief Samples a sensor takes inside tick @p k, the interval
+ *        (k / tick_hz, (k + 1) / tick_hz].
+ *
+ * Samples fall at j / sensor_hz, j = 1, 2, ... A 10 Hz GPS under the 8 Hz
+ * tick yields 1, 1, 1, 2, then repeats: 1.25 per tick on average.
+ *
+ * @return The count, or 0 when either rate is not positive.
+ */
+unsigned fdt_reg_samples_in_tick(double sensor_hz, double tick_hz,
+                                 uint64_t k);
+
+/** @brief Samples offered so far. */
 uint64_t fdt_reg_sampled(const fdt_reg_t *r);
 
-/** @brief Samples admitted to the link. */
+/** @brief Samples released to the link. */
 uint64_t fdt_reg_published(const fdt_reg_t *r);
 
-/** @brief Samples the regulator withheld. */
+/** @brief Samples a newer sample replaced before the tick. */
 uint64_t fdt_reg_dropped(const fdt_reg_t *r);
 
+/** @brief Tick edges that found nothing to publish. */
+uint64_t fdt_reg_empty_ticks(const fdt_reg_t *r);
+
 /**
- * @brief The publication rate actually achieved, in hertz.
+ * @brief The publication rate achieved, in hertz.
  * @return published / sampled times the sensor rate, or 0.0 before the first
  *         sample.
  */
 double fdt_reg_effective_hz(const fdt_reg_t *r);
 
 /**
- * @brief The fraction of this sensor's traffic the regulator removed.
+ * @brief The fraction of this sensor's samples kept off the link.
  * @return dropped / sampled, in [0, 1); 0.0 before the first sample.
  */
 double fdt_reg_saved_ratio(const fdt_reg_t *r);

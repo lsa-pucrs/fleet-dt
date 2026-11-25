@@ -20,8 +20,24 @@ typedef enum {
     FDT_ENV_INPUT = 1, /**< I^t, encoded by fdt_enc_input(). */
     FDT_ENV_STATE = 2, /**< B^t, encoded by fdt_enc_state(). */
     FDT_ENV_ACT   = 3, /**< A^t, encoded by fdt_enc_act(). */
-    FDT_ENV_GOAL  = 4  /**< g^t, encoded by fdt_enc_state(). */
+    FDT_ENV_GOAL  = 4, /**< g^t, encoded by fdt_enc_state(). */
+    FDT_ENV_IMU   = 5, /**< One IMU sample, encoded by fdt_enc_sensor(). */
+    FDT_ENV_GPS   = 6, /**< One GPS sample, encoded by fdt_enc_sensor(). */
+    FDT_ENV_BARO  = 7, /**< One barometer sample, by fdt_enc_sensor(). */
+    FDT_ENV_POWER = 8  /**< One power sample, by fdt_enc_sensor(). */
 } fdt_env_kind_t;
+
+/**
+ * @brief The envelope kind carrying sensor @p sensor (an ::fdt_sensor_t).
+ * @return The kind, or 0 for an unknown sensor.
+ */
+uint8_t fdt_env_sensor_kind(int sensor);
+
+/**
+ * @brief The ::fdt_sensor_t an envelope kind carries.
+ * @return The sensor, or -1 when @p kind carries no sensor sample.
+ */
+int fdt_env_kind_sensor(uint8_t kind);
 
 /** The envelope header. */
 typedef struct {

@@ -5,7 +5,49 @@ this project adheres to [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The bandwidth regulators sit in the data path, in the boat broker where
+  Section III and the talk (slides 7, 12 and 13) put them. The autopilot
+  publishes every sample on `fleet/<v>/raw/<sensor>`; `fdt_relay_t`, an MQTT
+  client of the boat broker, runs one regulated stage (`fdt_regpub_t`) per
+  vessel, holds the newest sample of each sensor, and at the edge of each
+  125 ms tick publishes one message per sensor on `fleet/<v>/lsdt/<sensor>`.
+  The injector runs the same stages in process (slide 12(b): Regulator x N),
+  and the WeBots controller and the scale, latency and jitter benchmarks
+  consume their output.
+- The boat bridge carries `fleet/+/lsdt/#` up and `fleet/+/goal`,
+  `fleet/+/act` down. Raw samples stay on the boat; actuation now reaches it.
+- `make mqtt-test` starts a ground and a boat broker joined by those rules and
+  checks that 133 raw samples become 4 regulated messages on the ground, with
+  no raw sample across.
+- `fdt_reg_t` releases the newest sample at the tick edge
+  (`fdt_reg_offer`, `fdt_reg_capture`) instead of decimating by credit;
+  `fdt_reg_admit` is gone, and `fdt_reg_init` takes the sensor rate only.
+- The injector samples the IMU at 1 kHz, the barometer at 50 Hz, and GPS and
+  power at 10 Hz (slide 13), and splits a tick into `fdt_inj_offer_frame` and
+  `fdt_inj_release`.
+- Partial and double updates are counted per boat over its sensor messages,
+  by `fdt_rx_t`; the lossy row of `bench_scale` uses rarer loss to match.
+  A stale message is counted and still applied, as Section V-B describes;
+  `fdt_rx_set_drop_stale` turns on the drop Section VI lists as future work.
+- `bench_scale` reports CPU per DTI as delta time per vessel per tick over
+  the 125 ms period. The old ratio divided by the wall time of an unpaced
+  loop, which now includes the injector synthesising every sensor sample.
+- The loopback queue holds 1024 messages, and both transports match MQTT
+  topic filters (`+`, `#`).
+
 ### Added
+
+- `fdt_relay_t`, the regulator of the boat broker, and `tests/test_relay.c`.
+- `fdt_rx_t`, the twin side of the regulated link: rebuilds `Iᵗ` from the
+  per-sensor messages and counts partial, double and stale updates.
+- Per-sensor wire codecs (`fdt_enc_sensor`, `fdt_dec_sensor`) and envelope
+  kinds for the IMU, GPS, barometer and power.
+- `bench_bandwidth` measures one boat through the regulated client, raw and
+  regulated, and prints both beside the slide 13 figures.
+- `make syntax` type-checks `tests/it_mqtt.c`, which now also runs a
+  regulated tick through the broker.
 
 The model of Section IV:
 
@@ -30,8 +72,8 @@ The architecture of Section III:
 - a wire envelope carrying the per-vessel sequence number Table I does not
 - detection and counting of the partial and double frame updates reported in
   Section V-B
-- the bandwidth regulators, decimating publication to the DT rate while the
-  sensor path keeps its own
+- the bandwidth regulators, releasing the newest sample of each sensor at the
+  tick edge while the sensor path keeps its own rate
 - the link-budget model, with both readings of the Section V-A figure
 - the DTE registry, ticking parallel simulations off one clock
 - MQTT transport over libmosquitto, and the bridge-mode broker configuration

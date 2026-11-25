@@ -161,3 +161,111 @@ long fdt_dec_act(const uint8_t *buf, size_t len, fdt_actuation_t *a)
     a->cage_rad     = get_f32(&p);
     return FDT_WIRE_ACT_BYTES;
 }
+
+size_t fdt_sensor_bytes(fdt_sensor_t s)
+{
+    switch (s) {
+    case FDT_SENSOR_IMU:   return FDT_WIRE_IMU_BYTES;
+    case FDT_SENSOR_GPS:   return FDT_WIRE_GPS_BYTES;
+    case FDT_SENSOR_BARO:  return FDT_WIRE_BARO_BYTES;
+    case FDT_SENSOR_POWER: return FDT_WIRE_POWER_BYTES;
+    default:               return 0;
+    }
+}
+
+const char *fdt_sensor_name(fdt_sensor_t s)
+{
+    switch (s) {
+    case FDT_SENSOR_IMU:   return "imu";
+    case FDT_SENSOR_GPS:   return "gps";
+    case FDT_SENSOR_BARO:  return "baro";
+    case FDT_SENSOR_POWER: return "power";
+    default:               return NULL;
+    }
+}
+
+long fdt_enc_sensor(const fdt_input_t *in, fdt_sensor_t s, uint8_t *buf,
+                    size_t cap)
+{
+    const size_t need = fdt_sensor_bytes(s);
+    if (in == NULL || buf == NULL || need == 0 || cap < need) {
+        return -1;
+    }
+
+    uint8_t *p = buf;
+    switch (s) {
+    case FDT_SENSOR_IMU:
+        put_f32(&p, in->ax_mps2);
+        put_f32(&p, in->ay_mps2);
+        put_f32(&p, in->az_mps2);
+        put_f32(&p, in->wx_rps);
+        put_f32(&p, in->wy_rps);
+        put_f32(&p, in->wz_rps);
+        put_f32(&p, in->mx_ut);
+        put_f32(&p, in->my_ut);
+        put_f32(&p, in->mz_ut);
+        break;
+    case FDT_SENSOR_GPS:
+        put_f32(&p, in->gps_lat_deg);
+        put_f32(&p, in->gps_lon_deg);
+        put_f32(&p, in->gps_alt_m);
+        put_f32(&p, in->vn_mps);
+        put_f32(&p, in->ve_mps);
+        put_f32(&p, in->vd_mps);
+        break;
+    case FDT_SENSOR_BARO:
+        put_f32(&p, in->press_pa);
+        put_f32(&p, in->temp_c);
+        break;
+    case FDT_SENSOR_POWER:
+        put_f32(&p, in->vbat_v);
+        put_f32(&p, in->ibat_a);
+        break;
+    default:
+        return -1;
+    }
+    return (long)need;
+}
+
+long fdt_dec_sensor(const uint8_t *buf, size_t len, fdt_sensor_t s,
+                    fdt_input_t *in)
+{
+    const size_t need = fdt_sensor_bytes(s);
+    if (buf == NULL || in == NULL || need == 0 || len < need) {
+        return -1;
+    }
+
+    const uint8_t *p = buf;
+    switch (s) {
+    case FDT_SENSOR_IMU:
+        in->ax_mps2 = get_f32(&p);
+        in->ay_mps2 = get_f32(&p);
+        in->az_mps2 = get_f32(&p);
+        in->wx_rps  = get_f32(&p);
+        in->wy_rps  = get_f32(&p);
+        in->wz_rps  = get_f32(&p);
+        in->mx_ut   = get_f32(&p);
+        in->my_ut   = get_f32(&p);
+        in->mz_ut   = get_f32(&p);
+        break;
+    case FDT_SENSOR_GPS:
+        in->gps_lat_deg = get_f32(&p);
+        in->gps_lon_deg = get_f32(&p);
+        in->gps_alt_m   = get_f32(&p);
+        in->vn_mps      = get_f32(&p);
+        in->ve_mps      = get_f32(&p);
+        in->vd_mps      = get_f32(&p);
+        break;
+    case FDT_SENSOR_BARO:
+        in->press_pa = get_f32(&p);
+        in->temp_c   = get_f32(&p);
+        break;
+    case FDT_SENSOR_POWER:
+        in->vbat_v = get_f32(&p);
+        in->ibat_a = get_f32(&p);
+        break;
+    default:
+        return -1;
+    }
+    return (long)need;
+}

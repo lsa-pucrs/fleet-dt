@@ -97,6 +97,8 @@ syntax:
 	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only \
 	  adapters/webots/controllers/fdt_controller/fdt_controller.c && \
 	  echo "syntax ok: adapters/webots"
+	@$(CC) $(CFLAGS) -Itools/stubs -fsyntax-only tests/it_mqtt.c && \
+	  echo "syntax ok: tests/it_mqtt.c"
 
 mqtt: $(LIB)
 	@if [ -z "$(MOSQ_LIBS)" ]; then \
@@ -110,7 +112,11 @@ mqtt: $(LIB)
 	fi
 
 # Integration check for the MQTT adapter: needs libmosquitto and a broker.
-# Kept out of `make test` so the unit suite stays dependency-free.
+# Kept out of `make test` so the unit suite stays dependency-free. It starts
+# two brokers, ground and boat, joined by the bridge rules of
+# config/mosquitto/boat.conf, and runs the regulated path across them.
+MQTT_IT_BOAT_PORT = 18831
+
 mqtt-test: mqtt
 	@if [ -z "$(MOSQ_LIBS)" ]; then \
 	  echo "libmosquitto not found; skipping the MQTT integration check."; \
@@ -122,12 +128,21 @@ mqtt-test: mqtt
 	  { echo "listener $(MQTT_IT_PORT) 127.0.0.1"; \
 	    echo "allow_anonymous true"; \
 	    echo "pid_file /tmp/fleet-dt-it.pid"; } > /tmp/fleet-dt-it.conf && \
+	  { echo "listener $(MQTT_IT_BOAT_PORT) 127.0.0.1"; \
+	    echo "allow_anonymous true"; \
+	    echo "pid_file /tmp/fleet-dt-it-boat.pid"; \
+	    echo "connection ground"; \
+	    echo "address 127.0.0.1:$(MQTT_IT_PORT)"; \
+	    grep -E '^topic ' config/mosquitto/boat.conf; \
+	    echo "bridge_protocol_version mqttv50"; } > /tmp/fleet-dt-it-boat.conf && \
 	  mosquitto -c /tmp/fleet-dt-it.conf -d >/dev/null 2>&1 && \
+	  mosquitto -c /tmp/fleet-dt-it-boat.conf -d >/dev/null 2>&1 && \
 	  for i in 1 2 3 4 5 6 7 8 9 10; do \
-	    ss -ltn 2>/dev/null | grep -q ':$(MQTT_IT_PORT)' && break; \
+	    ss -ltn 2>/dev/null | grep -q ':$(MQTT_IT_BOAT_PORT)' && break; \
 	    sleep 0.2; \
-	  done && \
-	  ./fleet_dt_it_mqtt $(MQTT_IT_PORT); rc=$$?; \
+	  done && sleep 1 && \
+	  ./fleet_dt_it_mqtt $(MQTT_IT_PORT) $(MQTT_IT_BOAT_PORT); rc=$$?; \
+	  kill `cat /tmp/fleet-dt-it-boat.pid` 2>/dev/null; \
 	  kill `cat /tmp/fleet-dt-it.pid` 2>/dev/null; \
 	  exit $$rc; \
 	fi
