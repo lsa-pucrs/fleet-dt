@@ -82,13 +82,13 @@ present, and writes the coverage table of
 |---|---|---|
 | C20 | "Due to the size of packets (48 KB payload plus camera feed frame), the bandwidth usage increased < 1% for an update window of 125 ms" | `tools/bench/bench_bandwidth.c` |
 | C21 | "MQTT introduced no notable latency, nor did WeBots' visual feedback (3D model) suffer from stuttering" | `tools/bench/bench_jitter.c` |
-| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | `tools/bench/bench_webots_cpu.c` over three worlds that differ only in vessel count |
+| C22 | "running WeBots adds 10% CPU usage for the first boat and less than 1% for subsequent boats" | `tools/bench/bench_webots_cpu.c` over worlds of 0 to 60 vessels (`make webots-worlds`), one core, rendering off; the slope of a least-squares fit is the cost per added twin, and the synthetic boats' CPU is subtracted |
 | C23 | "Running δ in less than 125 ms is feasible. However, actuation is delivered late to the boat, as it has to travel back through the network" | two measurements: δ time in `feasibility`, round trip in `bench_latency.c` |
-| C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | `examples/daemon.c`, window depth 4 |
+| C24 | "we added a range of states to δᵉ, thereby enabling proactive operation, as in model predictive control (MPC)" | `fdt_predict` in `src/predict.c` (x̂ₖ₊d from the window, backup slide 6); `examples/daemon.c` steers on it, window depth 4, d = 2 |
 | C25 | "the resources required to add more DTIs to the fleet are negligible (< 1% CPU usage per DTI)" | `tools/bench/bench_scale.c` |
 | C26 | "hard-programming injectors to inject packets periodically could not keep the simulation pace for larger fleets (> 25 boats, same computer model)" | `tools/injector/`; the DTI ceiling and the injector ceiling are reported as two numbers |
 | C27 | "the state of some boats was *partially* updated... the state of some boats was updated twice within the same simulation frame" | `src/framesync.c`, fed by the envelope sequence number |
-| C28 | "Telemetry was collected from a real boat and compared to the pose and attitude estimation, using a Kalman filter to generate Bᵢᵗ. Data from sensors (Iᵢᵗ) were used unfiltered to achieve the lowest possible latency from sensing to the actuation path" | `examples/two_paths.c` |
+| C28 | "Telemetry was collected from a real boat and compared to the pose and attitude estimation, using a Kalman filter to generate Bᵢᵗ. Data from sensors (Iᵢᵗ) were used unfiltered to achieve the lowest possible latency from sensing to the actuation path" | `fdt_kf_t` in `src/kalman.c`; `examples/two_paths.c` keeps π on the raw path |
 
 ## F. What Section VI names as future work
 

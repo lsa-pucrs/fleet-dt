@@ -20,6 +20,9 @@ adapters/webots/controllers/*/[!.]*
 !adapters/webots/controllers/*/*.c
 !adapters/webots/controllers/*/*.h
 adapters/webots/worlds/.*.wbproj
+# The N-vessel worlds of the slide 14 sweep; `make webots-worlds` writes them.
+adapters/webots/worlds/jundia_n*.wbt
+tools/worldgen/wbtgen
 *.d
 
 # Editor and agent scratch

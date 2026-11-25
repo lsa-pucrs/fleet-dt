@@ -64,7 +64,8 @@ mismatch, and this table gets re-checked.
 | under 1 % CPU per DTI | scaling | [`bench_scale.c`](../tools/bench/bench_scale.c) |
 | bandwidth increase | link budget | [`bench_bandwidth.c`](../tools/bench/bench_bandwidth.c) |
 | δ feasible, actuation late | two measurements | [`bench_latency.c`](../tools/bench/bench_latency.c) |
-| Kalman for `Bᵢᵗ`, raw `Iᵢᵗ` for actuation | two paths | [`examples/two_paths.c`](../examples/two_paths.c) |
+| Kalman for `Bᵢᵗ`, raw `Iᵢᵗ` for actuation | two paths | [`kalman.h`](../include/fleet_dt/kalman.h), [`examples/two_paths.c`](../examples/two_paths.c) |
+| "estimating techniques based on temporal series" (Sec. IV); x̂ₖ₊d (talk, backup slide 6) | the state when the command lands | [`predict.h`](../include/fleet_dt/predict.h), [`examples/daemon.c`](../examples/daemon.c) |
 
 ## Where the API differs in shape from the equations
 
