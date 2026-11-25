@@ -8,6 +8,7 @@
 #include <fleet_dt/db.h>
 #include <fleet_dt/dte.h>
 #include <fleet_dt/feasibility.h>
+#include <fleet_dt/predict.h>
 #include <fleet_dt/tick.h>
 
 #include <stdio.h>
@@ -18,6 +19,12 @@
 #define FRAMES     40
 #define FDT_WINDOW 4
 
+/**
+ * Horizon d of the estimator, in ticks: how late a command computed now
+ * reaches the boat (talk, backup slide 6: d >= 1).
+ */
+#define HORIZON_D 2
+
 /** Radians to degrees, for crossing the mixed units of Table I. */
 #define RAD2DEG 57.2957795f
 
@@ -26,6 +33,13 @@ static fdt_state_t g_bt_slots[NBOATS];
 static fdt_twin_t  g_twins[NBOATS];
 static fdt_feas_t  g_feas;
 
+/** Per-vessel context: x̂_{k+d}, which delta^e estimates and pi acts on. */
+typedef struct {
+    fdt_state_t xhat;
+} vessel_ctx_t;
+
+static vessel_ctx_t g_vctx[NBOATS];
+
 /** c^t: how spread out the fleet is, and the throttle ceiling that follows. */
 typedef struct {
     float spread_deg;
@@ -33,41 +47,43 @@ typedef struct {
 } fleet_ctx_t;
 
 /**
- * delta^e over the n most recent states.
+ * delta^e over the n most recent states. Besides B^t it estimates
+ * x̂_{k+d} from the window (include/fleet_dt/predict.h), the state the boat
+ * will be in when this tick's command lands.
  */
 static void demo_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
                          const fdt_goal_t *g_prev, fdt_state_t *out,
                          void *ctx, void *fleet_ctx)
 {
     (void)g_prev;
-    (void)ctx;
     (void)fleet_ctx;
 
     const fdt_state_t *newest = fdt_window_at(q, n, 0);
-    const fdt_state_t *oldest = fdt_window_at(q, n, n - 1);
     *out = (newest != NULL) ? *newest : (fdt_state_t){0};
 
     const float rate = (in != NULL) ? in->wz_rps : 0.0f;
     const float dt_s = (float)FDT_TICK_NS / 1e9f;
 
     out->yaw_rate_rps = rate;
-
     out->yaw_deg += rate * dt_s * RAD2DEG;
 
-    /* The term depth buys: mean yaw change per frame across the window. */
-    if (newest != NULL && oldest != NULL && n > 1) {
-        out->pitch_deg = (newest->yaw_deg - oldest->yaw_deg) /
-                         (float)(n - 1);
+    /* The window's newest state is B^{t-1}: B^t is one tick ahead of it,
+     * and the command lands d ticks after B^t. */
+    vessel_ctx_t *vc = (vessel_ctx_t *)ctx;
+    if (vc != NULL && fdt_predict(q, n, HORIZON_D + 1, 1, &vc->xhat) != 0) {
+        vc->xhat = *out;
     }
 }
 
+/** pi on x̂_{k+d}, as in model predictive control (Section IV). */
 static void demo_pi(const fdt_state_t *b, const fdt_goal_t *g_now,
                     fdt_actuation_t *out, void *ctx, void *fleet_ctx)
 {
-    (void)ctx;
+    const vessel_ctx_t *vc = (const vessel_ctx_t *)ctx;
+    const fdt_state_t *x = (vc != NULL) ? &vc->xhat : b;
 
     const fleet_ctx_t *fc = (const fleet_ctx_t *)fleet_ctx;
-    out->cage_rad     = (g_now->yaw_deg - b->yaw_deg) * 0.01f;
+    out->cage_rad     = (g_now->yaw_deg - x->yaw_deg) * 0.01f;
     out->throttle_pct = (fc != NULL) ? fc->throttle_ceiling_pct : 100.0f;
 }
 
@@ -119,7 +135,7 @@ int main(void)
 
     for (size_t k = 0; k < NBOATS; k++) {
         if (fdt_twin_init(&g_twins[k], g_queues[k], QUEUE_CAP,
-                          demo_delta_e, demo_pi, NULL) != 0) {
+                          demo_delta_e, demo_pi, &g_vctx[k]) != 0) {
             fprintf(stderr, "twin %zu failed to init\n", k);
             return EXIT_FAILURE;
         }
@@ -177,7 +193,7 @@ int main(void)
     fdt_tick_start(&tk, FDT_TICK_NS);
 
     printf("%-4s %-28s %-28s %8s\n",
-           "k", "boat 0 (yaw / trend / cage)", "boat 1 (yaw / trend / cage)",
+           "k", "boat 0 (yaw / x^k+d / cage)", "boat 1 (yaw / x^k+d / cage)",
            "spread");
 
     for (int frame = 0; frame < FRAMES; frame++) {
@@ -199,11 +215,11 @@ int main(void)
             return EXIT_FAILURE;
         }
 
-        printf("%-4d %7.2f %7.3f %+7.3f      %7.2f %7.3f %+7.3f      %7.3f\n",
+        printf("%-4d %7.2f %7.2f %+7.3f      %7.2f %7.2f %+7.3f      %7.3f\n",
                frame,
-               (double)bs[0].yaw_deg, (double)bs[0].pitch_deg,
+               (double)bs[0].yaw_deg, (double)g_vctx[0].xhat.yaw_deg,
                (double)as[0].cage_rad,
-               (double)bs[1].yaw_deg, (double)bs[1].pitch_deg,
+               (double)bs[1].yaw_deg, (double)g_vctx[1].xhat.yaw_deg,
                (double)as[1].cage_rad,
                (double)fc.spread_deg);
 
