@@ -16,6 +16,58 @@ int fdt_topic(char *buf, size_t cap, const char *kind, unsigned vessel)
     return 0;
 }
 
+int fdt_sensor_topic(char *buf, size_t cap, unsigned vessel,
+                     const char *level, const char *sensor)
+{
+    if (buf == NULL || level == NULL || sensor == NULL || cap == 0) {
+        return -1;
+    }
+
+    const int n = snprintf(buf, cap, "fleet/%u/%s/%s", vessel, level,
+                           sensor);
+    if (n < 0 || (size_t)n >= cap) {
+        return -1;
+    }
+    return 0;
+}
+
+int fdt_topic_match(const char *filter, const char *topic)
+{
+    if (filter == NULL || topic == NULL) {
+        return 0;
+    }
+
+    const char *f = filter;
+    const char *t = topic;
+    for (;;) {
+        if (f[0] == '#' && f[1] == '\0') {
+            return 1;
+        }
+        if (f[0] == '+' && (f[1] == '/' || f[1] == '\0')) {
+            while (*t != '\0' && *t != '/') {
+                t++;
+            }
+            f++;
+        } else {
+            while (*f != '\0' && *f != '/') {
+                if (*t != *f) {
+                    return 0;
+                }
+                f++;
+                t++;
+            }
+            if (*t != '\0' && *t != '/') {
+                return 0;
+            }
+        }
+        if (*f == '\0' || *t == '\0') {
+            return *f == '\0' && *t == '\0';
+        }
+        f++; /* both sit on '/' */
+        t++;
+    }
+}
+
 static int loop_publish(void *self, const char *topic, const uint8_t *buf,
                         size_t len, int qos)
 {
@@ -98,7 +150,7 @@ static int loop_poll(void *self, int timeout_ms)
 
         delivered++;
         for (size_t s = 0; s < lo->nsubs; s++) {
-            if (strcmp(lo->subs[s].topic, lo->q[i].topic) == 0) {
+            if (fdt_topic_match(lo->subs[s].topic, lo->q[i].topic)) {
                 lo->subs[s].cb(lo->q[i].topic, lo->q[i].payload,
                                lo->q[i].len, lo->subs[s].user);
             }

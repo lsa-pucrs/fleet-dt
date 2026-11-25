@@ -7,6 +7,7 @@
 #include "bench_common.h"
 #include "injector/injector.h"
 
+#include <fleet_dt/assembler.h>
 #include <fleet_dt/codec.h>
 #include <fleet_dt/coordinator.h>
 #include <fleet_dt/envelope.h>
@@ -47,7 +48,10 @@ typedef struct {
 } fleet_ctx_t;
 
 /** Where the decoded telemetry of one frame lands before the fleet steps. */
-static fdt_input_t  g_decoded[MAX_VESSELS];
+static fdt_rx_slot_t g_rx_slots[MAX_VESSELS];
+static fdt_rx_t      g_rx;
+static fdt_loop_t    g_loop;
+static fdt_inj_t     g_inj;
 static fdt_framesync_t g_fs;
 
 /** delta^e: integrate the yaw rate over the window's newest state. */
@@ -120,24 +124,13 @@ static void bench_plan(const fdt_store_t *bt, const void *fleet_ctx,
     }
 }
 
-/** Collects one frame's telemetry off the transport into g_decoded. */
+/** Applies one sensor message to the assembled I^t of its vessel. */
 static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
                     void *user)
 {
     (void)topic;
     (void)user;
-
-    fdt_env_t env;
-    const uint8_t *payload = NULL;
-    if (fdt_env_decode(buf, len, &env, &payload) < 0 || payload == NULL) {
-        return;
-    }
-    if (env.kind != FDT_ENV_INPUT || env.vessel >= MAX_VESSELS) {
-        return;
-    }
-    if (fdt_fs_accept(&g_fs, &env) == FDT_FS_STALE) {
-    }
-    (void)fdt_dec_input(payload, env.payload_len, &g_decoded[env.vessel]);
+    (void)fdt_rx_accept(&g_rx, buf, len);
 }
 
 /** Monotonic nanoseconds. */
@@ -156,6 +149,7 @@ typedef struct {
     double inj_mean_ms;
     int    feasible;
     unsigned long partial;
+    unsigned long incomplete;
     unsigned long doubles;
     unsigned long stale;
     unsigned long inj_missed;
@@ -171,9 +165,9 @@ typedef struct {
 static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
                           unsigned defer_every, int paced, int frames)
 {
-    fdt_loop_t loop;
-    fdt_transport_t tr = fdt_loop_transport(&loop);
-    fdt_inj_t inj;
+    fdt_loop_t *loop = &g_loop;
+    fdt_transport_t tr = fdt_loop_transport(loop);
+    fdt_inj_t *inj = &g_inj;
     fdt_fleet_t fleet;
     fdt_store_t store;
     fdt_coord_t coord;
@@ -182,10 +176,12 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
     const fdt_state_t zero = {0};
     run_t out = {0};
 
-    fdt_loop_set_loss(&loop, drop_every, defer_every);
+    fdt_loop_set_loss(loop, drop_every, defer_every);
 
-    assert(fdt_inj_init(&inj, &tr, vessels, 8.0, 20260817u) == 0);
+    assert(fdt_inj_init(inj, &tr, vessels, 8.0, 20260817u) == 0);
     assert(fdt_fs_init(&g_fs, g_seqs, g_hits, vessels) == 0);
+    assert(fdt_rx_init(&g_rx, g_rx_slots, vessels, &g_fs) == 0);
+    assert(tr.subscribe(tr.self, FDT_TOPIC_LSDT_ALL, on_lsdt, NULL) == 0);
 
     for (unsigned k = 0; k < vessels; k++) {
         assert(fdt_twin_init(&g_twins[k], g_queues[k], QUEUE_CAP,
@@ -193,10 +189,6 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
         for (int s = 0; s < WINDOW; s++) {
             assert(fdt_twin_seed(&g_twins[k], &zero) == 0);
         }
-        char topic[64];
-        assert(fdt_topic(topic, sizeof topic, FDT_TOPIC_LSDT, k) == 0);
-        assert(tr.subscribe(tr.self, topic, on_lsdt, NULL) == 0);
-
         g_gprev[k] = zero;
         g_gnow[k]  = zero;
     }
@@ -217,18 +209,18 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
     const double wall_begin = now_ns();
 
     for (int frame = 0; frame < frames; frame++) {
-        /* Injector side: publish one I^t per vessel and time it. */
+        /* Injector side: every vessel samples, regulates and publishes; timed. */
         const double inj_t0 = now_ns();
-        fdt_fs_begin_frame(&g_fs);
-        const int sent = fdt_inj_tick(&inj);
+        fdt_rx_begin_frame(&g_rx);
+        const int sent = fdt_inj_tick(inj);
         (void)tr.poll(tr.self, 0);
-        fdt_fs_end_frame(&g_fs);
+        fdt_rx_end_frame(&g_rx);
         inj_total_ns += now_ns() - inj_t0;
 
         assert(sent >= 0);
 
         for (unsigned k = 0; k < vessels; k++) {
-            g_ins[k] = g_decoded[k];
+            g_ins[k] = *fdt_rx_input(&g_rx, k);
         }
 
         fdt_feas_begin(&feas);
@@ -241,7 +233,7 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
             const uint64_t before = fdt_tick_overruns(&tk);
             fdt_tick_wait(&tk);
             if (fdt_tick_overruns(&tk) != before) {
-                fdt_inj_note_missed_deadline(&inj);
+                fdt_inj_note_missed_deadline(inj);
             }
         }
     }
@@ -252,17 +244,22 @@ static run_t run_fleet_ex(unsigned vessels, unsigned drop_every,
     out.dti_mean_ms  = fdt_feas_mean_ns(&feas) / 1e6;
     out.feasible     = fdt_feas_ok(&feas);
     out.inj_mean_ms  = inj_total_ns / (double)frames / 1e6;
-    out.partial      = (unsigned long)fdt_fs_partial_frames(&g_fs);
-    out.doubles      = (unsigned long)fdt_fs_double_updates(&g_fs);
-    out.stale        = (unsigned long)fdt_fs_stale_packets(&g_fs);
-    out.inj_missed   = (unsigned long)fdt_inj_missed_deadlines(&inj);
+    out.partial      = (unsigned long)fdt_rx_partial_frames(&g_rx);
+    out.incomplete   = (unsigned long)fdt_rx_incomplete(&g_rx);
+    out.doubles      = (unsigned long)fdt_rx_doubles(&g_rx);
+    out.stale        = (unsigned long)fdt_rx_stale(&g_rx);
+    out.inj_missed   = (unsigned long)fdt_inj_missed_deadlines(inj);
 
-    const double delta_total_ns = fdt_feas_mean_ns(&feas) * (double)frames;
-    out.cpu_per_dti_pct = 100.0 * (delta_total_ns / wall_ns) /
-                          (double)vessels;
+    /* Share of one core a DTI takes at 8 Hz: its delta time per tick over
+       the 125 ms period. The injector stands for the boats and their
+       brokers, which run on other machines in the field, so its time is not
+       charged, and the measure does not depend on how fast the unpaced loop
+       happens to spin. */
+    (void)wall_ns;
+    out.cpu_per_dti_pct = 100.0 * fdt_feas_mean_ns(&feas) /
+                          (double)vessels / (double)FDT_TICK_NS;
 
     tr.close(tr.self);
-    memset(g_decoded, 0, sizeof g_decoded);
     return out;
 }
 
@@ -305,7 +302,7 @@ int main(void)
             inj_ceiling = v;
         }
 
-        bench_say(&r, "  %8u %10.1f us %10.1f us %9.3f %% %10.1f us %10s\n",
+        bench_say(&r, "  %8u %10.1f us %10.1f us %9.2g %% %10.1f us %10s\n",
                   v, run.dti_worst_ms * 1e3, run.dti_mean_ms * 1e3,
                   run.cpu_per_dti_pct, run.inj_mean_ms * 1e3,
                   run.feasible ? "yes" : "NO");
@@ -316,9 +313,14 @@ int main(void)
 
     bench_section(&r, "DTI side, what Section V-B calls negligible");
     char buf[64];
-    snprintf(buf, sizeof buf, "%.4f %%", cpu_pct[SWEEP_N - 1]);
+    snprintf(buf, sizeof buf, "%.2g %% of a core", cpu_pct[SWEEP_N - 1]);
     bench_compare(&r, "cpu per DTI", buf, "< 1 %",
                   (cpu_pct[SWEEP_N - 1] < 1.0) ? BENCH_MATCH : BENCH_HOST);
+    bench_say(&r,
+        "  CPU per DTI is delta time per vessel per tick over the 125 ms\n"
+        "  period: the share of one core a DTI takes at 8 Hz. It counts the\n"
+        "  model only. Section V-A measured the whole WeBots process, which\n"
+        "  bench_webots_cpu covers.\n");
 
     snprintf(buf, sizeof buf, "%.1f us", worst_ms[SWEEP_N - 1] * 1e3);
     bench_compare(&r, "worst delta, 64 vessels", buf, "< 125 ms deadline",
@@ -356,18 +358,23 @@ int main(void)
         "  sweep above reports zeros by construction. This row injects the\n"
         "  two link conditions Section V-B describes: a packet that never\n"
         "  arrives, and a packet the network stack holds into the following\n"
-        "  frame.\n\n");
+        "  frame. Each boat publishes one message per sensor per tick, so a\n"
+        "  lost message leaves that boat partially updated, and a held one\n"
+        "  lands beside the next tick's and updates its sensor twice.\n\n");
 
     const unsigned lossy_vessels = 16;
-    const unsigned drop_every    = 61;
-    const unsigned defer_every   = 43;
+    const unsigned drop_every    = 241;
+    const unsigned defer_every   = 173;
 
     const run_t lossy = run_fleet_ex(lossy_vessels, drop_every, defer_every,
                                      0, FRAMES);
     bench_say(&r, "  %u vessels, drop 1 in %u, defer 1 in %u, %d frames\n",
               lossy_vessels, drop_every, defer_every, FRAMES);
     bench_say(&r, "    partial frames : %lu of %d\n", lossy.partial, FRAMES);
-    bench_say(&r, "    double updates : %lu\n", lossy.doubles);
+    bench_say(&r, "    partial boats  : %lu boat-frames missing a sensor\n",
+              lossy.incomplete);
+    bench_say(&r, "    double updates : %lu boat-frames with a sensor twice\n",
+              lossy.doubles);
     bench_say(&r, "    stale packets  : %lu\n", lossy.stale);
     bench_say(&r, "    delta worst    : %.1f us   feasible: %s\n",
               lossy.dti_worst_ms * 1e3, lossy.feasible ? "yes" : "NO");

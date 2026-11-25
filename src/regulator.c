@@ -1,43 +1,62 @@
 #include <fleet_dt/regulator.h>
 
+#include <math.h>
 #include <stddef.h>
 
-int fdt_reg_init(fdt_reg_t *r, double sensor_hz, double publish_hz)
+int fdt_reg_init(fdt_reg_t *r, double sensor_hz)
 {
-    if (r == NULL || sensor_hz <= 0.0 || publish_hz <= 0.0) {
+    if (r == NULL || !(sensor_hz > 0.0)) {
         return -1;
     }
-    r->sensor_hz  = sensor_hz;
-    r->publish_hz = publish_hz;
-
-    r->step      = publish_hz / sensor_hz;
-    r->acc       = 0.0;
+    r->sensor_hz = sensor_hz;
+    r->held      = 0;
     r->sampled   = 0;
     r->published = 0;
     r->dropped   = 0;
+    r->empty     = 0;
     return 0;
 }
 
-int fdt_reg_admit(fdt_reg_t *r)
+void fdt_reg_offer(fdt_reg_t *r)
+{
+    if (r == NULL) {
+        return;
+    }
+    r->sampled++;
+    if (r->held) {
+        r->dropped++;
+    }
+    r->held = 1;
+}
+
+int fdt_reg_capture(fdt_reg_t *r)
 {
     if (r == NULL) {
         return 0;
     }
-
-    r->sampled++;
-    r->acc += r->step;
-
-    if (r->acc >= 1.0) {
-        r->acc -= 1.0;
-        if (r->acc >= 1.0) {
-            r->acc = 0.0;
-        }
-        r->published++;
-        return 1;
+    if (!r->held) {
+        r->empty++;
+        return 0;
     }
+    r->held = 0;
+    r->published++;
+    return 1;
+}
 
-    r->dropped++;
-    return 0;
+/** Samples taken in (0, k / tick_hz], with a guard against 0.999... */
+static uint64_t samples_until(double sensor_hz, double tick_hz, uint64_t k)
+{
+    return (uint64_t)floor((double)k * sensor_hz / tick_hz + 1e-9);
+}
+
+unsigned fdt_reg_samples_in_tick(double sensor_hz, double tick_hz,
+                                 uint64_t k)
+{
+    if (!(sensor_hz > 0.0) || !(tick_hz > 0.0)) {
+        return 0;
+    }
+    return (unsigned)(samples_until(sensor_hz, tick_hz, k + 1) -
+                      samples_until(sensor_hz, tick_hz, k));
 }
 
 uint64_t fdt_reg_sampled(const fdt_reg_t *r)
@@ -53,6 +72,11 @@ uint64_t fdt_reg_published(const fdt_reg_t *r)
 uint64_t fdt_reg_dropped(const fdt_reg_t *r)
 {
     return (r == NULL) ? 0 : r->dropped;
+}
+
+uint64_t fdt_reg_empty_ticks(const fdt_reg_t *r)
+{
+    return (r == NULL) ? 0 : r->empty;
 }
 
 double fdt_reg_effective_hz(const fdt_reg_t *r)

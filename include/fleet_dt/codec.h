@@ -70,4 +70,51 @@ long fdt_enc_act(const fdt_actuation_t *a, uint8_t *buf, size_t cap);
  */
 long fdt_dec_act(const uint8_t *buf, size_t len, fdt_actuation_t *a);
 
+/**
+ * The four sensors of the LSDT group, as the boat publishes them: one message
+ * per sensor sample (slide 13). Together they carry every scalar of I^t in
+ * Table I; the stereo views travel off MQTT (Section III).
+ */
+typedef enum {
+    FDT_SENSOR_IMU   = 0, /**< a, omega, m: nine floats (NAVIO2 IMU). */
+    FDT_SENSOR_GPS   = 1, /**< phi, lambda, h, v_N, v_E, v_D: six floats. */
+    FDT_SENSOR_BARO  = 2, /**< P, T: two floats (MS5611). */
+    FDT_SENSOR_POWER = 3, /**< V_b, I_b: two floats (Arduino Micro). */
+    FDT_SENSOR_COUNT = 4
+} fdt_sensor_t;
+
+/** Encoded size of one IMU sample. */
+#define FDT_WIRE_IMU_BYTES 36
+/** Encoded size of one GPS sample. */
+#define FDT_WIRE_GPS_BYTES 24
+/** Encoded size of one barometer sample. */
+#define FDT_WIRE_BARO_BYTES 8
+/** Encoded size of one power sample. */
+#define FDT_WIRE_POWER_BYTES 8
+/** Largest encoded sensor sample. */
+#define FDT_WIRE_SENSOR_MAX_BYTES FDT_WIRE_IMU_BYTES
+
+/** @brief Encoded size of one sample of @p s, or 0 for an unknown sensor. */
+size_t fdt_sensor_bytes(fdt_sensor_t s);
+
+/** @brief Short lowercase name of @p s ("imu", "gps", ...), or NULL. */
+const char *fdt_sensor_name(fdt_sensor_t s);
+
+/**
+ * @brief Encodes the fields of I^t that sensor @p s measures.
+ * @return Bytes written, or -1 on a NULL argument, an unknown sensor or a
+ *         short buffer.
+ */
+long fdt_enc_sensor(const fdt_input_t *in, fdt_sensor_t s, uint8_t *buf,
+                    size_t cap);
+
+/**
+ * @brief Decodes one sample of sensor @p s into the matching fields of
+ *        @p in, leaving every other field untouched.
+ * @return Bytes consumed, or -1 on a NULL argument, an unknown sensor or a
+ *         short buffer.
+ */
+long fdt_dec_sensor(const uint8_t *buf, size_t len, fdt_sensor_t s,
+                    fdt_input_t *in);
+
 #endif /* FLEET_DT_CODEC_H */

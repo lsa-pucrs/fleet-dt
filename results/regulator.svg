@@ -51,7 +51,7 @@
 <line class="rule" x1="72.0" y1="266.9" x2="670.0" y2="266.9"/>
 <text class="rulelab" x="664.0" y="260.9" text-anchor="end">DT rate, 8 Hz (Sec. III)</text>
 <polyline fill="none" stroke="#2563eb" stroke-width="2" stroke-linejoin="round" points="72.00,358.00 72.60,327.63 73.80,297.27 76.19,266.90 77.39,257.12 83.37,226.76 101.33,186.61 131.26,156.25 191.12,125.88 310.84,95.51 670.00,55.37 "/>
-<polyline fill="none" stroke="#dc2626" stroke-width="2" stroke-linejoin="round" points="72.00,358.00 72.60,327.63 73.80,297.27 76.19,266.90 77.39,266.90 83.37,266.90 101.33,266.90 131.26,266.93 191.12,266.90 310.84,266.90 670.00,266.90 "/>
+<polyline fill="none" stroke="#dc2626" stroke-width="2" stroke-linejoin="round" points="72.00,358.00 72.60,327.63 73.80,297.27 76.19,266.90 77.39,266.90 83.37,266.90 101.33,266.90 131.26,266.90 191.12,266.90 310.84,266.90 670.00,266.90 "/>
 <rect x="680.0" y="54.0" width="12" height="12" fill="#2563eb"/>
 <text class="legend" x="698.0" y="64.0">sensor sampling</text>
 <rect x="680.0" y="74.0" width="12" height="12" fill="#dc2626"/>

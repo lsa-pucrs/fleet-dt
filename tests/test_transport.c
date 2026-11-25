@@ -184,9 +184,49 @@ static void test_loss_injection(void)
     assert(fdt_loop_deferred(NULL) == 0);
 }
 
+/** Per-sensor topics and MQTT filter matching, as the twin subscribes. */
+static void test_sensor_topics_and_wildcards(void)
+{
+    char t[64];
+    assert(fdt_sensor_topic(t, sizeof t, 3, FDT_TOPIC_LSDT, "imu") == 0);
+    assert(strcmp(t, "fleet/3/lsdt/imu") == 0);
+    assert(fdt_sensor_topic(t, sizeof t, 3, FDT_TOPIC_RAW, "gps") == 0);
+    assert(strcmp(t, "fleet/3/raw/gps") == 0);
+    assert(fdt_topic_match(FDT_TOPIC_RAW_ALL, t));
+    assert(!fdt_topic_match(FDT_TOPIC_LSDT_ALL, t));
+    assert(fdt_sensor_topic(t, 8, 3, FDT_TOPIC_LSDT, "imu") == -1);
+    assert(fdt_sensor_topic(t, sizeof t, 3, FDT_TOPIC_LSDT, NULL) == -1);
+    assert(fdt_sensor_topic(t, sizeof t, 3, NULL, "imu") == -1);
+
+    assert(fdt_topic_match(FDT_TOPIC_LSDT_ALL, "fleet/3/lsdt/imu"));
+    assert(fdt_topic_match(FDT_TOPIC_LSDT_ALL, "fleet/12/lsdt/power"));
+    assert(!fdt_topic_match(FDT_TOPIC_LSDT_ALL, "fleet/3/lsdt"));
+    assert(!fdt_topic_match(FDT_TOPIC_LSDT_ALL, "fleet/3/act"));
+    assert(!fdt_topic_match(FDT_TOPIC_LSDT_ALL, "fleet/3/lsdt/imu/x"));
+    assert(fdt_topic_match("fleet/#", "fleet/3/lsdt/imu"));
+    assert(fdt_topic_match("#", "fleet/3/state"));
+    assert(fdt_topic_match("fleet/0/state", "fleet/0/state"));
+    assert(!fdt_topic_match("fleet/0/state", "fleet/0/states"));
+    assert(!fdt_topic_match("fleet/0/state", "fleet/1/state"));
+    assert(!fdt_topic_match(NULL, "a") && !fdt_topic_match("a", NULL));
+
+    /* One wildcard subscription receives every sensor of every vessel. */
+    static fdt_loop_t loop;
+    fdt_transport_t tr = fdt_loop_transport(&loop);
+    sink_t s = {0};
+    uint8_t payload[1] = { 0x11 };
+    assert(tr.subscribe(tr.self, FDT_TOPIC_LSDT_ALL, on_msg, &s) == 0);
+    assert(tr.publish(tr.self, "fleet/0/lsdt/imu", payload, 1, 1) == 0);
+    assert(tr.publish(tr.self, "fleet/5/lsdt/gps", payload, 1, 1) == 0);
+    assert(tr.publish(tr.self, "fleet/5/state", payload, 1, 1) == 0);
+    assert(tr.poll(tr.self, 0) == 3);
+    assert(s.hits == 2);
+}
+
 int main(void)
 {
     test_topic_layout();
+    test_sensor_topics_and_wildcards();
     test_publish_then_poll();
     test_delivery_semantics();
     test_null_safety();

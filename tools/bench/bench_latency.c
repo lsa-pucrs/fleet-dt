@@ -7,6 +7,7 @@
 #include "bench_common.h"
 #include "injector/injector.h"
 
+#include <fleet_dt/assembler.h>
 #include <fleet_dt/codec.h>
 #include <fleet_dt/coordinator.h>
 #include <fleet_dt/envelope.h>
@@ -31,7 +32,10 @@ static fdt_goal_t      g_gprev[VESSELS];
 static fdt_goal_t      g_gnow[VESSELS];
 static fdt_state_t     g_bs[VESSELS];
 static fdt_actuation_t g_as[VESSELS];
-static fdt_input_t     g_decoded[VESSELS];
+static fdt_rx_slot_t   g_rx_slots[VESSELS];
+static fdt_rx_t        g_rx;
+static fdt_loop_t      g_loop;
+static fdt_inj_t       g_inj;
 
 /** Set when the actuation for the current frame comes back off the wire. */
 static int g_act_seen;
@@ -93,15 +97,7 @@ static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
 {
     (void)topic;
     (void)user;
-
-    fdt_env_t env;
-    const uint8_t *payload = NULL;
-    if (fdt_env_decode(buf, len, &env, &payload) < 0 || payload == NULL) {
-        return;
-    }
-    if (env.kind == FDT_ENV_INPUT && env.vessel < VESSELS) {
-        (void)fdt_dec_input(payload, env.payload_len, &g_decoded[env.vessel]);
-    }
+    (void)fdt_rx_accept(&g_rx, buf, len);
 }
 
 /** The boat's end of the loop: the actuation has come back. */
@@ -149,16 +145,16 @@ int main(void)
     bench_say(&r, "transport: in-process loopback   vessels: %d   "
                   "frames: %d\n", VESSELS, FRAMES);
 
-    fdt_loop_t loop;
-    fdt_transport_t tr = fdt_loop_transport(&loop);
-    fdt_inj_t inj;
+    fdt_transport_t tr = fdt_loop_transport(&g_loop);
     fdt_fleet_t fleet;
     fdt_store_t store;
     fdt_coord_t coord;
     fdt_feas_t feas;
     const fdt_state_t zero = {0};
 
-    assert(fdt_inj_init(&inj, &tr, VESSELS, 8.0, 20260817u) == 0);
+    assert(fdt_inj_init(&g_inj, &tr, VESSELS, 8.0, 20260817u) == 0);
+    assert(fdt_rx_init(&g_rx, g_rx_slots, VESSELS, NULL) == 0);
+    assert(tr.subscribe(tr.self, FDT_TOPIC_LSDT_ALL, on_lsdt, NULL) == 0);
 
     for (unsigned k = 0; k < VESSELS; k++) {
         assert(fdt_twin_init(&g_twins[k], g_queues[k], CAP,
@@ -167,8 +163,6 @@ int main(void)
             assert(fdt_twin_seed(&g_twins[k], &zero) == 0);
         }
         char topic[64];
-        assert(fdt_topic(topic, sizeof topic, FDT_TOPIC_LSDT, k) == 0);
-        assert(tr.subscribe(tr.self, topic, on_lsdt, NULL) == 0);
         assert(fdt_topic(topic, sizeof topic, FDT_TOPIC_ACT, k) == 0);
         assert(tr.subscribe(tr.self, topic, on_act, NULL) == 0);
     }
@@ -183,13 +177,17 @@ int main(void)
     static double rtt_us[FRAMES];
 
     for (int frame = 0; frame < FRAMES; frame++) {
-        /* The round trip starts when the boat publishes its telemetry. */
+        /* The sensors sample through the frame; the regulators hold. */
+        assert(fdt_inj_offer_frame(&g_inj) == 0);
+
+        /* The round trip starts at the frame edge, when the regulated
+           client publishes its telemetry. */
         const double t_publish = now_ns();
-        assert(fdt_inj_tick(&inj) == VESSELS);
+        assert(fdt_inj_release(&g_inj) == VESSELS * FDT_SENSOR_COUNT);
         (void)tr.poll(tr.self, 0);
 
         for (unsigned k = 0; k < VESSELS; k++) {
-            g_ins[k] = g_decoded[k];
+            g_ins[k] = *fdt_rx_input(&g_rx, k);
         }
 
         /* Measurement one: how long delta takes. Section IV's predicate. */

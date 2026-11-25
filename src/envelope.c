@@ -40,7 +40,24 @@ static uint16_t get_u16(const uint8_t **p)
 static int kind_known(uint8_t kind)
 {
     return kind == FDT_ENV_INPUT || kind == FDT_ENV_STATE ||
-           kind == FDT_ENV_ACT   || kind == FDT_ENV_GOAL;
+           kind == FDT_ENV_ACT   || kind == FDT_ENV_GOAL  ||
+           fdt_env_kind_sensor(kind) >= 0;
+}
+
+uint8_t fdt_env_sensor_kind(int sensor)
+{
+    if (sensor < 0 || sensor > FDT_ENV_POWER - FDT_ENV_IMU) {
+        return 0;
+    }
+    return (uint8_t)(FDT_ENV_IMU + sensor);
+}
+
+int fdt_env_kind_sensor(uint8_t kind)
+{
+    if (kind < FDT_ENV_IMU || kind > FDT_ENV_POWER) {
+        return -1;
+    }
+    return (int)(kind - FDT_ENV_IMU);
 }
 
 long fdt_env_encode(const fdt_env_t *env, const uint8_t *payload, size_t plen,
