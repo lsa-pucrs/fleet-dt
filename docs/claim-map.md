@@ -45,7 +45,7 @@ present, and writes the coverage table of
 | C2 | "The architecture relies on the MQTT protocol" | Abstract, III | `transport.h` and its loopback, `adapters/mqtt/`, round trip in `make mqtt-test` |
 | C3 | "integrates the Ardupilot firmware, the WeBots simulator, and other simulation applications into a single system" | Abstract | `adapters/mavlink/`, `adapters/webots/` |
 | C4 | "Link-budget modeling is validated in the context of the Jundiá Project's fleet" | Abstract, V-A | `include/fleet_dt/linkbudget.h`, `tools/bench/bench_bandwidth.c` |
-| C5 | "introduces bandwidth regulators that guarantee QoS while maximizing the use of shared wireless links" | Abstract, III | `include/fleet_dt/regulator.h`, `tests/test_regulator.c` |
+| C5 | "introduces bandwidth regulators that guarantee QoS while maximizing the use of shared wireless links" | Abstract, III | `include/fleet_dt/regulator.h`, `include/fleet_dt/regpub.h`, `tests/test_regulator.c`, `tests/test_injector.c` |
 
 ## B. The three features of Section I
 
@@ -62,7 +62,7 @@ present, and writes the coverage table of
 | C9 | brokers "connected in bridge mode to avoid service interruption during temporary connection instability" | `config/mosquitto/`, partition test |
 | C10 | LSDT: small packets, "e.g., 8 bytes per IMU axis", against 100 Mbps available | the LSDT profile through `linkbudget` |
 | C11 | HSDT: "Separating the camera feed from the MQTT infrastructure reduced latency while improving the DTI's response time" | `adapters/rtsp/`; the wire codec never carries an image |
-| C12 | regulators "overcome this problem by dropping the number of samples in the MQTT client", while "real sensors continue sampling at their own pace" | `regulator.h`, two-path test |
+| C12 | regulators "overcome this problem by dropping the number of samples in the MQTT client", while "real sensors continue sampling at their own pace" | `regulator.h`, `regpub.h` (the client), two-path test |
 
 ## D. The model of Section IV
 

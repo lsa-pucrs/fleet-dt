@@ -9,8 +9,17 @@
  * @brief The network boundary of Section III, and an in-process loopback.
  */
 
-/** Topic suffix for I^t, the low-speed telemetry of Section III. */
+/**
+ * Topic level for regulated low-speed telemetry (Section III): what the
+ * regulator in the boat broker releases, one message per sensor per tick,
+ * and the only telemetry the bridge carries to the ground station.
+ */
 #define FDT_TOPIC_LSDT "lsdt"
+/**
+ * Topic level for raw sensor samples, published on the boat broker at the
+ * sensor's own rate. The bridge never carries it.
+ */
+#define FDT_TOPIC_RAW "raw"
 /** Topic suffix for B^t, the twin state. */
 #define FDT_TOPIC_STATE "state"
 /** Topic suffix for A^t, the actuation travelling back to the boat. */
@@ -28,6 +37,29 @@
  * @return 0 on success, -1 when an argument is NULL or @p buf is too small.
  */
 int fdt_topic(char *buf, size_t cap, const char *kind, unsigned vessel);
+
+/** Filter matching every regulated sensor of every vessel. */
+#define FDT_TOPIC_LSDT_ALL "fleet/+/lsdt/+"
+/** Filter matching every raw sensor of every vessel. */
+#define FDT_TOPIC_RAW_ALL "fleet/+/raw/+"
+
+/**
+ * @brief Builds the topic of one sensor of one vessel:
+ *        fleet/<v>/<level>/<sensor>.
+ *
+ * @param level   ::FDT_TOPIC_LSDT or ::FDT_TOPIC_RAW.
+ * @param sensor  Sensor name, e.g. from fdt_sensor_name().
+ * @return 0 on success, -1 when an argument is NULL or @p buf is too small.
+ */
+int fdt_sensor_topic(char *buf, size_t cap, unsigned vessel,
+                     const char *level, const char *sensor);
+
+/**
+ * @brief MQTT topic-filter matching: '+' matches one level, a trailing '#'
+ *        matches the rest.
+ * @return 1 when @p topic matches @p filter, 0 otherwise.
+ */
+int fdt_topic_match(const char *filter, const char *topic);
 
 /**
  * @brief Delivery callback, invoked from fdt_transport_t::poll.
@@ -77,7 +109,7 @@ typedef struct {
 } fdt_transport_t;
 
 /** Messages the loopback holds in flight. */
-#define FDT_LOOP_QUEUE 64
+#define FDT_LOOP_QUEUE 1024
 /** Simultaneous subscriptions the loopback supports. */
 #define FDT_LOOP_SUBS 64
 /** Longest topic the loopback stores, including the terminator. */

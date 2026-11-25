@@ -42,7 +42,7 @@ static void on_message(struct mosquitto *m, void *obj,
 
     int matched = 0;
     for (size_t i = 0; i < st->nsubs; i++) {
-        if (strcmp(st->subs[i].topic, msg->topic) == 0) {
+        if (fdt_topic_match(st->subs[i].topic, msg->topic)) {
             st->subs[i].cb(msg->topic, (const uint8_t *)msg->payload,
                            (size_t)msg->payloadlen, st->subs[i].user);
             matched = 1;

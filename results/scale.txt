@@ -4,19 +4,23 @@ frames per size: 200   window depth: 4   queue capacity: 8
 
 --- per fleet size ---
    vessels   delta worst    delta mean     cpu/DTI     inj/frame   feasible
-         1        0.4 us        0.1 us    16.680 %        0.2 us        yes
-         2        0.1 us        0.1 us     9.272 %        0.3 us        yes
-         4        0.2 us        0.1 us     4.083 %        0.6 us        yes
-         8        1.5 us        0.2 us     1.768 %        1.4 us        yes
-        16        0.5 us        0.4 us     0.743 %        3.1 us        yes
-        25        1.3 us        0.5 us     0.445 %        3.7 us        yes
-        32        0.8 us        0.6 us     0.334 %        5.0 us        yes
-        48        1.4 us        1.0 us     0.210 %        9.0 us        yes
-        64        1.8 us        1.3 us     0.128 %       14.4 us        yes
+         1        1.0 us        0.0 us   3.5e-05 %        5.4 us        yes
+         2        0.2 us        0.1 us   2.3e-05 %       10.9 us        yes
+         4        0.2 us        0.1 us   1.9e-05 %       21.4 us        yes
+         8        0.4 us        0.2 us   1.8e-05 %       44.3 us        yes
+        16        0.7 us        0.3 us   1.6e-05 %       89.6 us        yes
+        25        0.6 us        0.5 us   1.7e-05 %      140.5 us        yes
+        32        2.4 us        0.7 us   1.7e-05 %      180.2 us        yes
+        48        3.0 us        1.0 us   1.7e-05 %      271.2 us        yes
+        64        1.4 us        1.3 us   1.6e-05 %      361.8 us        yes
 
 --- DTI side, what Section V-B calls negligible ---
-  cpu per DTI                0.1283 %               paper: < 1 %                              [matches paper]
-  worst delta, 64 vessels    1.8 us                 paper: < 125 ms deadline                  [matches paper]
+  cpu per DTI                1.6e-05 % of a core    paper: < 1 %                              [matches paper]
+  CPU per DTI is delta time per vessel per tick over the 125 ms
+  period: the share of one core a DTI takes at 8 Hz. It counts the
+  model only. Section V-A measured the whole WeBots process, which
+  bench_webots_cpu covers.
+  worst delta, 64 vessels    1.4 us                 paper: < 125 ms deadline                  [matches paper]
   DTI ceiling here           >= 64 vessels          paper: not the paper's 25                 [matches paper]
 
 --- injector side, the ceiling Section V-B reached ---
@@ -35,14 +39,17 @@ frames per size: 200   window depth: 4   queue capacity: 8
   sweep above reports zeros by construction. This row injects the
   two link conditions Section V-B describes: a packet that never
   arrives, and a packet the network stack holds into the following
-  frame.
+  frame. Each boat publishes one message per sensor per tick, so a
+  lost message leaves that boat partially updated, and a held one
+  lands beside the next tick's and updates its sensor twice.
 
-  16 vessels, drop 1 in 61, defer 1 in 43, 200 frames
-    partial frames : 106 of 200
-    double updates : 72
+  16 vessels, drop 1 in 241, defer 1 in 173, 200 frames
+    partial frames : 109 of 200
+    partial boats  : 125 boat-frames missing a sensor
+    double updates : 73 boat-frames with a sensor twice
     stale packets  : 0
     delta worst    : 0.9 us   feasible: yes
-  partial and double updates 106 partial, 72 double paper: some boats, not every frame        [matches paper]
+  partial and double updates 109 partial, 73 double paper: some boats, not every frame        [matches paper]
   Stale packets stay at 0 here, because the deferral preserves
   order: a held packet is delivered at the head of the next poll,
   so it still arrives before the fresher one behind it. It lands in

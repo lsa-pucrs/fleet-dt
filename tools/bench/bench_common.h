@@ -78,6 +78,24 @@ static inline void bench_compare(bench_report_t *r, const char *label,
               label, measured, paper, mark);
 }
 
+/**
+ * @brief Prints a measurement beside the figure the presentation publishes.
+ *
+ * Same layout as ::bench_compare, with the source named ("slide 13") so a
+ * reader never takes a slide figure for a paper figure.
+ */
+static inline void bench_compare_slide(bench_report_t *r, const char *label,
+                                       const char *measured,
+                                       const char *slide, const char *figure,
+                                       bench_verdict_t verdict)
+{
+    const char *mark = (verdict == BENCH_MATCH) ? "[matches slides]"
+                     : (verdict == BENCH_HOST)  ? "[this host]"
+                                                : "[external system]";
+    bench_say(r, "  %-26s %-22s %s: %-31s %s\n",
+              label, measured, slide, figure, mark);
+}
+
 /** @brief Closes the report. */
 static inline void bench_close(bench_report_t *r)
 {
