@@ -20,8 +20,14 @@ adapters/webots/controllers/*/[!.]*
 !adapters/webots/controllers/*/*.c
 !adapters/webots/controllers/*/*.h
 adapters/webots/worlds/.*.wbproj
+# The N-vessel worlds of the slide 14 sweep; `make webots-worlds` writes them.
+adapters/webots/worlds/jundia_n*.wbt
+tools/worldgen/wbtgen
 *.d
 
 # Editor and agent scratch
 .claude/
 .idea/
+
+# Scratch file of tests/test_db.c, removed by the test itself.
+fleet_dt_test_db.tmp

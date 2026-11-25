@@ -40,6 +40,21 @@ const fdt_state_t *fdt_store_get(const fdt_store_t *st, size_t k);
 size_t fdt_store_size(const fdt_store_t *st);
 
 /**
+ * @brief The spacing of the fleet: the c^t Section IV gives as its example,
+ *        "inter-vessel distance".
+ *
+ * Distances are great-circle-free: each pair is projected on the tangent
+ * plane at the first vessel of the pair (geo.h), which holds at fleet scale.
+ *
+ * @param min_m   Receives the smallest distance between two vessels, m.
+ * @param mean_m  Receives the mean over all pairs, m; may be NULL.
+ * @param a, b    Receive the indices of the closest pair; may be NULL.
+ * @return 0, or -1 when the store holds fewer than two vessels.
+ */
+int fdt_store_spacing(const fdt_store_t *st, double *min_m, double *mean_m,
+                      size_t *a, size_t *b);
+
+/**
  * @brief Computes c^t from the states the coordinator has received.
  *
  * @param bt         The B^t store, already updated with this frame's states.
@@ -60,13 +75,28 @@ typedef void (*fdt_ctx_fn)(const fdt_store_t *bt, void *fleet_ctx, void *user);
 typedef void (*fdt_plan_fn)(const fdt_store_t *bt, const void *fleet_ctx,
                             fdt_goal_t *goals_out, size_t n, void *user);
 
+/**
+ * @brief Computes c^t over the fleet window [F^{t-1}; F^{t-n}], equation (6).
+ * @param f          The fleet: fdt_fleet_state_at() and fdt_fleet_ctx_at()
+ *                   read its window. B^t of this frame is already in it;
+ *                   c^t is not, so k = 0 of the c^t history is c^{t-1}.
+ * @param n          The window depth of this frame.
+ * @param bt         The B^t store.
+ * @param fleet_ctx  The fleet's c^t, to be written.
+ * @param user       Coordinator-level context.
+ */
+typedef void (*fdt_ctx_window_fn)(const fdt_fleet_t *f, size_t n,
+                                  const fdt_store_t *bt, void *fleet_ctx,
+                                  void *user);
+
 /** @brief The S of Figure 4: a fleet, its store, and the two callbacks. */
 typedef struct {
-    fdt_fleet_t *fleet;   /**< The fleet this coordinator drives. */
-    fdt_store_t *bt;      /**< The B^t database of Figure 4. */
-    fdt_ctx_fn   ctx_fn;  /**< Computes c^t. Never NULL once bound. */
-    fdt_plan_fn  plan_fn; /**< Distributes g^t_i. Never NULL once bound. */
-    void        *user;    /**< Coordinator-level context, may be NULL. */
+    fdt_fleet_t      *fleet;     /**< The fleet this coordinator drives. */
+    fdt_store_t      *bt;        /**< The B^t database of Figure 4. */
+    fdt_ctx_fn        ctx_fn;    /**< Computes c^t. Never NULL once bound. */
+    fdt_plan_fn       plan_fn;   /**< Distributes g^t_i. Never NULL once bound. */
+    void             *user;      /**< Coordinator-level context, may be NULL. */
+    fdt_ctx_window_fn ctx_win;   /**< Equation (6) variant; NULL unless set. */
 } fdt_coord_t;
 
 /**
@@ -76,6 +106,16 @@ typedef struct {
  */
 int fdt_coord_init(fdt_coord_t *co, fdt_fleet_t *fleet, fdt_store_t *bt,
                    fdt_ctx_fn ctx_fn, fdt_plan_fn plan_fn, void *user);
+
+/**
+ * @brief Computes c^t over the fleet window from now on (equation 6).
+ *
+ * The frame then calls @p fn in place of the plain fdt_ctx_fn, and records
+ * the c^t it produced into the fleet's history when the fleet keeps one.
+ *
+ * @return 0, or -1 on a NULL coordinator or callback.
+ */
+int fdt_coord_set_ctx_window(fdt_coord_t *co, fdt_ctx_window_fn fn);
 
 /**
  * @brief One coordinated frame, in the order Figure 4 draws it.

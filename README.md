@@ -90,7 +90,14 @@ A run against WeBots R2025a on 2026-08-17 stepped 674,360 frames under the
 coordinator, stayed feasible throughout, reached a worst δ of 117 µs against
 the 125 ms budget, and rendered `--mode=realtime` without a GL error.
 
-![the Jundiá fleet in WeBots](docs/simulation.jpg)
+On 2026-11-25, WeBots R2025a on an i7-14700 (one E-core, rendering off, as
+slide 14 ran) swept 0 to 60 boats: each added twin cost 0.113 % of the core
+(slide 14: 0.12 %), 60 boats 8.38 % (slide 14: 8.3 %), and the worst update
+of all 60 twins took 51 µs (slide 14: 36 µs). `make webots-worlds` writes the
+worlds and `bench_webots_cpu` runs the sweep; `results/webots_cpu.txt` holds
+the report.
+
+![the Jundiá fleet in WeBots, TILAPIA hulls](docs/simulation.jpg)
 
 ## Measurements
 
@@ -116,8 +123,11 @@ Anderson Domingues and the Jundiá project team:
 
 - `fdt_state_t` derives from `dt-daemon/include/boat.h`;
 - `examples/daemon.c` from `dt-daemon/daemon.c`;
-- the WeBots world, the hull and collision meshes, the material and texture,
-  and the immersion and drag coefficients from `projeto_barco/`.
+- the WeBots world, the collision mesh, and the immersion and drag
+  coefficients from `projeto_barco/`.
+
+The TILAPIA hull the worlds render is exported from the LSA's model of that
+vessel (MIT); the repository holds the mesh and its colours only.
 
 That repository is private. This repository redistributes the assets above
 under its licence and records the changes to the world in

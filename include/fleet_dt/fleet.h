@@ -17,6 +17,15 @@ typedef struct {
     fdt_twin_t *twins; /**< Caller-owned array of @c n initialised twins. */
     size_t      n;     /**< Vessels in the fleet, strictly positive. */
     void       *ctx;   /**< c^t, opaque to this library, may be NULL. */
+
+    /* History of c^t for the window [F^{t-1}; F^{t-n}] of equation (6).
+     * B^t already has its window in each twin's queue; this ring holds the
+     * matching past c^t. Optional: see fdt_fleet_keep_history(). */
+    unsigned char *ctx_ring;  /**< Caller-owned, ctx_cap * ctx_bytes. */
+    size_t         ctx_cap;   /**< Entries the ring holds. */
+    size_t         ctx_bytes; /**< Size of one c^t. */
+    size_t         ctx_count; /**< Entries recorded, at most ctx_cap. */
+    size_t         ctx_head;  /**< Next entry to write. */
 } fdt_fleet_t;
 
 /**
@@ -53,6 +62,43 @@ int fdt_fleet_init(fdt_fleet_t *f, fdt_twin_t *twins, size_t n, void *ctx);
 int fdt_fleet_step(fdt_fleet_t *f, const fdt_input_t *ins,
                    const fdt_goal_t *goals_prev, const fdt_goal_t *goals_now,
                    size_t n, fdt_state_t *b_out, fdt_actuation_t *a_out);
+
+/**
+ * @brief Keeps the last @p cap values of c^t, for equation (6).
+ *
+ * Equation (6) steps the fleet from the window [F^{t-1}; F^{t-n}], and
+ * F^t = [B^t delta^e c^t] (equation 4). Each twin's queue already keeps its
+ * B^t; this ring keeps c^t beside them. The coordinator records c^t once
+ * per frame (fdt_fleet_record_ctx), after computing it.
+ *
+ * @param storage    Caller-owned, at least @p cap * @p ctx_bytes bytes.
+ * @param ctx_bytes  Size of the c^t that f->ctx points to.
+ * @return 0, or -1 on a NULL argument, a zero size, or a fleet without ctx.
+ */
+int fdt_fleet_keep_history(fdt_fleet_t *f, void *storage, size_t cap,
+                           size_t ctx_bytes);
+
+/**
+ * @brief Copies the current c^t into the history.
+ * @return 0, or -1 when the fleet keeps no history.
+ */
+int fdt_fleet_record_ctx(fdt_fleet_t *f);
+
+/**
+ * @brief c^t inside the fleet window: k = 0 the newest recorded, k = n-1
+ *        the oldest the window of depth @p n reaches.
+ * @return A pointer into the history, or NULL when @p k >= @p n or the
+ *         history holds fewer than k + 1 entries.
+ */
+const void *fdt_fleet_ctx_at(const fdt_fleet_t *f, size_t n, size_t k);
+
+/**
+ * @brief B^t of vessel @p v inside the fleet window: k = 0 the newest state
+ *        its twin holds, k = n-1 the oldest within depth @p n.
+ * @return A pointer into the twin's queue, or NULL when out of range.
+ */
+const fdt_state_t *fdt_fleet_state_at(const fdt_fleet_t *f, size_t n,
+                                      size_t k, size_t v);
 
 /**
  * @brief Vessels in the fleet.
