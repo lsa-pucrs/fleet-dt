@@ -31,7 +31,7 @@ change to the paper's figures.
 `make lib` and `make test` need nothing. Two targets need an SDK, and both skip
 with a notice rather than failing when it is absent:
 
-    make mqtt-test    # libmosquitto + a mosquitto broker on PATH
+    make mqtt-test    # a mosquitto broker on PATH
     make webots       # WEBOTS_HOME pointing at a WeBots R2025a install
 
 `make syntax` type-checks both adapters against the stub headers in
