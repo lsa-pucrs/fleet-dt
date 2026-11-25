@@ -73,7 +73,7 @@ present, and writes the coverage table of
 | C15 | "The DTI is *feasible* only if δ can be computed in less than \|t_k − t_{k−1}\| for any arbitrary k" | `feasibility.h`, timed per vessel per frame |
 | C16 | "In a non-autonomous vehicle, actuation is absorbed by the state, i.e. `Aᵢᵗ ⊆ Bᵢᵗ`" | `fdt_twin_init_passive` |
 | C17 | "A fleet DT is *homogeneous* when δᵉ is the same for all vessels. Oppositely, heterogeneous fleet DTs require indexing δᵉ" | one δᵉ pointer per twin |
-| C18 | "The coordinator (S) computes cᵗ from the vessel states it receives, in the same step in which it distributes gᵢᵗ" | `coordinator.h` and the `Bᵗ` store of Figure 4 |
+| C18 | "The coordinator (S) computes cᵗ from the vessel states it receives, in the same step in which it distributes gᵢᵗ" | `coordinator.h` and the `Bᵗ` store of Figure 4; `fdt_store_spacing` computes the inter-vessel distance Section IV gives as the example `cᵗ`, and `fdt_coord_set_ctx_window` computes `cᵗ` over the window of equation (6) (`tests/test_fleet_window.c`) |
 | C19 | Table I fixes 21 entries of `Iᵗ`; rates in rad/s, angles in "rad or deg" | `model.h`, every field named with its unit |
 
 ## E. The validation of Section V
