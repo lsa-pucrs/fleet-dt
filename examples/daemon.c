@@ -11,6 +11,9 @@
 #include <fleet_dt/predict.h>
 #include <fleet_dt/tick.h>
 
+#include <fleet_dt/geo.h>
+
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -40,11 +43,18 @@ typedef struct {
 
 static vessel_ctx_t g_vctx[NBOATS];
 
-/** c^t: how spread out the fleet is, and the throttle ceiling that follows. */
+/**
+ * c^t: the inter-vessel distance Section IV gives as its example, and how
+ * fast it shrinks across the window of equation (6).
+ */
 typedef struct {
-    float spread_deg;
-    float throttle_ceiling_pct;
+    double spacing_m;
+    double closing_mps;
+    float  throttle_ceiling_pct;
 } fleet_ctx_t;
+
+/** History of c^t for the fleet window. */
+static fleet_ctx_t g_ctx_hist[QUEUE_CAP];
 
 /**
  * delta^e over the n most recent states. Besides B^t it estimates
@@ -67,6 +77,14 @@ static void demo_delta_e(const fdt_queue_t *q, size_t n, const fdt_input_t *in,
     out->yaw_rate_rps = rate;
     out->yaw_deg += rate * dt_s * RAD2DEG;
 
+    /* Sail at surge along the new yaw. The fleet sits near the equator,
+     * where a float latitude resolves millimetres. */
+    const double d = (double)out->surge_mps * (double)dt_s;
+    const double psi = (double)out->yaw_deg / (double)RAD2DEG;
+    out->lat_deg += (float)(d * cos(psi) / FDT_M_PER_DEG_LAT);
+    out->lon_deg += (float)(d * sin(psi) /
+                            fdt_geo_m_per_deg_lon((double)out->lat_deg));
+
     /* The window's newest state is B^{t-1}: B^t is one tick ahead of it,
      * and the command lands d ticks after B^t. */
     vessel_ctx_t *vc = (vessel_ctx_t *)ctx;
@@ -87,24 +105,42 @@ static void demo_pi(const fdt_state_t *b, const fdt_goal_t *g_now,
     out->throttle_pct = (fc != NULL) ? fc->throttle_ceiling_pct : 100.0f;
 }
 
-/** The coordinator's c^t: the paper's example is inter-vessel distance. */
-static void demo_ctx(const fdt_store_t *bt, void *fleet_ctx, void *user)
+/**
+ * The coordinator's c^t over the fleet window [F^{t-1}; F^{t-n}], equation
+ * (6): spacing from this frame's B^t, closing speed against the oldest c^t
+ * the window reaches, and a throttle ceiling that follows from both.
+ */
+static void demo_ctx(const fdt_fleet_t *f, size_t n, const fdt_store_t *bt,
+                     void *fleet_ctx, void *user)
 {
     (void)user;
 
     fleet_ctx_t *fc = (fleet_ctx_t *)fleet_ctx;
-    float lo = 1e30f;
-    float hi = -1e30f;
-
-    for (size_t k = 0; k < fdt_store_size(bt); k++) {
-        const float y = fdt_store_get(bt, k)->yaw_deg;
-        if (y < lo) { lo = y; }
-        if (y > hi) { hi = y; }
+    if (fdt_store_spacing(bt, &fc->spacing_m, NULL, NULL, NULL) != 0) {
+        return;
     }
-    fc->spread_deg = hi - lo;
 
-    /* A station-keeping policy would derive the ceiling from that spread. */
-    fc->throttle_ceiling_pct = (fc->spread_deg > 20.0f) ? 40.0f : 60.0f;
+    fc->closing_mps = 0.0;
+    for (size_t k = n - 1; k + 1 > 0; k--) {
+        const fleet_ctx_t *old = fdt_fleet_ctx_at(f, n, k);
+        if (old != NULL) {
+            fc->closing_mps = (old->spacing_m - fc->spacing_m) /
+                              ((double)(k + 1) * (double)FDT_TICK_NS / 1e9);
+            break;
+        }
+    }
+
+    /* A station-keeping policy: slow down when close, or closing fast. */
+    fc->throttle_ceiling_pct =
+        (fc->spacing_m < 5.0 || fc->closing_mps > 0.5) ? 40.0f : 60.0f;
+}
+
+/** Equation (5) needs a plain c^t callback too; the window one replaces it. */
+static void demo_ctx_plain(const fdt_store_t *bt, void *fleet_ctx, void *user)
+{
+    (void)bt;
+    (void)fleet_ctx;
+    (void)user;
 }
 
 /** The coordinator's goals, which in a real system come from the MCS. */
@@ -131,9 +167,11 @@ static void fluid_stub(size_t tick, void *user)
 
 int main(void)
 {
-    const fdt_state_t b0 = {0};
-
     for (size_t k = 0; k < NBOATS; k++) {
+        /* Ten metres apart, both under way at 1 m/s. */
+        fdt_state_t b0 = {0};
+        b0.lat_deg   = (float)(10.0 * (double)k / FDT_M_PER_DEG_LAT);
+        b0.surge_mps = 1.0f;
         if (fdt_twin_init(&g_twins[k], g_queues[k], QUEUE_CAP,
                           demo_delta_e, demo_pi, &g_vctx[k]) != 0) {
             fprintf(stderr, "twin %zu failed to init\n", k);
@@ -147,14 +185,19 @@ int main(void)
         }
     }
 
-    fleet_ctx_t fc = { .spread_deg = 0.0f, .throttle_ceiling_pct = 60.0f };
+    static fleet_ctx_t fc = { .spacing_m = 0.0, .closing_mps = 0.0,
+                              .throttle_ceiling_pct = 60.0f };
 
     fdt_fleet_t fleet;
     fdt_store_t bt;
     fdt_coord_t coord;
     if (fdt_fleet_init(&fleet, g_twins, NBOATS, &fc) != 0 ||
         fdt_store_init(&bt, g_bt_slots, NBOATS) != 0 ||
-        fdt_coord_init(&coord, &fleet, &bt, demo_ctx, demo_plan, NULL) != 0) {
+        fdt_fleet_keep_history(&fleet, g_ctx_hist, QUEUE_CAP,
+                               sizeof fc) != 0 ||
+        fdt_coord_init(&coord, &fleet, &bt, demo_ctx_plain, demo_plan,
+                       NULL) != 0 ||
+        fdt_coord_set_ctx_window(&coord, demo_ctx) != 0) {
         fprintf(stderr, "fleet wiring failed\n");
         return EXIT_FAILURE;
     }
@@ -195,7 +238,7 @@ int main(void)
 
     printf("%-4s %-28s %-28s %8s\n",
            "k", "boat 0 (yaw / x^k+d / cage)", "boat 1 (yaw / x^k+d / cage)",
-           "spread");
+           "spacing m / closing m/s");
 
     for (int frame = 0; frame < FRAMES; frame++) {
         fdt_feas_begin(&g_feas);
@@ -216,13 +259,13 @@ int main(void)
             return EXIT_FAILURE;
         }
 
-        printf("%-4d %7.2f %7.2f %+7.3f      %7.2f %7.2f %+7.3f      %7.3f\n",
+        printf("%-4d %7.2f %7.2f %+7.3f      %7.2f %7.2f %+7.3f      %7.2f %+6.2f\n",
                frame,
                (double)bs[0].yaw_deg, (double)g_vctx[0].xhat.yaw_deg,
                (double)as[0].cage_rad,
                (double)bs[1].yaw_deg, (double)g_vctx[1].xhat.yaw_deg,
                (double)as[1].cage_rad,
-               (double)fc.spread_deg);
+               fc.spacing_m, fc.closing_mps);
 
         fdt_tick_wait(&tk);
     }
