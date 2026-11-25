@@ -1,0 +1,44 @@
+== fleet-dt WeBots CPU bench ==
+fleet-dt 0.1.0 (ICECS 2026 manuscript -10)
+WeBots /home/csilva/opt/webots --batch --mode=realtime --no-rendering
+pinned to core 27 of 28 (FDT_CPU_CORE); CPU is % of that one core
+sample 30 s x 3 runs per world, median; FDT_CPU_SAMPLE_S and FDT_CPU_REPEATS raise them
+the synthetic boats run in the controller; their share is timed
+apart and subtracted, so 'sim' is WeBots plus the twins.
+
+--- cost per world ---
+  world                 N     total     boats       sim  spread    fps  worst upd.
+  jundia_empty.wbt      0    1.37 %         -    1.37 %  0.10 %      -           -
+  jundia_single.wbt     1    1.67 %    0.01 %    1.66 %  0.13 %   7.89      7.5 us
+  jundia_fleet.wbt      2    1.83 %    0.02 %    1.82 %  0.13 %   7.89     13.9 us
+  jundia_n05.wbt        5    2.40 %    0.04 %    2.36 %  0.07 %   7.85      6.3 us
+  jundia_n10.wbt       10    3.07 %    0.08 %    2.99 %  0.20 %   7.85     14.3 us
+  jundia_n20.wbt       20    4.43 %    0.15 %    4.28 %  0.13 %   7.79     11.4 us
+  jundia_n30.wbt       30    5.47 %    0.23 %    5.24 %  0.03 %   7.79     51.3 us
+  jundia_n40.wbt       40    6.60 %    0.30 %    6.30 %  0.03 %   7.79     18.1 us
+  jundia_n50.wbt       50    7.80 %    0.38 %    7.42 %  0.10 %   7.86     17.9 us
+  jundia_n60.wbt       60    8.83 %    0.46 %    8.38 %  0.10 %   7.86     12.6 us
+
+--- fit over the worlds with at least one vessel ---
+  sim(N) = 1.750 % + 0.1132 % x N   (9 worlds)
+  largest run-to-run spread on this host: 0.20 %
+
+--- against slide 14 (EPYC 7453, one core, rendering off) ---
+  empty world                1.37 %                 slide 14: 0.9 %                           [this host]
+  each added twin            0.113 %                slide 14: 0.12 %                          [this host]
+  25 boats                   4.58 % (fit)           slide 14: 5.0 %                           [this host]
+  60 boats                   8.38 %                 slide 14: 8.3 %                           [this host]
+  worst update, all twins    51.3 us                slide 14: 36 us                           [this host]
+  slack to 125 ms            2435x                  slide 14: 3500x                           [this host]
+
+--- against Section V-A (i7-6700HQ, rendering on) ---
+  first boat                 0.29 %                 paper: adds 10 % CPU                      [this host]
+  each subsequent boat       0.113 % (slope)        paper: less than 1 %                      [matches paper]
+
+  The paper ran with the 3D view on and states an inequality for
+  each boat after the first; the slope above is the like quantity
+  here. Slide 14 ran rendering off on another machine, so its
+  figures are printed for scale and never marked as matched.
+
+artefacts: results/webots_cpu.txt, results/webots_cpu.csv, results/webots_cpu.svg
+           results/webots_update.csv, results/webots_update.svg

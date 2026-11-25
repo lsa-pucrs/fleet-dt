@@ -18,7 +18,8 @@ CC      = gcc
 # exactly like a change that did not work.
 CFLAGS  = -std=c18 -Wall -Wextra -Werror -pedantic-errors -O2 -MMD -MP \
           -Iinclude -Itools -Iadapters
-LDLIBS  = -lm
+# The DTE runs its simulations on POSIX threads (Section I, contribution ii).
+LDLIBS  = -lm -pthread
 
 LIB     = libfleetdt.a
 LIBSRC  = $(wildcard src/*.c)
@@ -27,7 +28,7 @@ LIBOBJ  = $(LIBSRC:.c=.o)
 # The injector is a tool, not part of the library: it belongs to the Section
 # V-B campaign rather than to the model. It is compiled once and linked into
 # whatever needs it.
-TOOLSRC = tools/injector/injector.c
+TOOLSRC = tools/injector/injector.c tools/worldgen/worldgen.c
 TOOLOBJ = $(TOOLSRC:.c=.o)
 
 # Adapters with no external dependency: the Ardupilot ingest mapping and the
@@ -51,7 +52,7 @@ RESULTS = results
 # collide with a broker already serving a fleet on 1883.
 MQTT_IT_PORT = 18830
 
-.PHONY: all lib test examples bench report syntax mqtt mqtt-test webots clean
+.PHONY: all lib test examples bench report syntax mqtt mqtt-test webots webots-worlds clean
 
 # Adapters needing a third-party SDK. Each skips with a notice rather than
 # failing the build, so a reader without the SDK still gets a green tree.
@@ -161,6 +162,16 @@ webots: $(LIB) $(TOOLOBJ)
 	  echo "open the world with:  webots adapters/webots/worlds/jundia_fleet.wbt"; \
 	fi
 
+# The worlds of the slide 14 sweep beyond the committed 0, 1 and 2 hulls.
+# They are generated from jundia_fleet.wbt and not committed.
+WEBOTS_SWEEP = 5 10 20 30 40 50 60
+
+tools/worldgen/wbtgen: tools/worldgen/main.c $(TOOLOBJ) $(LIB)
+	$(CC) $(CFLAGS) $< $(TOOLOBJ) $(LIB) $(LDLIBS) -o $@
+
+webots-worlds: tools/worldgen/wbtgen
+	@./tools/worldgen/wbtgen $(WEBOTS_SWEEP)
+
 tools/report/report: tools/report/report.c $(LIB)
 	$(CC) $(CFLAGS) $< $(LIB) $(LDLIBS) -o $@
 
@@ -175,7 +186,8 @@ clean:
 	rm -f $(LIBOBJ) $(TOOLOBJ) $(ADAPTOBJ) $(LIB) $(TESTBIN) $(EXAMPLEBIN) \
 	      $(BENCHBIN) tools/report/report libfleetdt_mqtt.a \
 	      adapters/mqtt/fdt_mqtt.o fleet_dt_it_mqtt \
-	      adapters/webots/controllers/fdt_controller/fdt_controller
+	      adapters/webots/controllers/fdt_controller/fdt_controller \
+	      tools/worldgen/wbtgen adapters/webots/worlds/jundia_n*.wbt
 	rm -rf $(RESULTS)/selftest
 # results/ itself is NOT removed. It is committed, so that the charts in
 # docs/RESULTS.md resolve on a fresh clone, and a clean that deleted it would

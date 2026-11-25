@@ -18,13 +18,18 @@ wiring.
 Expect `overruns=0` and `feasible=1`. An overrun in a loop this small reports
 scheduling on the host.
 
-The window is **4 deep, not 1**. Section V-A ties the window to proactive
-operation, "as in model predictive control (MPC)", and depth 1 produces no
-such term. The `trend` column is the
-term the depth adds, the mean yaw change per frame across the window, and it
-reads zero at depth 1 by construction. Each twin is therefore seeded four times
-before the first step, because equation (3) needs the queue to already hold `n`
-states.
+The window is **4 deep, not 1**. Section IV ties the window to "estimating
+techniques based on temporal series", and Section V-A to proactive operation,
+"as in model predictive control (MPC)". Each twin estimates
+x̂ₖ₊d = f(xₖ, …, xₖ₋ₙ₊₁) from its window (`fdt_predict`, a least-squares line
+over the 4 states) with d = 2 ticks, the delay a command takes to reach the
+boat (talk, backup slide 6), and `π` steers on x̂ₖ₊d rather than on `Bᵗ`. The
+`x^k+d` column is that estimate; at depth 1 no line can be fitted. Each twin
+is therefore seeded four times before the first step, because equation (3)
+needs the queue to already hold `n` states.
+
+`FDT_DB=fleet.db ./examples/daemon` also stores every `Bᵗ` and `Aᵗ` in the
+database of Figure 4 ([`db.h`](../include/fleet_dt/db.h)).
 
 `queue bytes per vessel=768` is `48 × 16`: the `48d` bound of Section IV at
 this example's capacity.
@@ -42,8 +47,10 @@ Section V-A: "using a Kalman filter to generate `Bᵢᵗ`. Data from sensors
 (`Iᵢᵗ`) were used unfiltered to achieve the lowest possible latency from
 sensing to the actuation path."
 
-Both paths in one frame. `δᵉ` runs a scalar Kalman filter over yaw and produces
-the state the operator sees; `π` decides from the **raw** input stashed in the
+Both paths in one frame. `δᵉ` runs the Kalman filter of
+[`kalman.h`](../include/fleet_dt/kalman.h) (position and velocity from GPS,
+roll and pitch from gravity, yaw from the gyro and the tilt-compensated
+magnetometer) and produces the `Bᵗ` the operator sees; `π` decides from the **raw** input stashed in the
 twin's context, never from the filtered state. The printed `lag` column is the
 gap between them, and it is lag rather than error: the same motion, arriving
 later.
