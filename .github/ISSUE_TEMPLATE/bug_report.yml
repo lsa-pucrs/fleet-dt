@@ -1,0 +1,26 @@
+name: Bug report
+description: Something in the library, an adapter or a benchmark does not behave as the paper or the docs state.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: The command you ran and its output.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Cite the section, equation or figure of revision -10 when the expectation comes from the paper.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "gcc 14.2, glibc 2.39, Ubuntu 24.04, WeBots R2025a"
+    validations:
+      required: true

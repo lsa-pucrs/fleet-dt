@@ -1,0 +1,24 @@
+name: Paper and code disagree
+description: A statement of the paper has no carrier in the code, or the code departs from it.
+labels: [paper]
+body:
+  - type: input
+    id: where
+    attributes:
+      label: Where in the paper
+      placeholder: "Section IV, equation (6)"
+    validations:
+      required: true
+  - type: textarea
+    id: quote
+    attributes:
+      label: What the paper states
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: What the code does
+      description: File and line, or the row of docs/claim-map.md.
+    validations:
+      required: true
