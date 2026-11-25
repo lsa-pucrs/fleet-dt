@@ -5,6 +5,15 @@ this project adheres to [SemVer](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `fdt_db_t` (`include/fleet_dt/db.h`): the database of Figure 4, where
+  states and actuation are stored. An append-only file of `Bᵗ`, `Aᵗ` and
+  `gᵗ` records with a CRC-32 each; the reader keeps everything before a
+  torn tail. It grows by 23,040 B of states per minute per vessel, the
+  figure of Section IV, while the in-memory queue stays bounded.
+  `examples/daemon.c` writes it when `FDT_DB` names a file.
+
 ### Changed
 
 - The bandwidth regulators sit in the data path, in the boat broker where

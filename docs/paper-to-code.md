@@ -31,7 +31,8 @@ mismatch, and this table gets re-checked.
 | Δᵉ | extended fleet transition, eq. (6) | `fdt_fleet_step` with `n > 1` | [`fleet.c`](../src/fleet.c) |
 | `cᵗ` | fleet context, eq. (4) | `fdt_fleet_t.ctx`, delivered to every δᵉ and every π | [`fleet.h`](../include/fleet_dt/fleet.h) |
 | `S` | coordinator, Fig. 4 | `fdt_coord_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
-| `Bᵗ` database | the cylinder of Fig. 4 | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| `Bᵗ` store | the newest `Bᵗ` of every vessel, which the coordinator reads | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| database | the cylinder of Fig. 4: "states and actuation are … stored within a database" | `fdt_db_t`, an append-only file of `Bᵗ`, `Aᵗ`, `gᵗ` per tick | [`db.h`](../include/fleet_dt/db.h) |
 | Δt | frame period, 125 ms | `FDT_TICK_NS` | [`tick.h`](../include/fleet_dt/tick.h) |
 | φ, λ onto metres | local tangent plane | `fdt_geo_offset` | [`geo.h`](../include/fleet_dt/geo.h) |
 
