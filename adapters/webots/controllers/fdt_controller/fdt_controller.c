@@ -3,16 +3,25 @@
  * @brief The custom WeBots module that runs delta, Section IV.
  *
  * @note The CPU figures of Section V-A, "running WeBots adds 10% CPU usage
- *       for the first boat and less than 1% for subsequent boats", are
- *       measured by tools/bench/bench_webots_cpu.c, which opens the
- *       zero-, one- and two-vessel worlds in turn and subtracts. The vessel
- *       count is discovered from the world rather than compiled in, which is
- *       what lets one binary serve all three.
+ *       for the first boat and less than 1% for subsequent boats", and those
+ *       of slide 14 (0 to 60 boats) are measured by
+ *       tools/bench/bench_webots_cpu.c, which opens worlds of increasing
+ *       vessel count in turn. The vessel count is discovered from the world
+ *       rather than compiled in, which is what lets one binary serve them all.
+ *
+ * @note The synthetic boats (the injector of Section V-B) run inside this
+ *       process, because no real fleet feeds the simulation. Their cost
+ *       belongs to the boats, not to the twins, so the controller times them
+ *       apart and, when FDT_CPU_REPORT names a file, writes both shares there
+ *       for the bench to subtract.
  */
+#define _POSIX_C_SOURCE 200809L
+
 #include <webots/robot.h>
 #include <webots/supervisor.h>
 
 #include "injector/injector.h"
+#include "webots/fdt_webots_fleet.h"
 
 #include <fleet_dt/assembler.h>
 #include <fleet_dt/codec.h>
@@ -29,15 +38,19 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 /**
  * Upper bound on vessels. The actual count is discovered at startup by asking
- * the world which DEFs resolve, so one controller binary serves a one-boat
- * world and a two-boat world without a rebuild. That is what makes the CPU
- * comparison of Section V-A -- the first boat against each subsequent one --
- * a matter of opening a different world rather than of editing this file.
+ * the world which DEFs resolve (fdt_webots_fleet.h), so one controller binary
+ * serves every world of the sweep without a rebuild. That is what makes the
+ * CPU comparison of Section V-A and slide 14 a matter of opening a different
+ * world rather than of editing this file.
  */
-#define MAX_VESSELS 8
+#define MAX_VESSELS FDT_WEBOTS_MAX_VESSELS
+
+/** Frames between two writes of the FDT_CPU_REPORT file: one per second. */
+#define REPORT_EVERY 8
 
 /** Queue depth per vessel: 48 * CAP bytes, the 48d bound of Section IV. */
 #define QUEUE_CAP 16
@@ -52,14 +65,6 @@
  * Frame at which FDT_SHOT, if set, captures the 3D view to that path.
  */
 #define SHOT_FRAME 80  /* FDT_SHOT_FRAME overrides */
-
-/**
- * WeBots node DEF names, one per vessel, matching worlds/jundia_fleet.wbt.
- */
-static const char *const VESSEL_DEF[MAX_VESSELS] = {
-    "PINTADO", "TILAPIA", "DOURADO", "PIAVA",
-    "TRAIRA",  "LAMBARI", "CARPA",   "PACU",
-};
 
 /** Vessels this world actually holds; resolved in main(). */
 static size_t g_vessels;
@@ -182,8 +187,9 @@ static void webots_plan(const fdt_store_t *bt, const void *fleet_ctx,
 
 /**
  * Telemetry arriving from the boats: one message per sensor per tick, as the
- * regulated client of each boat publishes it. The assembler rebuilds I^t and
- * drops stale messages.
+ * regulated client of each boat publishes it. The assembler rebuilds I^t; it
+ * applies a stale message and counts it, since dropping late packets is the
+ * future work of Section VI.
  */
 static void on_lsdt(const char *topic, const uint8_t *buf, size_t len,
                     void *user)
@@ -232,6 +238,42 @@ static void render_vessel(size_t k, const fdt_state_t *b)
     }
 }
 
+/** CPU time of the calling thread, in seconds. */
+static double thread_cpu_s(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) != 0) {
+        return 0.0;
+    }
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+/**
+ * Writes the CPU split for tools/bench/bench_webots_cpu.c. The file is
+ * rewritten whole each time, so a reader always sees one complete line.
+ */
+static void write_cpu_report(const char *path, size_t frames,
+                             double inj_cpu_s, double ctl_cpu_s,
+                             const fdt_feas_t *fs)
+{
+    char tmp[512];
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "w");
+    if (f == NULL) {
+        return;
+    }
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    fprintf(f, "frames %zu vessels %zu injector_cpu_s %.6f "
+               "controller_cpu_s %.6f worst_update_us %.3f feasible %d "
+               "wall_s %.6f\n",
+            frames, g_vessels, inj_cpu_s, ctl_cpu_s,
+            (double)fdt_feas_worst_ns(fs) / 1e3, fdt_feas_ok(fs),
+            (double)now.tv_sec + (double)now.tv_nsec / 1e9);
+    fclose(f);
+    (void)rename(tmp, path);
+}
+
 int main(int argc, char **argv)
 {
     const char *host = (argc > 1) ? argv[1] : "localhost";
@@ -248,7 +290,11 @@ int main(int argc, char **argv)
 
     g_vessels = 0;
     for (size_t k = 0; k < MAX_VESSELS; k++) {
-        WbNodeRef node = wb_supervisor_node_get_from_def(VESSEL_DEF[k]);
+        char def[32];
+        if (fdt_webots_vessel_def(k, def, sizeof def) != 0) {
+            break;
+        }
+        WbNodeRef node = wb_supervisor_node_get_from_def(def);
         if (node == NULL) {
             break;
         }
@@ -301,6 +347,11 @@ int main(int argc, char **argv)
     fdt_coord_init(&coord, &fleet, &store, webots_ctx, webots_plan, NULL);
 
     size_t frames = 0;
+    double inj_cpu_s = 0.0;
+    const char *cpu_report = getenv("FDT_CPU_REPORT");
+    if (cpu_report != NULL && cpu_report[0] == '\0') {
+        cpu_report = NULL;
+    }
 
     printf("fdt_controller: %s, %zu vessels, %d ms frame, window %d\n",
            fdt_version(), g_vessels, step_ms, WINDOW);
@@ -308,7 +359,12 @@ int main(int argc, char **argv)
 
     while (wb_robot_step(step_ms) != -1) {
         fdt_rx_begin_frame(&g_rx);
+
+        /* The boats' share: sampling, regulating and publishing. */
+        const double i0 = thread_cpu_s();
         fdt_inj_tick(&inj);
+        inj_cpu_s += thread_cpu_s() - i0;
+
         tr.poll(tr.self, 0);
         fdt_rx_end_frame(&g_rx);
 
@@ -353,6 +409,11 @@ int main(int argc, char **argv)
         }
 
         frames++;
+
+        if (cpu_report != NULL && frames % REPORT_EVERY == 0) {
+            write_cpu_report(cpu_report, frames, inj_cpu_s, thread_cpu_s(),
+                             &g_feas[0]);
+        }
 
         if (frames == g_shot_frame) {
             const char *shot = getenv("FDT_SHOT");
