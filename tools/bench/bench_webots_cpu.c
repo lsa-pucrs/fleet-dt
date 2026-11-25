@@ -556,14 +556,11 @@ int main(void)
         "  here. Slide 14 ran rendering off on another machine, so its\n"
         "  figures are printed for scale and never marked as matched.\n");
 
-    /* Charts: CPU against N with the fit, and the worst update. */
-    static double fx[2], fy[2];
-    fx[0] = 0.0;
-    fx[1] = 60.0;
-    fy[0] = icept;
-    fy[1] = icept + 60.0 * slope;
-
-    static double px[NWORLDS], py[NWORLDS], wx[NWORLDS], wy[NWORLDS];
+    /* Charts: CPU against N with the fit, and the worst update. The fit is
+     * evaluated at each measured N, because the CSV writer pairs series by
+     * row against the first series' x. */
+    static double px[NWORLDS], py[NWORLDS], fy[NWORLDS];
+    static double wx[NWORLDS], wy[NWORLDS];
     int np = 0, nw = 0;
     for (int i = 0; i < NWORLDS; i++) {
         if (!have[i]) {
@@ -571,6 +568,7 @@ int main(void)
         }
         px[np] = xs[i];
         py[np] = sim[i];
+        fy[np] = icept + slope * xs[i];
         np++;
         if (WORLDS[i].vessels > 0) {
             wx[nw] = xs[i];
@@ -584,7 +582,8 @@ int main(void)
                   "boats in the simulator, N", "CPU (% of one core)");
     fdt_plot_series(&p, "measured (sim)", px, py, (size_t)np,
                     FDT_PLOT_SCATTER);
-    fdt_plot_series(&p, "least-squares fit", fx, fy, 2, FDT_PLOT_LINE);
+    fdt_plot_series(&p, "least-squares fit", px, fy, (size_t)np,
+                    FDT_PLOT_LINE);
     fdt_plot_hline(&p, 8.3, "slide 14: 8.3 % at 60");
     fdt_plot_hline(&p, 0.9, "slide 14: empty world 0.9 %");
     fdt_plot_write_svg(&p, "results/webots_cpu.svg");
