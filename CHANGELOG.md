@@ -16,8 +16,52 @@ this project adheres to [SemVer](https://semver.org/).
   HEARTBEAT. `fdt_mavlink_udp.c` runs it over UDP, answering the address
   the autopilot spoke from. `tests/test_mavlink_wire.c` checks it against
   frames pymavlink produced, and over loopback UDP.
+- Equation (6) over the fleet window: `fdt_fleet_keep_history` keeps past
+  `cᵗ` beside the `Bᵗ` each twin queues; `fdt_fleet_state_at` and
+  `fdt_fleet_ctx_at` read [Fᵗ⁻¹; Fᵗ⁻ⁿ]; `fdt_coord_set_ctx_window` computes
+  `cᵗ` over that window.
+- `fdt_store_spacing`: the inter-vessel distance Section IV gives as the
+  example `cᵗ`. `examples/daemon.c` uses it, with the closing speed over
+  the window, in place of the yaw spread that stood in for it.
+- `fdt_dte_start_parallel` and `fdt_dte_stop_parallel`: the DTE runs its
+  simulations in parallel, one POSIX thread each, released together at the
+  tick edge and joined before the tick returns, as contribution (ii) of
+  Section I states. `examples/daemon.c` runs its fluid stub that way. The
+  build links `-pthread`.
+- `fdt_db_t` (`include/fleet_dt/db.h`): the database of Figure 4, where
+  states and actuation are stored. An append-only file of `Bᵗ`, `Aᵗ` and
+  `gᵗ` records with a CRC-32 each; the reader keeps everything before a
+  torn tail. It grows by 23,040 B of states per minute per vessel, the
+  figure of Section IV, while the in-memory queue stays bounded.
+  `examples/daemon.c` writes it when `FDT_DB` names a file.
+- `fdt_predict` (`include/fleet_dt/predict.h`): the time-series estimator
+  x̂ₖ₊d = f(xₖ, …, xₖ₋ₙ₊₁) of Section IV and backup slide 6, a least-squares
+  polynomial of degree 0 to 2 per field of `Bᵗ`, angles unwrapped.
+  `examples/daemon.c` steers on x̂ₖ₊d with d = 2 instead of storing a yaw
+  trend in `pitch_deg`.
+- `fdt_kf_t` (`include/fleet_dt/kalman.h`): the operator's Kalman filter of
+  Section V-A, generating `Bᵗ` from `Iᵗ` (GPS position and velocity, gravity,
+  gyro, tilt-compensated magnetometer with declination).
+  `examples/two_paths.c` uses it; `π` stays on the raw path.
 
 ### Changed
+
+- The MQTT client is the repository's own: MQTT 5.0 over POSIX sockets
+  (`adapters/mqtt/fdt_mqtt_wire.c` encodes and frames the packets,
+  `fdt_mqtt.c` runs the connection: CONNECT, PUBLISH at QoS 0 or 1 with
+  PUBACK, SUBSCRIBE with wildcards, PINGREQ, DISCONNECT). libmosquitto is
+  no longer needed; `make mqtt-test` needs only a `mosquitto` broker, and
+  the MQTT client builds with the other adapters. `tests/test_mqtt_wire.c`
+  checks the packets byte for byte.
+- The WeBots controller drives up to 64 vessels instead of 8, discovered by
+  DEF name under the rule of `adapters/webots/fdt_webots_fleet.h`. It times
+  the synthetic boats (the in-process injector) apart from the twins and,
+  when `FDT_CPU_REPORT` names a file, writes both shares there.
+- `bench_webots_cpu` sweeps 0 to 60 boats as slide 14 does: one core
+  (`FDT_CPU_CORE`), rendering off, the injector's CPU subtracted, and a
+  least-squares slope for the cost per added twin. It prints the worst
+  update of all twins against the 36 µs of slide 14 and writes
+  `results/webots_update.*`.
 
 - The bandwidth regulators sit in the data path, in the boat broker where
   Section III and the talk (slides 7, 12 and 13) put them. The autopilot
@@ -51,6 +95,14 @@ this project adheres to [SemVer](https://semver.org/).
 
 ### Added
 
+- The TILAPIA hull model (`adapters/webots/3d_models/tilapia/`), exported
+  from the LSA's model of the vessel, replaces the `drone_boat` render mesh
+  in every world; the collision mesh is unchanged. `docs/simulation.jpg`
+  shows it.
+- `tools/worldgen/` and `make webots-worlds`: WeBots worlds with 5 to 60
+  hulls, generated from `jundia_fleet.wbt` for the slide 14 sweep.
+  `tests/test_world.c` checks the naming rule and the generated worlds from
+  1 to 64 vessels.
 - `fdt_relay_t`, the regulator of the boat broker, and `tests/test_relay.c`.
 - `fdt_rx_t`, the twin side of the regulated link: rebuilds `Iᵗ` from the
   per-sensor messages and counts partial, double and stale updates.
