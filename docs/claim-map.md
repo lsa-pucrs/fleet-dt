@@ -69,7 +69,7 @@ present, and writes the coverage table of
 | id | Claim | Where it lives |
 |---|---|---|
 | C13 | "The simulation frequency is 8 Hz, i.e. δ is a hard real-time task with deadline of 125 ms" | `FDT_TICK_NS`, `tick.h` |
-| C14 | "a state (Bᵢᵗ) occupies 12 floating point values in memory, translating to 48 bytes"; "the queue would grow by 23 KB per minute elapsed, per vessel" | static assertion `sizeof(fdt_state_t) == 48`, `fdt_queue_bytes(d) == 48d`, 23040 B/min at 8 Hz |
+| C14 | "a state (Bᵢᵗ) occupies 12 floating point values in memory, translating to 48 bytes"; "the queue would grow by 23 KB per minute elapsed, per vessel" | static assertion `sizeof(fdt_state_t) == 48`, `fdt_queue_bytes(d) == 48d`, 23040 B/min at 8 Hz; the in-memory queue stays bounded, and the database of `src/db.c` is where the history grows, by 23,040 B of states per minute per vessel (`tests/test_db.c`) |
 | C15 | "The DTI is *feasible* only if δ can be computed in less than \|t_k − t_{k−1}\| for any arbitrary k" | `feasibility.h`, timed per vessel per frame |
 | C16 | "In a non-autonomous vehicle, actuation is absorbed by the state, i.e. `Aᵢᵗ ⊆ Bᵢᵗ`" | `fdt_twin_init_passive` |
 | C17 | "A fleet DT is *homogeneous* when δᵉ is the same for all vessels. Oppositely, heterogeneous fleet DTs require indexing δᵉ" | one δᵉ pointer per twin |
