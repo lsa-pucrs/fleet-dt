@@ -31,7 +31,8 @@ mismatch, and this table gets re-checked.
 | Δᵉ | extended fleet transition, eq. (6) | `fdt_fleet_step` with `n > 1` | [`fleet.c`](../src/fleet.c) |
 | `cᵗ` | fleet context, eq. (4) | `fdt_fleet_t.ctx`, delivered to every δᵉ and every π | [`fleet.h`](../include/fleet_dt/fleet.h) |
 | `S` | coordinator, Fig. 4 | `fdt_coord_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
-| `Bᵗ` database | the cylinder of Fig. 4 | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| `Bᵗ` store | the newest `Bᵗ` of every vessel, which the coordinator reads | `fdt_store_t` | [`coordinator.h`](../include/fleet_dt/coordinator.h) |
+| database | the cylinder of Fig. 4: "states and actuation are … stored within a database" | `fdt_db_t`, an append-only file of `Bᵗ`, `Aᵗ`, `gᵗ` per tick | [`db.h`](../include/fleet_dt/db.h) |
 | Δt | frame period, 125 ms | `FDT_TICK_NS` | [`tick.h`](../include/fleet_dt/tick.h) |
 | φ, λ onto metres | local tangent plane | `fdt_geo_offset` | [`geo.h`](../include/fleet_dt/geo.h) |
 
@@ -63,7 +64,8 @@ mismatch, and this table gets re-checked.
 | under 1 % CPU per DTI | scaling | [`bench_scale.c`](../tools/bench/bench_scale.c) |
 | bandwidth increase | link budget | [`bench_bandwidth.c`](../tools/bench/bench_bandwidth.c) |
 | δ feasible, actuation late | two measurements | [`bench_latency.c`](../tools/bench/bench_latency.c) |
-| Kalman for `Bᵢᵗ`, raw `Iᵢᵗ` for actuation | two paths | [`examples/two_paths.c`](../examples/two_paths.c) |
+| Kalman for `Bᵢᵗ`, raw `Iᵢᵗ` for actuation | two paths | [`kalman.h`](../include/fleet_dt/kalman.h), [`examples/two_paths.c`](../examples/two_paths.c) |
+| "estimating techniques based on temporal series" (Sec. IV); x̂ₖ₊d (talk, backup slide 6) | the state when the command lands | [`predict.h`](../include/fleet_dt/predict.h), [`examples/daemon.c`](../examples/daemon.c) |
 
 ## Where the API differs in shape from the equations
 
